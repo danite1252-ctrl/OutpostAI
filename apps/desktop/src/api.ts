@@ -85,6 +85,61 @@ export interface EnginesStatus {
   engines: EngineInfo[];
 }
 
+export type Badge = "vision" | "tools" | "thinking" | "uncensored" | "code" | "long_context" | "embedding";
+export type Category = "uncensored" | "general" | "coding" | "embedding";
+export type Fit = "fits" | "partial" | "too_large";
+export type Tier = "cpu" | "starter" | "standard" | "performance" | "workstation";
+
+export interface Hardware {
+  gpus: { vendor: string; name: string; vram_mb: number }[];
+  vram_mb: number;
+  ram_mb: number;
+  cpu_threads: number;
+  disk_free_mb: number;
+  tier: Tier;
+}
+
+export interface CatalogEntry {
+  model: string;
+  name: string;
+  category: Category;
+  size_gb: number;
+  context_k: number;
+  badges: Badge[];
+  license: string | null;
+  description: string;
+  page: string;
+  fit: Fit;
+  recommended: boolean;
+}
+
+export interface InstalledModel {
+  model: string;
+  size_bytes: number;
+  parameter_size: string | null;
+  quantization: string | null;
+  family: string | null;
+  badges: Badge[];
+}
+
+export interface PullState {
+  model: string;
+  status: string;
+  completed: number;
+  total: number;
+  percent: number | null;
+  done: boolean;
+  error: string | null;
+}
+
+export interface ModelsOverview {
+  hardware: Hardware;
+  catalog: CatalogEntry[];
+  installed: InstalledModel[];
+  pulls: PullState[];
+  ollama_running: boolean;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -155,6 +210,10 @@ export const api = {
   resetSecret: (token: string, id: string, secret: string) =>
     request<void>("PUT", `/api/accounts/${encodeURIComponent(id)}/secret`, { token, body: { secret } }),
   models: (token: string) => request<{ object: "list"; data: ModelEntry[] }>("GET", "/v1/models", { token }),
+  modelsOverview: (token: string) => request<ModelsOverview>("GET", "/api/models", { token }),
+  pullModel: (token: string, model: string) => request<void>("POST", "/api/models/pull", { token, body: { model } }),
+  removeModel: (token: string, model: string) =>
+    request<void>("POST", "/api/models/remove", { token, body: { model } }),
   engines: (token: string) => request<EnginesStatus>("GET", "/api/engines", { token }),
   engineAction: (token: string, id: EngineId, action: "install" | "start" | "stop") =>
     request<void>("POST", `/api/engines/${id}/${action}`, { token }),

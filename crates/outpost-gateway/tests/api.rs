@@ -301,6 +301,10 @@ async fn openapi_lists_every_route() {
         "/api/engines/{id}/start",
         "/api/engines/{id}/stop",
         "/v1/models",
+        "/api/hardware",
+        "/api/models",
+        "/api/models/pull",
+        "/api/models/remove",
     ] {
         assert!(paths.contains_key(p), "missing {p} in OpenAPI spec");
     }
@@ -350,4 +354,61 @@ async fn only_owners_control_engines() {
         status == StatusCode::BAD_REQUEST || status == StatusCode::CONFLICT,
         "{status}"
     );
+}
+
+#[tokio::test]
+async fn models_overview_and_permissions() {
+    let app = app().await;
+    let (owner_token, _) = setup_owner(&app).await;
+
+    let (status, hw) = call(&app, "GET", "/api/hardware", Some(&owner_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(hw["ram_mb"].as_u64().unwrap() > 0);
+
+    let (status, overview) = call(&app, "GET", "/api/models", Some(&owner_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let catalog = overview["catalog"].as_array().unwrap();
+    assert!(catalog.len() >= 10);
+    // Unfiltered Qwen models are listed first.
+    assert_eq!(catalog[0]["category"], "uncensored");
+    assert!(catalog[0]["model"].as_str().unwrap().contains("qwen"));
+    assert!(overview["installed"].is_array());
+
+    // Bad names are refused before Ollama is asked.
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/models/pull",
+        Some(&owner_token),
+        Some(json!({"model": "../../etc"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (_, sarah) = call(
+        &app,
+        "POST",
+        "/api/accounts",
+        Some(&owner_token),
+        Some(json!({"name": "Sarah", "role": "member", "secret": "hunter22"})),
+    )
+    .await;
+    let (_, signed_in) = call(
+        &app,
+        "POST",
+        "/api/auth/sign-in",
+        None,
+        Some(json!({"account_id": sarah["id"], "secret": "hunter22"})),
+    )
+    .await;
+    let sarah_token = signed_in["token"].as_str().unwrap().to_string();
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/models/pull",
+        Some(&sarah_token),
+        Some(json!({"model": "qwen3.5:4b"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }

@@ -24,6 +24,10 @@ use crate::routes::{accounts, auth, engines, health, models, setup, SignInRespon
         accounts::delete,
         accounts::reset_secret,
         models::list_models,
+        models::hardware,
+        models::overview,
+        models::pull,
+        models::remove,
         engines::status,
         engines::install,
         engines::start,
@@ -42,6 +46,7 @@ use crate::routes::{accounts, auth, engines, health, models, setup, SignInRespon
     tags(
         (name = "system", description = "Health"),
         (name = "engines", description = "Ollama and ComfyUI: install, start, stop"),
+        (name = "models", description = "Hardware, model catalogue and downloads"),
         (name = "setup", description = "First run"),
         (name = "auth", description = "Signing in and out"),
         (name = "accounts", description = "Managing accounts (owner)"),

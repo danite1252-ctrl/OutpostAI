@@ -6,10 +6,13 @@
 //! installed Ollama themselves), Outpost uses that one and marks it `external`.
 
 mod archive;
+pub mod catalog;
 mod comfyui;
 mod download;
 pub mod gpu;
+pub mod hardware;
 mod manager;
+pub mod models;
 mod ollama;
 mod process;
 pub mod types;

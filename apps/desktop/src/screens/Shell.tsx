@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, type EngineInfo, type ModelEntry, type SignInResponse } from "../api";
-import { EngineCard, engineReady, useEngines } from "../components/engines";
-import { Avatar, Button, Icon, icons, Mark, StatusDot, Wordmark } from "../components/ui";
+import { useState } from "react";
+import type { SignInResponse } from "../api";
+import { engineReady, useEngines } from "../components/engines";
+import { Avatar, Icon, icons, Mark, StatusDot, Wordmark } from "../components/ui";
 import Settings from "./Settings";
+import Models from "./Models";
 
 type Section = "chat" | "create" | "train" | "models" | "personas" | "connections" | "settings";
 
@@ -36,23 +37,9 @@ export default function Shell({
   onSignedOutElsewhere: () => void;
 }) {
   const [section, setSection] = useState<Section>("models");
-  const [models, setModels] = useState<ModelEntry[] | null>(null);
   const { status: engines, refresh: refreshEngines } = useEngines(auth.token, onSignedOutElsewhere);
   const ollamaUp = engineReady(engines, "ollama");
   const comfyUp = engineReady(engines, "comfyui");
-
-  const refreshModels = useCallback(async () => {
-    try {
-      setModels((await api.models(auth.token)).data);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) onSignedOutElsewhere();
-    }
-  }, [auth.token, onSignedOutElsewhere]);
-
-  // Re-read the model list whenever Ollama comes up or goes down.
-  useEffect(() => {
-    void refreshModels();
-  }, [refreshModels, ollamaUp]);
 
   return (
     <div className="flex h-full bg-night">
@@ -114,15 +101,11 @@ export default function Shell({
 
         <main className="min-h-0 flex-1 overflow-auto p-8">
           {section === "models" && (
-            <ModelsView
-              models={models}
-              ollama={engines?.engines.find((e) => e.id === "ollama") ?? null}
+            <Models
               token={auth.token}
               canManage={auth.account.role === "owner"}
-              onRefresh={() => {
-                void refreshModels();
-                void refreshEngines();
-              }}
+              ollama={engines?.engines.find((e) => e.id === "ollama") ?? null}
+              onEnginesChanged={() => void refreshEngines()}
             />
           )}
           {section === "settings" && (
@@ -149,55 +132,6 @@ function ComingSoon({ label, phase, text }: { label: string; phase: number; text
       <span className="rounded-full bg-raised px-3 py-1 font-mono text-xs text-amber">Phase {phase}</span>
       <h1 className="text-2xl font-semibold">{label}</h1>
       <p className="text-muted">{text}</p>
-    </section>
-  );
-}
-
-function ModelsView({
-  models,
-  ollama,
-  token,
-  canManage,
-  onRefresh,
-}: {
-  models: ModelEntry[] | null;
-  ollama: EngineInfo | null;
-  token: string;
-  canManage: boolean;
-  onRefresh: () => void;
-}) {
-  const ollamaUp = ollama?.state === "running" || ollama?.state === "external";
-  return (
-    <section className="mx-auto flex max-w-4xl flex-col gap-6">
-      <div className="flex flex-wrap items-end gap-4">
-        <div className="flex-1">
-          <h1 className="text-2xl font-semibold">Models</h1>
-          <p className="text-muted">
-            What <code className="font-mono text-soft">GET /v1/models</code> returns right now. The full catalogue
-            with fit scores and badges arrives in phase 1.
-          </p>
-        </div>
-        <Button variant="ghost" onClick={onRefresh}>
-          Refresh
-        </Button>
-      </div>
-      {!ollamaUp && ollama && <EngineCard engine={ollama} token={token} canManage={canManage} onChanged={onRefresh} />}
-      {ollamaUp && models?.length === 0 && (
-        <div className="rounded-2xl border border-line bg-surface p-5 text-sm text-soft">
-          Ollama is running but has no models yet. Model downloads with hardware fit scores arrive in phase 1; until
-          then you can run <code className="font-mono">ollama pull qwen3:8b</code>.
-        </div>
-      )}
-      {models && models.length > 0 && (
-        <ul className="overflow-hidden rounded-2xl border border-line">
-          {models.map((m) => (
-            <li key={m.id} className="flex items-center gap-4 border-b border-line bg-surface px-5 py-3.5 last:border-b-0">
-              <span className="flex-1 font-mono">{m.id}</span>
-              <span className="text-sm text-muted">{m.owned_by}</span>
-            </li>
-          ))}
-        </ul>
-      )}
     </section>
   );
 }

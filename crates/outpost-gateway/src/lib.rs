@@ -22,6 +22,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 pub use config::Config;
+use outpost_engines::models::ModelStore;
 use outpost_engines::EngineManager;
 
 #[derive(Clone)]
@@ -34,6 +35,8 @@ pub struct AppState {
     pub setup_lock: Arc<Mutex<()>>,
     /// Installs, starts and supervises Ollama and ComfyUI.
     pub engines: Arc<EngineManager>,
+    /// Chat and embedding models in Ollama: list, download, remove.
+    pub models: Arc<ModelStore>,
 }
 
 impl AppState {
@@ -52,6 +55,7 @@ impl AppState {
             .expect("HTTP client");
         AppState {
             engines: EngineManager::new(&config.data_dir),
+            models: ModelStore::new(),
             pool,
             config: Arc::new(config),
             http,
@@ -96,6 +100,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/engines/{id}/start", post(engines::start))
         .route("/api/engines/{id}/stop", post(engines::stop))
         .route("/v1/models", get(models::list_models))
+        .route("/api/hardware", get(models::hardware))
+        .route("/api/models", get(models::overview))
+        .route("/api/models/pull", post(models::pull))
+        .route("/api/models/remove", post(models::remove))
         .route(
             "/openapi.json",
             get(|| async { Json(<openapi::ApiDoc as utoipa::OpenApi>::openapi()) }),
