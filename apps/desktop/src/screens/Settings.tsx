@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, secretProblem, type Account, type EnginesStatus, type Role, type SignInResponse } from "../api";
 import { EnginesPanel } from "../components/engines";
+import { AppKeysPanel } from "../components/keys";
 import { Avatar, Button, ErrorNote, Field } from "../components/ui";
 
 const ROLES: { value: Role; label: string; hint: string }[] = [
   { value: "member", label: "Member", hint: "Full use; can't manage the Outpost" },
   { value: "restricted", label: "Restricted", hint: "For kids or guests; safe mode (from phase 1)" },
   { value: "owner", label: "Owner", hint: "Manages accounts, models and remote access" },
+  { value: "service", label: "Service", hint: "For apps like Hermes: no PIN, uses an app key" },
 ];
 
 function message(err: unknown) {
@@ -35,6 +37,7 @@ export default function Settings({
         <EnginesPanel token={auth.token} canManage={isOwner} status={engines} onChanged={onEnginesChanged} />
       </div>
       {isOwner && <AccountsPanel token={auth.token} selfId={auth.account.id} />}
+      <AppKeysPanel auth={auth} />
       <ChangeMySecret token={auth.token} onChanged={onSignedOut} />
       <p className="text-xs text-muted">Outpost {version} · MIT licence · runs entirely on this PC</p>
     </section>
@@ -105,12 +108,13 @@ function AddAccount({ token, onAdded }: { token: string; onAdded: () => void }) 
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    const problem = !name.trim() ? "Enter a name." : secretProblem(secret);
+    const isService = role === "service";
+    const problem = !name.trim() ? "Enter a name." : isService ? null : secretProblem(secret);
     if (problem) return setError(problem);
     setBusy(true);
     setError(null);
     try {
-      await api.createAccount(token, { name: name.trim(), role, secret });
+      await api.createAccount(token, { name: name.trim(), role, secret: isService ? null : secret });
       setName("");
       setSecret("");
       setRole("member");
@@ -127,17 +131,19 @@ function AddAccount({ token, onAdded }: { token: string; onAdded: () => void }) 
       <h3 className="font-medium">Add an account</h3>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Field label="Name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} />
-        <Field
-          label="Their PIN or password"
-          type="password"
-          value={secret}
-          onChange={(e) => setSecret(e.target.value)}
-          hint="They can change it later."
-        />
+        {role !== "service" && (
+          <Field
+            label="Their PIN or password"
+            type="password"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            hint="They can change it later."
+          />
+        )}
       </div>
       <fieldset className="flex flex-col gap-2">
         <legend className="mb-2 text-sm text-muted">Role</legend>
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
           {ROLES.map((r) => (
             <label
               key={r.value}

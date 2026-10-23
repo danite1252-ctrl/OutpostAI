@@ -4,6 +4,8 @@ import { engineReady, useEngines } from "../components/engines";
 import { Avatar, Icon, icons, Mark, StatusDot, Wordmark } from "../components/ui";
 import Settings from "./Settings";
 import Models from "./Models";
+import Chat from "./Chat";
+import Personas from "./Personas";
 
 type Section = "chat" | "create" | "train" | "models" | "personas" | "connections" | "settings";
 
@@ -17,12 +19,12 @@ const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "settings", label: "Settings", icon: icons.settings },
 ];
 
-const COMING: Record<Exclude<Section, "models" | "settings">, { phase: number; text: string }> = {
-  chat: { phase: 1, text: "Chat with personas, memory and vision models." },
-  create: { phase: 2, text: "Qwen-Image and Wan 2.2 workflows, with a shared GPU queue." },
-  train: { phase: 4, text: "Training Studio: datasets, vision captions and LoRAs." },
-  personas: { phase: 1, text: "Personas with their own prompt, model, voice and tools." },
-  connections: { phase: 3, text: "Pair your phone, Tailscale, Cloudflare and app keys for Hermes." },
+type Built = "chat" | "personas" | "models" | "settings";
+
+const COMING: Record<Exclude<Section, Built>, { phase: number; text: string }> = {
+  create: { phase: 2, text: "Qwen-Image, Z-Image and Wan 2.2 workflows, with a shared GPU queue." },
+  train: { phase: 4, text: "Training Studio: datasets, vision captions and Z-Image LoRAs." },
+  connections: { phase: 3, text: "Pair your phone over Wi-Fi, Tailscale or Cloudflare." },
 };
 
 export default function Shell({
@@ -36,7 +38,7 @@ export default function Shell({
   onLock: () => void;
   onSignedOutElsewhere: () => void;
 }) {
-  const [section, setSection] = useState<Section>("models");
+  const [section, setSection] = useState<Section>("chat");
   const { status: engines, refresh: refreshEngines } = useEngines(auth.token, onSignedOutElsewhere);
   const ollamaUp = engineReady(engines, "ollama");
   const comfyUp = engineReady(engines, "comfyui");
@@ -99,7 +101,13 @@ export default function Shell({
           </div>
         </header>
 
-        <main className="min-h-0 flex-1 overflow-auto p-8">
+        {section === "chat" && (
+          <div className="min-h-0 flex-1">
+            <Chat token={auth.token} onUnauthorized={onSignedOutElsewhere} />
+          </div>
+        )}
+        <main className={`min-h-0 flex-1 overflow-auto p-8 ${section === "chat" ? "hidden" : ""}`}>
+          {section === "personas" && <Personas token={auth.token} />}
           {section === "models" && (
             <Models
               token={auth.token}
@@ -117,7 +125,7 @@ export default function Shell({
               onSignedOut={onSignedOutElsewhere}
             />
           )}
-          {section !== "models" && section !== "settings" && (
+          {section !== "models" && section !== "settings" && section !== "chat" && section !== "personas" && (
             <ComingSoon label={NAV.find((n) => n.id === section)!.label} {...COMING[section]} />
           )}
         </main>

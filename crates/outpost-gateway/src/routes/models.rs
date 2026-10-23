@@ -40,14 +40,14 @@ struct OllamaModel {
     name: String,
 }
 
-/// List the chat models this Outpost can use (OpenAI format).
-/// Returns an empty list when Ollama is not running.
+/// List the chat models this Outpost can use (OpenAI format), plus your personas
+/// as `persona:<slug>`. Ollama's models are missing when it is not running.
 #[utoipa::path(get, path = "/v1/models", tag = "openai", security(("bearer" = [])),
     responses(
         (status = 200, description = "Models", body = ModelList),
         (status = 401, description = "Not signed in", body = ErrorBody),
     ))]
-pub async fn list_models(State(state): State<AppState>, _auth: Auth) -> ApiResult<Json<ModelList>> {
+pub async fn list_models(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<ModelList>> {
     let url = format!("{}/api/tags", state.config.ollama_url.trim_end_matches('/'));
     let data = match state.http.get(&url).send().await {
         Ok(resp) if resp.status().is_success() => match resp.json::<OllamaTags>().await {
@@ -72,6 +72,16 @@ pub async fn list_models(State(state): State<AppState>, _auth: Auth) -> ApiResul
         }
         Err(_) => Vec::new(),
     };
+    // The caller's personas, usable as `model: "persona:<slug>"` in /v1/chat/completions.
+    let mut data = data;
+    for p in outpost_core::personas::list(&state.pool, &auth.account.id).await? {
+        data.push(ModelEntry {
+            id: format!("persona:{}", p.slug),
+            object: "model".into(),
+            created: p.created_at,
+            owned_by: "outpost-persona".into(),
+        });
+    }
     Ok(Json(ModelList {
         object: "list".into(),
         data,

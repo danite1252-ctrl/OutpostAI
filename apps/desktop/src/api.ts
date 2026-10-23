@@ -140,6 +140,60 @@ export interface ModelsOverview {
   ollama_running: boolean;
 }
 
+export interface Persona {
+  id: string;
+  account_id: string;
+  slug: string;
+  name: string;
+  avatar_color: string;
+  system_prompt: string;
+  model: string | null;
+  temperature: number | null;
+  think: boolean;
+  use_memory: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export type PersonaInput = Partial<{
+  name: string;
+  system_prompt: string;
+  model: string;
+  temperature: number;
+  think: boolean;
+  use_memory: boolean;
+  avatar_color: string;
+}>;
+
+export interface Chat {
+  id: string;
+  account_id: string;
+  persona_id: string | null;
+  title: string;
+  model: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface Message {
+  id: string;
+  chat_id: string;
+  seq: number;
+  role: "user" | "assistant" | "system";
+  content: string;
+  thinking: string | null;
+  model: string | null;
+  created_at: number;
+}
+
+export interface Memory {
+  id: string;
+  account_id: string;
+  persona_id: string | null;
+  text: string;
+  created_at: number;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -214,6 +268,27 @@ export const api = {
   pullModel: (token: string, model: string) => request<void>("POST", "/api/models/pull", { token, body: { model } }),
   removeModel: (token: string, model: string) =>
     request<void>("POST", "/api/models/remove", { token, body: { model } }),
+  personas: (token: string) => request<Persona[]>("GET", "/api/personas", { token }),
+  createPersona: (token: string, body: PersonaInput) => request<Persona>("POST", "/api/personas", { token, body }),
+  updatePersona: (token: string, id: string, body: PersonaInput) =>
+    request<Persona>("PATCH", `/api/personas/${id}`, { token, body }),
+  deletePersona: (token: string, id: string) => request<void>("DELETE", `/api/personas/${id}`, { token }),
+  chats: (token: string) => request<Chat[]>("GET", "/api/chats", { token }),
+  createChat: (token: string, personaId?: string) =>
+    request<Chat>("POST", "/api/chats", { token, body: { persona_id: personaId ?? null } }),
+  chat: (token: string, id: string) => request<{ chat: Chat; messages: Message[] }>("GET", `/api/chats/${id}`, { token }),
+  updateChat: (token: string, id: string, body: { title?: string; persona_id?: string; model?: string }) =>
+    request<Chat>("PATCH", `/api/chats/${id}`, { token, body }),
+  deleteChat: (token: string, id: string) => request<void>("DELETE", `/api/chats/${id}`, { token }),
+  memory: (token: string) => request<Memory[]>("GET", "/api/memory", { token }),
+  addMemory: (token: string, text: string, personaId?: string) =>
+    request<Memory>("POST", "/api/memory", { token, body: { text, persona_id: personaId ?? null } }),
+  deleteMemory: (token: string, id: string) => request<void>("DELETE", `/api/memory/${id}`, { token }),
+  keys: (token: string, accountId?: string) =>
+    request<Session[]>("GET", `/api/keys${accountId ? `?account_id=${encodeURIComponent(accountId)}` : ""}`, { token }),
+  createKey: (token: string, label: string, accountId?: string) =>
+    request<SignInResponse>("POST", "/api/keys", { token, body: { label, account_id: accountId ?? null } }),
+  revokeKey: (token: string, id: string) => request<void>("DELETE", `/api/keys/${id}`, { token }),
   engines: (token: string) => request<EnginesStatus>("GET", "/api/engines", { token }),
   engineAction: (token: string, id: EngineId, action: "install" | "start" | "stop") =>
     request<void>("POST", `/api/engines/${id}/${action}`, { token }),
@@ -224,4 +299,64 @@ export function secretProblem(secret: string): string | null {
   const isPin = /^\d+$/.test(secret);
   if (isPin) return secret.length >= 4 && secret.length <= 12 ? null : "A PIN must be 4 to 12 digits.";
   return secret.length >= 6 ? null : "A password must be at least 6 characters (or use a 4–12 digit PIN).";
+}
+
+export interface StreamHandlers {
+  start?: (data: { user_message: Message; model: string }) => void;
+  thinking?: (text: string) => void;
+  token?: (text: string) => void;
+  done?: (data: { message: Message; error: string | null }) => void;
+  error?: (message: string) => void;
+}
+
+/** Send a chat message and follow the streamed reply (Server-Sent Events over POST). */
+export async function streamMessage(
+  token: string,
+  chatId: string,
+  content: string,
+  on: StreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${GATEWAY}/api/chats/${chatId}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+      signal,
+    });
+  } catch {
+    throw new ApiError(0, "offline", "Can't reach the Outpost service.");
+  }
+  if (!res.ok || !res.body) {
+    const data = await res.json().catch(() => null);
+    const e = data?.error ?? {};
+    throw new ApiError(res.status, e.code ?? "unknown", e.message ?? `Request failed (${res.status}).`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+    let cut: number;
+    while ((cut = buffer.indexOf("\n\n")) >= 0) {
+      const block = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      let name = "message";
+      const data: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) name = line.slice(6).trim();
+        else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+      }
+      if (data.length === 0) continue; // keep-alive
+      const payload = JSON.parse(data.join("\n"));
+      if (name === "start") on.start?.(payload);
+      else if (name === "thinking") on.thinking?.(payload.text);
+      else if (name === "token") on.token?.(payload.text);
+      else if (name === "done") on.done?.(payload);
+      else if (name === "error") on.error?.(payload.message);
+    }
+  }
 }

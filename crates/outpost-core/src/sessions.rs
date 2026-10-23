@@ -159,3 +159,27 @@ pub async fn list_for_account(pool: &SqlitePool, account_id: &str) -> CoreResult
     .await?;
     rows.into_iter().map(Session::try_from).collect()
 }
+
+/// Live sessions of one kind for an account (e.g. its app keys).
+pub async fn list_kind(pool: &SqlitePool, account_id: &str, kind: SessionKind) -> CoreResult<Vec<Session>> {
+    let rows: Vec<SessionRow> = sqlx::query_as(
+        "SELECT id, account_id, kind, label, created_at, last_used_at FROM sessions
+         WHERE account_id = ? AND kind = ? AND revoked_at IS NULL ORDER BY created_at DESC",
+    )
+    .bind(account_id)
+    .bind(kind.as_str())
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter().map(Session::try_from).collect()
+}
+
+/// Look up one live session.
+pub async fn get(pool: &SqlitePool, session_id: &str) -> CoreResult<Session> {
+    let row: Option<SessionRow> = sqlx::query_as(
+        "SELECT id, account_id, kind, label, created_at, last_used_at FROM sessions WHERE id = ? AND revoked_at IS NULL",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await?;
+    row.ok_or(CoreError::NotFound).and_then(Session::try_from)
+}

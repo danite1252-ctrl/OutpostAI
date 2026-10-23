@@ -6,7 +6,7 @@ on your own GPU, all reachable over one API so phones and apps like Hermes can p
 
 Everything runs locally. No cloud models, accounts or services. MIT licensed.
 
-> Status: **phase 0, foundations.** Accounts with PINs, the local gateway, the API spec,
+> Status: **phase 1, chat.** Accounts with PINs, the local gateway, the API spec,
 > the desktop shell, and managed installs of Ollama and ComfyUI. See the build plan for what comes next.
 
 ## Layout
@@ -64,7 +64,15 @@ npm run openapi > openapi.json       # the API spec
 Data lives in `%LOCALAPPDATA%\Outpost` on Windows and `~/.local/share/Outpost` on Linux
 (change it with `--data-dir` or `OUTPOST_DATA_DIR`).
 
-## API (phase 0)
+## Connect Hermes (or any OpenAI-compatible app)
+
+1. Settings → Accounts: add an account with role **Service**, named e.g. "Hermes".
+2. Settings → App keys: pick that account, create a key, copy it.
+3. In the app: base URL `http://127.0.0.1:7420/v1`, API key = the key, model `persona:assistant`.
+
+The key sees only that account's personas and memory. Revoke it any time in Settings.
+
+## API
 
 | Method | Path | Auth | What |
 | --- | --- | --- | --- |
@@ -81,7 +89,15 @@ Data lives in `%LOCALAPPDATA%\Outpost` on Windows and `~/.local/share/Outpost` o
 | GET | `/api/engines` | bearer | Engine state, install progress, graphics cards |
 | POST | `/api/engines/{id}/install` | owner | Install or reinstall `ollama` / `comfyui` (background) |
 | POST | `/api/engines/{id}/start`, `/stop` | owner | Start or stop an engine |
-| GET | `/v1/models` | bearer | OpenAI-compatible model list (from Ollama) |
+| GET | `/v1/models` | bearer | OpenAI-compatible model list: Ollama models plus `persona:<slug>` |
+| POST | `/v1/chat/completions` | bearer | OpenAI-compatible chat; `model` can be `persona:<slug>` |
+| GET | `/api/hardware`, `/api/models` | bearer | Hardware tier, scored catalogue, installed models, downloads |
+| POST | `/api/models/pull`, `/api/models/remove` | owner | Download or remove an Ollama model |
+| GET, POST, PATCH, DELETE | `/api/personas[/{id}]` | bearer | My personas |
+| GET, POST, PATCH, DELETE | `/api/chats[/{id}]` | bearer | My chats |
+| POST | `/api/chats/{id}/messages` | bearer | Send a message; reply streams as Server-Sent Events |
+| GET, POST, DELETE | `/api/memory[/{id}]` | bearer | Things to remember |
+| GET, POST, DELETE | `/api/keys[/{id}]` | bearer | App keys (owner can make them for service accounts) |
 | GET | `/openapi.json` | none | The full spec |
 
 Security notes: PINs and passwords are hashed with Argon2id; tokens are random 256-bit

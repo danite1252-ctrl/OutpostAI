@@ -6,6 +6,7 @@
 pub mod config;
 pub mod error;
 pub mod extract;
+pub mod llm;
 pub mod openapi;
 pub mod routes;
 
@@ -14,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::{header, HeaderValue, Method};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
@@ -29,8 +30,10 @@ use outpost_engines::EngineManager;
 pub struct AppState {
     pub pool: SqlitePool,
     pub config: Arc<Config>,
-    /// Client for talking to local engines (Ollama, later ComfyUI).
+    /// Client for quick calls to local engines (3 s timeout).
     pub http: reqwest::Client,
+    /// Client for model replies, which can stream for minutes (no overall timeout).
+    pub llm: reqwest::Client,
     /// Serialises first-run setup so two owners can't be created at once.
     pub setup_lock: Arc<Mutex<()>>,
     /// Installs, starts and supervises Ollama and ComfyUI.
@@ -53,7 +56,13 @@ impl AppState {
             .timeout(Duration::from_secs(3))
             .build()
             .expect("HTTP client");
+        let llm = reqwest::Client::builder()
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            .expect("HTTP client");
         AppState {
+            llm,
             engines: EngineManager::new(&config.data_dir),
             models: ModelStore::new(),
             pool,
@@ -75,7 +84,7 @@ const DESKTOP_ORIGINS: [&str; 5] = [
 ];
 
 pub fn router(state: AppState) -> Router {
-    use routes::{accounts, auth, engines, health, models, setup};
+    use routes::{accounts, auth, chat, engines, health, keys, models, openai, setup};
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(
@@ -100,6 +109,22 @@ pub fn router(state: AppState) -> Router {
         .route("/api/engines/{id}/start", post(engines::start))
         .route("/api/engines/{id}/stop", post(engines::stop))
         .route("/v1/models", get(models::list_models))
+        .route("/v1/chat/completions", post(openai::chat_completions))
+        .route("/api/personas", get(chat::list_personas).post(chat::create_persona))
+        .route(
+            "/api/personas/{id}",
+            patch(chat::update_persona).delete(chat::delete_persona),
+        )
+        .route("/api/chats", get(chat::list_chats).post(chat::create_chat))
+        .route(
+            "/api/chats/{id}",
+            get(chat::get_chat).patch(chat::update_chat).delete(chat::delete_chat),
+        )
+        .route("/api/chats/{id}/messages", post(chat::send_message))
+        .route("/api/memory", get(chat::list_memory).post(chat::add_memory))
+        .route("/api/memory/{id}", delete(chat::delete_memory))
+        .route("/api/keys", get(keys::list).post(keys::create))
+        .route("/api/keys/{id}", delete(keys::revoke))
         .route("/api/hardware", get(models::hardware))
         .route("/api/models", get(models::overview))
         .route("/api/models/pull", post(models::pull))

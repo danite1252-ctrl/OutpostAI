@@ -2,7 +2,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
 use crate::error::{ErrorBody, ErrorDetail};
-use crate::routes::{accounts, auth, engines, health, models, setup, SignInResponse};
+use crate::routes::{accounts, auth, chat, engines, health, keys, models, openai, setup, SignInResponse};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -24,6 +24,23 @@ use crate::routes::{accounts, auth, engines, health, models, setup, SignInRespon
         accounts::delete,
         accounts::reset_secret,
         models::list_models,
+        openai::chat_completions,
+        chat::list_personas,
+        chat::create_persona,
+        chat::update_persona,
+        chat::delete_persona,
+        chat::list_chats,
+        chat::create_chat,
+        chat::get_chat,
+        chat::update_chat,
+        chat::delete_chat,
+        chat::send_message,
+        chat::list_memory,
+        chat::add_memory,
+        chat::delete_memory,
+        keys::list,
+        keys::create,
+        keys::revoke,
         models::hardware,
         models::overview,
         models::pull,
@@ -47,6 +64,8 @@ use crate::routes::{accounts, auth, engines, health, models, setup, SignInRespon
         (name = "system", description = "Health"),
         (name = "engines", description = "Ollama and ComfyUI: install, start, stop"),
         (name = "models", description = "Hardware, model catalogue and downloads"),
+        (name = "chat", description = "Personas, chats with streamed replies, memory"),
+        (name = "keys", description = "App keys for Hermes and other apps"),
         (name = "setup", description = "First run"),
         (name = "auth", description = "Signing in and out"),
         (name = "accounts", description = "Managing accounts (owner)"),

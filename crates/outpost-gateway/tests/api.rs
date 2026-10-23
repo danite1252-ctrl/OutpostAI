@@ -306,6 +306,16 @@ async fn openapi_lists_every_route() {
         "/api/models",
         "/api/models/pull",
         "/api/models/remove",
+        "/v1/chat/completions",
+        "/api/personas",
+        "/api/personas/{id}",
+        "/api/chats",
+        "/api/chats/{id}",
+        "/api/chats/{id}/messages",
+        "/api/memory",
+        "/api/memory/{id}",
+        "/api/keys",
+        "/api/keys/{id}",
     ] {
         assert!(paths.contains_key(p), "missing {p} in OpenAPI spec");
     }
@@ -413,4 +423,191 @@ async fn models_overview_and_permissions() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn personas_chats_and_memory() {
+    let app = app().await;
+    let (token, _) = setup_owner(&app).await;
+
+    // Every account starts with the Assistant persona.
+    let (status, personas) = call(&app, "GET", "/api/personas", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(personas[0]["slug"], "assistant");
+
+    let (status, coder) = call(
+        &app,
+        "POST",
+        "/api/personas",
+        Some(&token),
+        Some(json!({"name": "Coder", "system_prompt": "Terse senior engineer.", "think": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{coder}");
+    let coder_id = coder["id"].as_str().unwrap().to_string();
+
+    let (status, renamed) = call(
+        &app,
+        "PATCH",
+        &format!("/api/personas/{coder_id}"),
+        Some(&token),
+        Some(json!({"name": "Senior Coder"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(renamed["slug"], "coder");
+
+    let (status, chat) = call(
+        &app,
+        "POST",
+        "/api/chats",
+        Some(&token),
+        Some(json!({"persona_id": coder_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let chat_id = chat["id"].as_str().unwrap().to_string();
+
+    // Empty messages are refused before any model is involved.
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("/api/chats/{chat_id}/messages"),
+        Some(&token),
+        Some(json!({"content": "   "})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, full) = call(&app, "GET", &format!("/api/chats/{chat_id}"), Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(full["messages"].as_array().unwrap().is_empty());
+
+    let (status, m) = call(
+        &app,
+        "POST",
+        "/api/memory",
+        Some(&token),
+        Some(json!({"text": "Lives in Sydney"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (_, list) = call(&app, "GET", "/api/memory", Some(&token), None).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    let (status, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/memory/{}", m["id"].as_str().unwrap()),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Personas show up as models for OpenAI-style apps.
+    let (_, models) = call(&app, "GET", "/v1/models", Some(&token), None).await;
+    let ids: Vec<_> = models["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(ids.contains(&"persona:assistant".to_string()));
+    assert!(ids.contains(&"persona:coder".to_string()));
+
+    let (status, _) = call(&app, "DELETE", &format!("/api/chats/{chat_id}"), Some(&token), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn openai_endpoint_checks_before_calling_ollama() {
+    let app = app().await;
+    let (token, _) = setup_owner(&app).await;
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/chat/completions",
+        Some(&token),
+        Some(json!({"messages": [{"role": "user", "content": "hi"}]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/chat/completions",
+        Some(&token),
+        Some(json!({"model": "persona:nobody", "messages": [{"role": "user", "content": "hi"}]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/chat/completions",
+        None,
+        Some(json!({"model": "persona:assistant", "messages": []})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn app_keys_act_as_their_account() {
+    let app = app().await;
+    let (owner_token, _) = setup_owner(&app).await;
+
+    // A service account for Hermes, with a key made by the owner.
+    let (status, hermes) = call(
+        &app,
+        "POST",
+        "/api/accounts",
+        Some(&owner_token),
+        Some(json!({"name": "Hermes", "role": "service"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{hermes}");
+    let hermes_id = hermes["id"].as_str().unwrap().to_string();
+    let (status, key) = call(
+        &app,
+        "POST",
+        "/api/keys",
+        Some(&owner_token),
+        Some(json!({"label": "Hermes on the NAS", "account_id": hermes_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{key}");
+    let key_token = key["token"].as_str().unwrap().to_string();
+    let key_id = key["session"]["id"].as_str().unwrap().to_string();
+
+    let (status, me) = call(&app, "GET", "/api/me", Some(&key_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(me["account"]["name"], "Hermes");
+    assert_eq!(me["session"]["kind"], "app");
+
+    // The service account can't manage others' keys.
+    let (status, _) = call(
+        &app,
+        "GET",
+        &format!("/api/keys?account_id={}", "someone-else"),
+        Some(&key_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (_, keys) = call(
+        &app,
+        "GET",
+        &format!("/api/keys?account_id={hermes_id}"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(keys.as_array().unwrap().len(), 1);
+
+    let (status, _) = call(&app, "DELETE", &format!("/api/keys/{key_id}"), Some(&owner_token), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = call(&app, "GET", "/api/me", Some(&key_token), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

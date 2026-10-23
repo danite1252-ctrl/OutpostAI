@@ -6,8 +6,11 @@
 pub mod accounts;
 pub mod audit;
 pub mod auth;
+pub mod chats;
 pub mod db;
 pub mod error;
+pub mod memory;
+pub mod personas;
 pub mod secret;
 pub mod sessions;
 
