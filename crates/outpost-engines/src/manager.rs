@@ -69,7 +69,6 @@ impl Slot {
 pub(crate) struct Ctx {
     pub slot: Arc<Slot>,
     pub engines_root: PathBuf,
-    pub models_root: PathBuf,
     pub client: reqwest::Client,
     pub gpus: Vec<Gpu>,
 }
@@ -276,7 +275,6 @@ impl EngineManager {
             let ctx = Ctx {
                 slot: slot.clone(),
                 engines_root: me.engines_root.clone(),
-                models_root: me.models_root.clone(),
                 client: me.download_client.clone(),
                 gpus: me.gpus().await,
             };

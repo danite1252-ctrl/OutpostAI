@@ -9,6 +9,17 @@ use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::Auth;
 use crate::AppState;
 
+/// Parse the `{id}` path segment ourselves so a bad name gets the usual JSON error.
+fn engine_id(raw: &str) -> Result<EngineId, ApiError> {
+    serde_json::from_value(serde_json::Value::String(raw.to_string())).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            format!("Unknown engine \"{raw}\". Use \"ollama\" or \"comfyui\"."),
+        )
+    })
+}
+
 fn engine_error(e: EngineError) -> ApiError {
     match e {
         EngineError::Busy | EngineError::External => ApiError::conflict(e.to_string()),
@@ -35,8 +46,9 @@ pub async fn status(State(state): State<AppState>, _auth: Auth) -> Json<EnginesS
         (status = 403, description = "Not allowed", body = ErrorBody),
         (status = 409, description = "Busy, or already running outside Outpost", body = ErrorBody),
     ))]
-pub async fn install(State(state): State<AppState>, auth: Auth, Path(id): Path<EngineId>) -> ApiResult<StatusCode> {
+pub async fn install(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {
     auth.require_owner()?;
+    let id = engine_id(&id)?;
     state.engines.install(id).map_err(engine_error)?;
     log(&state, &auth, "engine_install", id).await;
     Ok(StatusCode::ACCEPTED)
@@ -51,8 +63,9 @@ pub async fn install(State(state): State<AppState>, auth: Auth, Path(id): Path<E
         (status = 403, description = "Not allowed", body = ErrorBody),
         (status = 409, description = "Busy, or already running outside Outpost", body = ErrorBody),
     ))]
-pub async fn start(State(state): State<AppState>, auth: Auth, Path(id): Path<EngineId>) -> ApiResult<StatusCode> {
+pub async fn start(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {
     auth.require_owner()?;
+    let id = engine_id(&id)?;
     state.engines.start(id).map_err(engine_error)?;
     log(&state, &auth, "engine_start", id).await;
     Ok(StatusCode::ACCEPTED)
@@ -66,8 +79,9 @@ pub async fn start(State(state): State<AppState>, auth: Auth, Path(id): Path<Eng
         (status = 403, description = "Not allowed", body = ErrorBody),
         (status = 409, description = "Busy, or running outside Outpost", body = ErrorBody),
     ))]
-pub async fn stop(State(state): State<AppState>, auth: Auth, Path(id): Path<EngineId>) -> ApiResult<StatusCode> {
+pub async fn stop(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {
     auth.require_owner()?;
+    let id = engine_id(&id)?;
     state.engines.stop(id).map_err(engine_error)?;
     log(&state, &auth, "engine_stop", id).await;
     Ok(StatusCode::NO_CONTENT)

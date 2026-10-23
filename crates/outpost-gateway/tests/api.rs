@@ -53,7 +53,8 @@ async fn call(app: &Router, method: &str, uri: &str, token: Option<&str>, body: 
     let value = if bytes.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice(&bytes).unwrap()
+        // Every API error is JSON; anything else is kept as text so a failing test shows it.
+        serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into()))
     };
     (status, value)
 }
@@ -337,7 +338,7 @@ async fn only_owners_control_engines() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 
     // Unknown engine names are rejected before anything runs.
-    let (status, _) = call(
+    let (status, body) = call(
         &app,
         "POST",
         "/api/engines/stable-diffusion/start",
@@ -346,6 +347,7 @@ async fn only_owners_control_engines() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "invalid", "{body}");
 
     // Starting something that isn't installed is refused (or 409 if a copy already
     // runs outside Outpost on this machine).
