@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod auth;
+pub mod engines;
 pub mod health;
 pub mod models;
 pub mod setup;

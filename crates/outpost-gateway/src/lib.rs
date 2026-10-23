@@ -22,6 +22,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 pub use config::Config;
+use outpost_engines::EngineManager;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -31,6 +32,8 @@ pub struct AppState {
     pub http: reqwest::Client,
     /// Serialises first-run setup so two owners can't be created at once.
     pub setup_lock: Arc<Mutex<()>>,
+    /// Installs, starts and supervises Ollama and ComfyUI.
+    pub engines: Arc<EngineManager>,
 }
 
 impl AppState {
@@ -48,6 +51,7 @@ impl AppState {
             .build()
             .expect("HTTP client");
         AppState {
+            engines: EngineManager::new(&config.data_dir),
             pool,
             config: Arc::new(config),
             http,
@@ -67,7 +71,7 @@ const DESKTOP_ORIGINS: [&str; 5] = [
 ];
 
 pub fn router(state: AppState) -> Router {
-    use routes::{accounts, auth, health, models, setup};
+    use routes::{accounts, auth, engines, health, models, setup};
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(
@@ -87,7 +91,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/accounts", get(accounts::list).post(accounts::create))
         .route("/api/accounts/{id}", delete(accounts::delete))
         .route("/api/accounts/{id}/secret", put(accounts::reset_secret))
-        .route("/api/engines", get(models::engines))
+        .route("/api/engines", get(engines::status))
+        .route("/api/engines/{id}/install", post(engines::install))
+        .route("/api/engines/{id}/start", post(engines::start))
+        .route("/api/engines/{id}/stop", post(engines::stop))
         .route("/v1/models", get(models::list_models))
         .route(
             "/openapi.json",
@@ -100,19 +107,31 @@ pub fn router(state: AppState) -> Router {
 
 /// Run the gateway until Ctrl+C.
 pub async fn serve(config: Config) -> anyhow::Result<()> {
-    let bind = config.bind;
     tracing::info!(data_dir = %config.data_dir.display(), "opening Outpost data");
     let state = AppState::open(config).await?;
+    serve_state(state).await
+}
+
+/// Run the gateway with state the caller already holds (the desktop app keeps the
+/// engine manager so it can stop engines when the window closes).
+pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
+    let bind = state.config.bind;
+    let engines = state.engines.clone();
+    // Bind first: if the port is taken, fail before starting any engines.
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!(%bind, "Outpost gateway listening");
-    axum::serve(
+    let starter = engines.clone();
+    tokio::spawn(async move { starter.init().await });
+    let result = axum::serve(
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(async {
         let _ = tokio::signal::ctrl_c().await;
     })
-    .await?;
+    .await;
+    engines.shutdown();
+    result?;
     Ok(())
 }
 

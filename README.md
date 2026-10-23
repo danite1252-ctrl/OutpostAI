@@ -6,14 +6,15 @@ on your own GPU, all reachable over one API so phones and apps like Hermes can p
 
 Everything runs locally. No cloud models, accounts or services. MIT licensed.
 
-> Status: **phase 0, foundations.** Accounts with PINs, the local gateway, the API spec
-> and the desktop shell. See the build plan for what comes next.
+> Status: **phase 0, foundations.** Accounts with PINs, the local gateway, the API spec,
+> the desktop shell, and managed installs of Ollama and ComfyUI. See the build plan for what comes next.
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
 | `crates/outpost-core` | Database, accounts, PIN hashing, sessions, audit log |
+| `crates/outpost-engines` | Installs, starts and supervises Ollama and ComfyUI |
 | `crates/outpost-gateway` | The HTTP API on `127.0.0.1:7420` (library + `outpost-gateway` binary) |
 | `apps/desktop` | Tauri 2 + React desktop app; starts the gateway if none is running |
 
@@ -23,7 +24,6 @@ Everything runs locally. No cloud models, accounts or services. MIT licensed.
 2. **Visual Studio Build Tools** with "Desktop development with C++" (Rust needs the MSVC linker).
 3. **Node.js 22** from <https://nodejs.org>.
 4. **WebView2**: already on Windows 10/11.
-5. Optional: **Ollama** from <https://ollama.com>, so the Models screen has something to show.
 
 On Linux you also need the Tauri system packages; see
 <https://tauri.app/start/prerequisites/>.
@@ -36,8 +36,22 @@ npm test             # Rust tests for core + gateway
 npm run dev          # opens the desktop app with hot reload
 ```
 
-First launch asks you to create the **owner** account (name + PIN or password). After
-that the app opens on "Who's using Outpost?".
+First launch asks you to create the **owner** account (name + PIN or password), then
+offers to install the engines. After that the app opens on "Who's using Outpost?".
+
+## Engines
+
+Outpost installs pinned versions into `<data folder>\engines` and runs them hidden:
+
+| Engine | Version | How | Port |
+| --- | --- | --- | --- |
+| Ollama | v0.40.9 | Official portable archive, checksum verified | 11434 |
+| ComfyUI | v0.42.5 | Source release + Python 3.13 via uv 0.13.5, PyTorch cu130 (NVIDIA) or CPU | 8188 |
+
+Models are kept in `<data folder>\models`, so reinstalling an engine never deletes them.
+If you already run your own Ollama or ComfyUI on those ports, Outpost uses it instead
+and shows it as "your own copy". Engines stop when the app closes. Versions live in
+`crates/outpost-engines/src/versions.rs`.
 
 Run only the API, without the window:
 
@@ -64,7 +78,9 @@ Data lives in `%LOCALAPPDATA%\Outpost` on Windows and `~/.local/share/Outpost` o
 | GET, POST | `/api/accounts` | owner | List / add accounts |
 | DELETE | `/api/accounts/{id}` | owner | Delete an account |
 | PUT | `/api/accounts/{id}/secret` | owner | Set a new PIN for someone |
-| GET | `/api/engines` | bearer | Is Ollama running |
+| GET | `/api/engines` | bearer | Engine state, install progress, graphics cards |
+| POST | `/api/engines/{id}/install` | owner | Install or reinstall `ollama` / `comfyui` (background) |
+| POST | `/api/engines/{id}/start`, `/stop` | owner | Start or stop an engine |
 | GET | `/v1/models` | bearer | OpenAI-compatible model list (from Ollama) |
 | GET | `/openapi.json` | none | The full spec |
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, type Engines, type ModelEntry, type SignInResponse } from "../api";
+import { api, ApiError, type EngineInfo, type ModelEntry, type SignInResponse } from "../api";
+import { EngineCard, engineReady, useEngines } from "../components/engines";
 import { Avatar, Button, Icon, icons, Mark, StatusDot, Wordmark } from "../components/ui";
 import Settings from "./Settings";
 
@@ -35,26 +36,23 @@ export default function Shell({
   onSignedOutElsewhere: () => void;
 }) {
   const [section, setSection] = useState<Section>("models");
-  const [engines, setEngines] = useState<Engines | null>(null);
   const [models, setModels] = useState<ModelEntry[] | null>(null);
+  const { status: engines, refresh: refreshEngines } = useEngines(auth.token, onSignedOutElsewhere);
+  const ollamaUp = engineReady(engines, "ollama");
+  const comfyUp = engineReady(engines, "comfyui");
 
-  const refresh = useCallback(async () => {
+  const refreshModels = useCallback(async () => {
     try {
-      const [e, m] = await Promise.all([api.engines(auth.token), api.models(auth.token)]);
-      setEngines(e);
-      setModels(m.data);
+      setModels((await api.models(auth.token)).data);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) onSignedOutElsewhere();
     }
   }, [auth.token, onSignedOutElsewhere]);
 
+  // Re-read the model list whenever Ollama comes up or goes down.
   useEffect(() => {
-    void refresh();
-    const t = window.setInterval(() => void refresh(), 15_000);
-    return () => window.clearInterval(t);
-  }, [refresh]);
-
-  const ollamaUp = engines?.ollama.reachable ?? false;
+    void refreshModels();
+  }, [refreshModels, ollamaUp]);
 
   return (
     <div className="flex h-full bg-night">
@@ -98,7 +96,11 @@ export default function Shell({
             </span>
             <span className="flex items-center gap-2">
               <StatusDot on={ollamaUp} />
-              {ollamaUp ? `Ollama ${engines?.ollama.version ?? ""}` : "Ollama not running"}
+              Ollama
+            </span>
+            <span className="flex items-center gap-2">
+              <StatusDot on={comfyUp} />
+              ComfyUI
             </span>
           </div>
           <div className="flex items-center gap-2.5 rounded-xl border border-line bg-surface py-1.5 pr-3 pl-1.5">
@@ -111,8 +113,27 @@ export default function Shell({
         </header>
 
         <main className="min-h-0 flex-1 overflow-auto p-8">
-          {section === "models" && <ModelsView models={models} ollamaUp={ollamaUp} onRefresh={refresh} />}
-          {section === "settings" && <Settings auth={auth} version={version} onSignedOut={onSignedOutElsewhere} />}
+          {section === "models" && (
+            <ModelsView
+              models={models}
+              ollama={engines?.engines.find((e) => e.id === "ollama") ?? null}
+              token={auth.token}
+              canManage={auth.account.role === "owner"}
+              onRefresh={() => {
+                void refreshModels();
+                void refreshEngines();
+              }}
+            />
+          )}
+          {section === "settings" && (
+            <Settings
+              auth={auth}
+              version={version}
+              engines={engines}
+              onEnginesChanged={() => void refreshEngines()}
+              onSignedOut={onSignedOutElsewhere}
+            />
+          )}
           {section !== "models" && section !== "settings" && (
             <ComingSoon label={NAV.find((n) => n.id === section)!.label} {...COMING[section]} />
           )}
@@ -134,13 +155,18 @@ function ComingSoon({ label, phase, text }: { label: string; phase: number; text
 
 function ModelsView({
   models,
-  ollamaUp,
+  ollama,
+  token,
+  canManage,
   onRefresh,
 }: {
   models: ModelEntry[] | null;
-  ollamaUp: boolean;
+  ollama: EngineInfo | null;
+  token: string;
+  canManage: boolean;
   onRefresh: () => void;
 }) {
+  const ollamaUp = ollama?.state === "running" || ollama?.state === "external";
   return (
     <section className="mx-auto flex max-w-4xl flex-col gap-6">
       <div className="flex flex-wrap items-end gap-4">
@@ -155,15 +181,11 @@ function ModelsView({
           Refresh
         </Button>
       </div>
-      {!ollamaUp && (
-        <div className="rounded-2xl border border-line bg-surface p-5 text-sm leading-relaxed text-soft">
-          Ollama isn't running. Install it from ollama.com, start it, then press Refresh. Outpost will install and
-          manage it for you from phase 1.
-        </div>
-      )}
+      {!ollamaUp && ollama && <EngineCard engine={ollama} token={token} canManage={canManage} onChanged={onRefresh} />}
       {ollamaUp && models?.length === 0 && (
         <div className="rounded-2xl border border-line bg-surface p-5 text-sm text-soft">
-          Ollama is running but has no models yet. Try <code className="font-mono">ollama pull qwen3:8b</code>.
+          Ollama is running but has no models yet. Model downloads with hardware fit scores arrive in phase 1; until
+          then you can run <code className="font-mono">ollama pull qwen3:8b</code>.
         </div>
       )}
       {models && models.length > 0 && (

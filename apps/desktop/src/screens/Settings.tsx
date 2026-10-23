@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, ApiError, secretProblem, type Account, type Role, type SignInResponse } from "../api";
+import { api, ApiError, secretProblem, type Account, type EnginesStatus, type Role, type SignInResponse } from "../api";
+import { EnginesPanel } from "../components/engines";
 import { Avatar, Button, ErrorNote, Field } from "../components/ui";
 
 const ROLES: { value: Role; label: string; hint: string }[] = [
@@ -15,16 +16,24 @@ function message(err: unknown) {
 export default function Settings({
   auth,
   version,
+  engines,
+  onEnginesChanged,
   onSignedOut,
 }: {
   auth: SignInResponse;
   version: string;
+  engines: EnginesStatus | null;
+  onEnginesChanged: () => void;
   onSignedOut: () => void;
 }) {
   const isOwner = auth.account.role === "owner";
   return (
     <section className="mx-auto flex max-w-4xl flex-col gap-10">
       <h1 className="text-2xl font-semibold">Settings</h1>
+      <div className="flex flex-col gap-4">
+        <h2 className="text-lg font-semibold">Engines</h2>
+        <EnginesPanel token={auth.token} canManage={isOwner} status={engines} onChanged={onEnginesChanged} />
+      </div>
       {isOwner && <AccountsPanel token={auth.token} selfId={auth.account.id} />}
       <ChangeMySecret token={auth.token} onChanged={onSignedOut} />
       <p className="text-xs text-muted">Outpost {version} · MIT licence · runs entirely on this PC</p>

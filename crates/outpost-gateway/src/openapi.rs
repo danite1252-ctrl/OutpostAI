@@ -2,7 +2,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
 use crate::error::{ErrorBody, ErrorDetail};
-use crate::routes::{accounts, auth, health, models, setup, SignInResponse};
+use crate::routes::{accounts, auth, engines, health, models, setup, SignInResponse};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -24,7 +24,10 @@ use crate::routes::{accounts, auth, health, models, setup, SignInResponse};
         accounts::delete,
         accounts::reset_secret,
         models::list_models,
-        models::engines,
+        engines::status,
+        engines::install,
+        engines::start,
+        engines::stop,
     ),
     components(schemas(
         ErrorBody,
@@ -37,7 +40,8 @@ use crate::routes::{accounts, auth, health, models, setup, SignInResponse};
     )),
     modifiers(&BearerAuth),
     tags(
-        (name = "system", description = "Health and engines"),
+        (name = "system", description = "Health"),
+        (name = "engines", description = "Ollama and ComfyUI: install, start, stop"),
         (name = "setup", description = "First run"),
         (name = "auth", description = "Signing in and out"),
         (name = "accounts", description = "Managing accounts (owner)"),

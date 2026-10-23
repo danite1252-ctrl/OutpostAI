@@ -1,4 +1,4 @@
-//! Models and engines. Phase 0 only lists what Ollama already has installed.
+//! Models. For now this lists what Ollama has installed; the catalogue arrives in phase 1.
 
 use axum::extract::State;
 use axum::Json;
@@ -75,43 +75,5 @@ pub async fn list_models(State(state): State<AppState>, _auth: Auth) -> ApiResul
     Ok(Json(ModelList {
         object: "list".into(),
         data,
-    }))
-}
-
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct EngineStatus {
-    pub reachable: bool,
-    pub url: String,
-    pub version: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct Engines {
-    pub ollama: EngineStatus,
-}
-
-#[derive(Deserialize)]
-struct OllamaVersion {
-    version: String,
-}
-
-/// Which engines are running. ComfyUI, voice and the trainer join in later phases.
-#[utoipa::path(get, path = "/api/engines", tag = "system", security(("bearer" = [])),
-    responses(
-        (status = 200, description = "Engine status", body = Engines),
-        (status = 401, description = "Not signed in", body = ErrorBody),
-    ))]
-pub async fn engines(State(state): State<AppState>, _auth: Auth) -> ApiResult<Json<Engines>> {
-    let base = state.config.ollama_url.trim_end_matches('/').to_string();
-    let version = match state.http.get(format!("{base}/api/version")).send().await {
-        Ok(resp) if resp.status().is_success() => resp.json::<OllamaVersion>().await.ok().map(|v| v.version),
-        _ => None,
-    };
-    Ok(Json(Engines {
-        ollama: EngineStatus {
-            reachable: version.is_some(),
-            url: base,
-            version,
-        },
     }))
 }

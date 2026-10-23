@@ -49,8 +49,40 @@ export interface ModelEntry {
   owned_by: string;
 }
 
-export interface Engines {
-  ollama: { reachable: boolean; url: string; version: string | null };
+export type EngineId = "ollama" | "comfyui";
+export type EngineState =
+  | "not_installed"
+  | "installing"
+  | "stopped"
+  | "starting"
+  | "running"
+  | "external"
+  | "error";
+
+export interface EngineInfo {
+  id: EngineId;
+  name: string;
+  state: EngineState;
+  managed: boolean;
+  version: string | null;
+  pinned_version: string;
+  url: string;
+  size_hint: string;
+  progress: {
+    step: string;
+    step_index: number;
+    step_count: number;
+    percent: number | null;
+    detail: string | null;
+  } | null;
+  error: string | null;
+  log_tail: string[];
+}
+
+export interface EnginesStatus {
+  gpus: { vendor: string; name: string; vram_mb: number }[];
+  torch_variant: string;
+  engines: EngineInfo[];
 }
 
 export class ApiError extends Error {
@@ -123,7 +155,9 @@ export const api = {
   resetSecret: (token: string, id: string, secret: string) =>
     request<void>("PUT", `/api/accounts/${encodeURIComponent(id)}/secret`, { token, body: { secret } }),
   models: (token: string) => request<{ object: "list"; data: ModelEntry[] }>("GET", "/v1/models", { token }),
-  engines: (token: string) => request<Engines>("GET", "/api/engines", { token }),
+  engines: (token: string) => request<EnginesStatus>("GET", "/api/engines", { token }),
+  engineAction: (token: string, id: EngineId, action: "install" | "start" | "stop") =>
+    request<void>("POST", `/api/engines/${id}/${action}`, { token }),
 };
 
 /** Same rules as the gateway, so the form can explain before submitting. */

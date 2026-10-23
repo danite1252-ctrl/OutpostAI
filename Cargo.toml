@@ -2,12 +2,13 @@
 resolver = "2"
 members = [
     "crates/outpost-core",
+    "crates/outpost-engines",
     "crates/outpost-gateway",
     "apps/desktop/src-tauri",
 ]
 # `cargo test` / `cargo build` at the root skip the desktop shell, which needs
 # the Tauri system dependencies. Build it with `npm run tauri build`.
-default-members = ["crates/outpost-core", "crates/outpost-gateway"]
+default-members = ["crates/outpost-core", "crates/outpost-engines", "crates/outpost-gateway"]
 
 [workspace.package]
 version = "0.1.0"
@@ -22,11 +23,14 @@ axum = "0.8"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 directories = "5"
+flate2 = "1"
+futures-util = "0.3"
 getrandom = "0.2"
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+tar = "0.4"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
@@ -36,8 +40,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 utoipa = "5"
 uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+zstd = "0.13"
 
 outpost-core = { path = "crates/outpost-core" }
+outpost-engines = { path = "crates/outpost-engines" }
 outpost-gateway = { path = "crates/outpost-gateway" }
 
 # PIN hashing is deliberately slow; optimise it even in debug builds so sign-in

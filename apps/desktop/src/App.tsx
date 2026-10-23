@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type DirectoryEntry, type Health, type SignInResponse } from "./api";
 import Connecting from "./screens/Connecting";
 import Setup from "./screens/Setup";
+import EngineSetup from "./screens/EngineSetup";
 import Picker from "./screens/Picker";
 import SignIn from "./screens/SignIn";
 import Shell from "./screens/Shell";
@@ -9,6 +10,7 @@ import Shell from "./screens/Shell";
 type Stage =
   | { kind: "connecting" }
   | { kind: "setup" }
+  | { kind: "engines"; auth: SignInResponse }
   | { kind: "picker" }
   | { kind: "sign-in"; account: DirectoryEntry }
   | { kind: "app"; auth: SignInResponse };
@@ -69,7 +71,9 @@ export default function App() {
     case "connecting":
       return <Connecting />;
     case "setup":
-      return <Setup onDone={(auth) => setStage({ kind: "app", auth })} />;
+      return <Setup onDone={(auth) => setStage({ kind: "engines", auth })} />;
+    case "engines":
+      return <EngineSetup auth={stage.auth} onDone={() => setStage({ kind: "app", auth: stage.auth })} />;
     case "picker":
       return <Picker machineName={health?.name} onPick={(account) => setStage({ kind: "sign-in", account })} />;
     case "sign-in":
