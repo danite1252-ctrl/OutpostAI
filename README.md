@@ -6,8 +6,10 @@ on your own GPU, all reachable over one API so phones and apps like Hermes can p
 
 Everything runs locally. No cloud models, accounts or services. MIT licensed.
 
-> Status: **phase 1, chat.** Accounts with PINs, the local gateway, the API spec,
-> the desktop shell, and managed installs of Ollama and ComfyUI. See the build plan for what comes next.
+> Status: **phase 1, chat (complete).** Accounts with PINs, the local gateway and API
+> spec, managed installs of Ollama and ComfyUI, the model catalogue, personas, chat with
+> formatted replies and image attachments, memory that learns from chats, app keys for
+> Hermes, and optional network access. Next: phase 2, Create (images and video).
 
 ## Layout
 
@@ -74,6 +76,18 @@ Data lives in `%LOCALAPPDATA%\Outpost` on Windows and `~/.local/share/Outpost` o
 
 The key sees only that account's personas and memory. Revoke it any time in Settings.
 
+## Chat features
+
+- **Formatted replies**: headings, lists, tables, quotes and code blocks with a Copy
+  button, rendered by Outpost's own Markdown renderer (no HTML from the model is ever run).
+- **Images**: attach up to 4 (PNG, JPEG, WebP, GIF; paste, drop or pick) for a model with
+  vision, e.g. Ornith 1.5 9B. Large photos are scaled to 1600 px before sending. Images
+  are kept per account in `<data folder>\files\<account>\images` and deleted with their chat.
+- **Memory**: facts you add are always used. With learning on (Personas → Memory), after
+  each reply the chat's model notes lasting facts you mention; the relevant ones are
+  recalled in later chats. Download **Qwen3 Embedding 0.6B** for recall by meaning;
+  without it the newest facts are used. Review, forget or clear them any time.
+
 ### Hermes on another machine
 
 1. Settings → Network → **Allow other devices on my network**, then close and reopen Outpost.
@@ -95,6 +109,12 @@ New-NetFirewallRule -DisplayName "Outpost 7420" -Direction Inbound -Protocol TCP
 
 Running only the gateway: `npm run gateway -- --bind 0.0.0.0:7420` (or set `OUTPOST_BIND`).
 Without `--bind` it follows the saved setting.
+
+## Training spike
+
+Before Training Studio (phase 4) is built, `docs/spike-ai-toolkit.md` checks that
+ai-toolkit trains Z-Image Turbo and Wan 2.2 on a 16 GB card. Its scripts live in
+`scripts/spike/` (install, start, and a captioner that uses Outpost's vision model).
 
 ## API
 
@@ -119,8 +139,11 @@ Without `--bind` it follows the saved setting.
 | POST | `/api/models/pull`, `/api/models/remove` | owner | Download or remove an Ollama model |
 | GET, POST, PATCH, DELETE | `/api/personas[/{id}]` | bearer | My personas |
 | GET, POST, PATCH, DELETE | `/api/chats[/{id}]` | bearer | My chats |
-| POST | `/api/chats/{id}/messages` | bearer | Send a message; reply streams as Server-Sent Events |
-| GET, POST, DELETE | `/api/memory[/{id}]` | bearer | Things to remember |
+| POST | `/api/chats/{id}/messages` | bearer | Send a message (+ up to 4 `images`, base64); reply streams as Server-Sent Events |
+| GET, POST, DELETE | `/api/memory[/{id}]` | bearer | Memories (`source`: `manual` or `auto`) |
+| GET, PUT | `/api/memory/settings` | bearer | Learning on or off; which embedding model recall uses |
+| DELETE | `/api/memory/auto` | bearer | Forget everything learned from chats |
+| GET | `/api/files/{id}` | bearer | An attached image (your own only) |
 | GET, POST, DELETE | `/api/keys[/{id}]` | bearer | App keys (owner can make them for service accounts) |
 | GET, PUT | `/api/settings/network` | bearer; PUT owner on this PC | Allow other devices on the network |
 | GET | `/openapi.json` | none | The full spec |

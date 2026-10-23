@@ -29,6 +29,11 @@ impl Config {
     pub fn db_path(&self) -> PathBuf {
         self.data_dir.join("outpost.db")
     }
+
+    /// Per-account files such as chat images: `<data>/files/<account_id>/...`.
+    pub fn files_dir(&self) -> PathBuf {
+        self.data_dir.join("files")
+    }
 }
 
 pub fn default_data_dir() -> PathBuf {

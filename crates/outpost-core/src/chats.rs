@@ -31,6 +31,10 @@ pub struct Message {
     /// Model that wrote an assistant message.
     pub model: Option<String>,
     pub created_at: i64,
+    /// Images attached to this message (fetch each with `GET /api/files/{id}`).
+    #[sqlx(skip)]
+    #[serde(default)]
+    pub attachments: Vec<crate::attachments::Attachment>,
 }
 
 const CHAT_COLS: &str = "id, account_id, persona_id, title, model, created_at, updated_at";
@@ -158,13 +162,31 @@ pub async fn delete(pool: &SqlitePool, account_id: &str, id: &str) -> CoreResult
     Ok(())
 }
 
+/// A chat's messages in order, each with its attachments.
 pub async fn messages(pool: &SqlitePool, chat_id: &str) -> CoreResult<Vec<Message>> {
-    Ok(sqlx::query_as(
+    let mut list: Vec<Message> = sqlx::query_as(
         "SELECT id, chat_id, seq, role, content, thinking, model, created_at FROM messages WHERE chat_id = ? ORDER BY seq",
     )
     .bind(chat_id)
     .fetch_all(pool)
-    .await?)
+    .await?;
+    let mut files = crate::attachments::for_chat(pool, chat_id).await?;
+    for m in &mut list {
+        if let Some(a) = files.remove(&m.id) {
+            m.attachments = a;
+        }
+    }
+    Ok(list)
+}
+
+/// Remove one message (used to undo a send that failed half-way).
+pub async fn delete_message(pool: &SqlitePool, chat_id: &str, message_id: &str) -> CoreResult<()> {
+    sqlx::query("DELETE FROM messages WHERE id = ? AND chat_id = ?")
+        .bind(message_id)
+        .bind(chat_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Append a message and bump the chat to the top of the list.
@@ -194,6 +216,7 @@ pub async fn add_message(
         thinking: thinking.filter(|t| !t.is_empty()).map(Into::into),
         model: model.map(Into::into),
         created_at: t,
+        attachments: Vec::new(),
     };
     sqlx::query(
         "INSERT INTO messages (id, chat_id, seq, role, content, thinking, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

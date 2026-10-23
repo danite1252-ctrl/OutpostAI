@@ -7,6 +7,7 @@ pub mod config;
 pub mod error;
 pub mod extract;
 pub mod llm;
+pub mod memory;
 pub mod openapi;
 pub mod routes;
 
@@ -14,6 +15,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use axum::extract::DefaultBodyLimit;
 use axum::http::{header, HeaderValue, Method};
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
@@ -90,6 +92,10 @@ impl AppState {
     }
 }
 
+/// Largest request body for routes that take images: four 10 MB images as base64
+/// plus the rest of the message.
+pub const MAX_UPLOAD_BODY: usize = 64 * 1024 * 1024;
+
 /// Origins allowed to call the API from a browser context: the desktop app in dev
 /// and in release builds (Windows and Linux webviews use different schemes).
 const DESKTOP_ORIGINS: [&str; 5] = [
@@ -126,7 +132,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/engines/{id}/start", post(engines::start))
         .route("/api/engines/{id}/stop", post(engines::stop))
         .route("/v1/models", get(models::list_models))
-        .route("/v1/chat/completions", post(openai::chat_completions))
+        .route(
+            "/v1/chat/completions",
+            post(openai::chat_completions).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
+        )
         .route("/api/personas", get(chat::list_personas).post(chat::create_persona))
         .route(
             "/api/personas/{id}",
@@ -137,8 +146,18 @@ pub fn router(state: AppState) -> Router {
             "/api/chats/{id}",
             get(chat::get_chat).patch(chat::update_chat).delete(chat::delete_chat),
         )
-        .route("/api/chats/{id}/messages", post(chat::send_message))
+        // Messages may carry images, so allow bigger bodies here (4 × 10 MB, base64).
+        .route(
+            "/api/chats/{id}/messages",
+            post(chat::send_message).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
+        )
+        .route("/api/files/{id}", get(chat::get_file))
         .route("/api/memory", get(chat::list_memory).post(chat::add_memory))
+        .route(
+            "/api/memory/settings",
+            get(chat::memory_settings).put(chat::set_memory_settings),
+        )
+        .route("/api/memory/auto", delete(chat::clear_auto_memory))
         .route("/api/memory/{id}", delete(chat::delete_memory))
         .route("/api/keys", get(keys::list).post(keys::create))
         .route("/api/keys/{id}", delete(keys::revoke))

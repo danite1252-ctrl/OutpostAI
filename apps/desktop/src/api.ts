@@ -177,6 +177,15 @@ export interface Chat {
   updated_at: number;
 }
 
+export interface Attachment {
+  id: string;
+  message_id: string;
+  kind: "image";
+  mime: string;
+  bytes: number;
+  created_at: number;
+}
+
 export interface Message {
   id: string;
   chat_id: string;
@@ -186,6 +195,7 @@ export interface Message {
   thinking: string | null;
   model: string | null;
   created_at: number;
+  attachments: Attachment[];
 }
 
 export interface Memory {
@@ -193,7 +203,15 @@ export interface Memory {
   account_id: string;
   persona_id: string | null;
   text: string;
+  /** "manual": you added it (always used). "auto": learned from a chat (used when relevant). */
+  source: "manual" | "auto";
+  chat_id: string | null;
   created_at: number;
+}
+
+export interface MemorySettings {
+  auto: boolean;
+  embedding_model: string | null;
 }
 
 export interface NetworkStatus {
@@ -299,6 +317,10 @@ export const api = {
   addMemory: (token: string, text: string, personaId?: string) =>
     request<Memory>("POST", "/api/memory", { token, body: { text, persona_id: personaId ?? null } }),
   deleteMemory: (token: string, id: string) => request<void>("DELETE", `/api/memory/${id}`, { token }),
+  memorySettings: (token: string) => request<MemorySettings>("GET", "/api/memory/settings", { token }),
+  setMemorySettings: (token: string, auto: boolean) =>
+    request<MemorySettings>("PUT", "/api/memory/settings", { token, body: { auto } }),
+  clearAutoMemory: (token: string) => request<{ removed: number }>("DELETE", "/api/memory/auto", { token }),
   keys: (token: string, accountId?: string) =>
     request<Session[]>("GET", `/api/keys${accountId ? `?account_id=${encodeURIComponent(accountId)}` : ""}`, { token }),
   createKey: (token: string, label: string, accountId?: string) =>
@@ -332,6 +354,7 @@ export async function streamMessage(
   token: string,
   chatId: string,
   content: string,
+  images: string[],
   on: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -340,7 +363,7 @@ export async function streamMessage(
     res = await fetch(`${GATEWAY}/api/chats/${chatId}/messages`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, images }),
       signal,
     });
   } catch {
@@ -378,3 +401,16 @@ export async function streamMessage(
     }
   }
 }
+
+/** An attached image as an object URL (the request needs the token, so <img src> can't fetch it directly). */
+export async function fileObjectUrl(token: string, id: string): Promise<string> {
+  const res = await fetch(`${GATEWAY}/api/files/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  }).catch(() => null);
+  if (!res || !res.ok) throw new ApiError(res?.status ?? 0, "not_found", "Image not found.");
+  return URL.createObjectURL(await res.blob());
+}
+
+/** Max images per message and size each, matching the gateway. */
+export const MAX_IMAGES = 4;
+export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, ApiError, type InstalledModel, type Memory, type Persona } from "../api";
+import { api, ApiError, type InstalledModel, type Memory, type MemorySettings, type Persona } from "../api";
 import { Avatar, Button, ErrorNote, Field } from "../components/ui";
 
 export default function Personas({ token }: { token: string }) {
@@ -240,7 +240,7 @@ function PersonaEditor({
             onChange={(e) => setUseMemory(e.target.checked)}
             className="size-4 accent-ember"
           />
-          Use memory (things you asked Outpost to remember)
+          Use memory (what you asked it to remember, plus facts learned from chats)
         </label>
       </div>
       <ErrorNote>{error}</ErrorNote>
@@ -250,12 +250,15 @@ function PersonaEditor({
 
 function MemoryPanel({ token, personas }: { token: string; personas: Persona[] }) {
   const [items, setItems] = useState<Memory[]>([]);
+  const [settings, setSettings] = useState<MemorySettings | null>(null);
   const [text, setText] = useState("");
   const [scope, setScope] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  const fail = (err: unknown) => setError(err instanceof ApiError ? err.message : "Something went wrong.");
   const load = useCallback(() => {
     api.memory(token).then(setItems, (e) => setError(e instanceof ApiError ? e.message : "Can't load memory."));
+    api.memorySettings(token).then(setSettings, () => undefined);
   }, [token]);
   useEffect(load, [load]);
 
@@ -267,7 +270,7 @@ function MemoryPanel({ token, personas }: { token: string; personas: Persona[] }
       setText("");
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Something went wrong.");
+      fail(err);
     }
   }
 
@@ -276,54 +279,120 @@ function MemoryPanel({ token, personas }: { token: string; personas: Persona[] }
       await api.deleteMemory(token, id);
       setItems((m) => m.filter((x) => x.id !== id));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Something went wrong.");
+      fail(err);
     }
   }
 
+  async function toggleAuto() {
+    if (!settings) return;
+    try {
+      setSettings(await api.setMemorySettings(token, !settings.auto));
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function clearLearned() {
+    if (!window.confirm("Forget everything Outpost learned from your chats? Things you added yourself stay.")) return;
+    try {
+      await api.clearAutoMemory(token);
+      load();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  const manual = items.filter((m) => m.source !== "auto");
+  const learned = items.filter((m) => m.source === "auto");
+  const scopeLabel = (m: Memory) =>
+    m.persona_id ? `${personas.find((p) => p.id === m.persona_id)?.name ?? "one persona"} only` : "all personas";
+
   return (
-    <section aria-label="Memory" className="flex flex-col gap-4 rounded-2xl border border-line bg-surface p-5">
+    <section aria-label="Memory" className="flex flex-col gap-5 rounded-2xl border border-line bg-surface p-5">
       <div>
         <h2 className="text-lg font-semibold">Memory</h2>
         <p className="text-sm text-muted">
-          Facts every persona with memory on will know, like your name or where you live. Private to your account.
+          What personas with memory on know about you. Private to your account and stored only on this PC.
         </p>
       </div>
-      <form onSubmit={add} className="flex flex-wrap items-end gap-3">
-        <div className="min-w-64 flex-1">
-          <Field label="Remember" value={text} onChange={(e) => setText(e.target.value)} placeholder="I live in Sydney" maxLength={500} />
-        </div>
-        <label className="flex flex-col gap-1.5 text-sm text-muted">
-          For
-          <select value={scope} onChange={(e) => setScope(e.target.value)} className="min-h-11 rounded-xl border border-line bg-deep px-3 text-ink">
-            <option value="">All personas</option>
-            {personas.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} only
-              </option>
+
+      <div className="flex flex-col gap-3">
+        <h3 className="text-sm font-semibold text-soft">Always remember</h3>
+        <form onSubmit={add} className="flex flex-wrap items-end gap-3">
+          <div className="min-w-64 flex-1">
+            <Field label="Remember" value={text} onChange={(e) => setText(e.target.value)} placeholder="I live in Sydney" maxLength={500} />
+          </div>
+          <label className="flex flex-col gap-1.5 text-sm text-muted">
+            For
+            <select value={scope} onChange={(e) => setScope(e.target.value)} className="min-h-11 rounded-xl border border-line bg-deep px-3 text-ink">
+              <option value="">All personas</option>
+              {personas.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} only
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button type="submit" disabled={!text.trim()}>
+            Remember
+          </Button>
+        </form>
+        {manual.length > 0 && (
+          <ul className="flex flex-col gap-2">
+            {manual.map((m) => (
+              <MemoryRow key={m.id} memory={m} scope={scopeLabel(m)} onForget={() => void forget(m.id)} />
             ))}
-          </select>
-        </label>
-        <Button type="submit" disabled={!text.trim()}>
-          Remember
-        </Button>
-      </form>
+          </ul>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <h3 className="flex-1 text-sm font-semibold text-soft">Learned from chats</h3>
+          {learned.length > 0 && (
+            <Button variant="ghost" onClick={() => void clearLearned()}>
+              Forget all learned
+            </Button>
+          )}
+          <Button variant={settings?.auto ? "ghost" : "primary"} disabled={!settings} onClick={() => void toggleAuto()}>
+            {settings?.auto ? "Turn off learning" : "Turn on learning"}
+          </Button>
+        </div>
+        <p className="text-sm text-muted">
+          {settings?.auto === false
+            ? "Learning is off: nothing new is picked up from your chats."
+            : "After each reply, the chat's model notes lasting facts you mention (your name, pets, projects, preferences). Each persona keeps what it learned, and only the facts that fit the conversation are used. Deleting a chat forgets what was learned in it."}
+          {settings && !settings.embedding_model && settings.auto && (
+            <>
+              {" "}
+              For smarter recall, download <b>Qwen3 Embedding 0.6B</b> in Models; until then the newest facts are used.
+            </>
+          )}
+        </p>
+        {learned.length > 0 ? (
+          <ul className="flex flex-col gap-2">
+            {learned.map((m) => (
+              <MemoryRow key={m.id} memory={m} scope={m.persona_id ? `learned by ${scopeLabel(m).replace(" only", "")}` : "learned"} onForget={() => void forget(m.id)} />
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-muted/80">Nothing learned yet.</p>
+        )}
+      </div>
       <ErrorNote>{error}</ErrorNote>
-      {items.length > 0 && (
-        <ul className="flex flex-col gap-2">
-          {items.map((m) => (
-            <li key={m.id} className="flex items-center gap-3 rounded-xl bg-raised px-4 py-2.5 text-sm">
-              <span className="flex-1">{m.text}</span>
-              <span className="text-xs text-muted">
-                {m.persona_id ? `${personas.find((p) => p.id === m.persona_id)?.name ?? "one persona"} only` : "all personas"}
-              </span>
-              <button type="button" onClick={() => void forget(m.id)} className="text-xs text-muted hover:text-danger">
-                Forget
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
     </section>
+  );
+}
+
+function MemoryRow({ memory, scope, onForget }: { memory: Memory; scope: string; onForget: () => void }) {
+  return (
+    <li className="flex items-center gap-3 rounded-xl bg-raised px-4 py-2.5 text-sm">
+      <span className="flex-1">{memory.text}</span>
+      <span className="text-xs text-muted">{scope}</span>
+      <button type="button" onClick={onForget} className="text-xs text-muted hover:text-danger">
+        Forget
+      </button>
+    </li>
   );
 }
 

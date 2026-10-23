@@ -4,6 +4,7 @@
 //! here knows about HTTP.
 
 pub mod accounts;
+pub mod attachments;
 pub mod audit;
 pub mod auth;
 pub mod chats;

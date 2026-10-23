@@ -6,6 +6,7 @@ import EngineSetup from "./screens/EngineSetup";
 import Picker from "./screens/Picker";
 import SignIn from "./screens/SignIn";
 import Shell from "./screens/Shell";
+import { clearImageCache } from "./components/images";
 
 type Stage =
   | { kind: "connecting" }
@@ -47,6 +48,8 @@ export default function App() {
 
   const lock = useCallback(async (token?: string) => {
     if (token) await api.signOut(token).catch(() => undefined);
+    // The next person to sign in shouldn't inherit this account's images.
+    clearImageCache();
     setStage({ kind: "picker" });
   }, []);
 

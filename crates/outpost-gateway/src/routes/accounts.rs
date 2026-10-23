@@ -71,6 +71,7 @@ pub async fn delete(State(state): State<AppState>, auth: Auth, Path(id): Path<St
         ));
     }
     accounts::delete(&state.pool, &id).await?;
+    outpost_core::attachments::remove_account_files(&state.config.files_dir(), &id).await;
     outpost_core::audit::log_quiet(
         &state.pool,
         Some(&auth.account.id),

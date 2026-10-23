@@ -333,6 +333,9 @@ async fn openapi_lists_every_route() {
         "/api/keys",
         "/api/keys/{id}",
         "/api/settings/network",
+        "/api/files/{id}",
+        "/api/memory/settings",
+        "/api/memory/auto",
     ] {
         assert!(paths.contains_key(p), "missing {p} in OpenAPI spec");
     }
@@ -752,4 +755,101 @@ async fn from_the_network_only_app_keys_work() {
     assert_eq!(me["account"]["name"], "Hermes");
     let (status, models) = call(&remote, "GET", "/v1/models", Some(key_token), None).await;
     assert_eq!(status, StatusCode::OK, "{models}");
+}
+
+#[tokio::test]
+async fn images_are_checked_before_anything_is_saved() {
+    let app = app().await;
+    let (token, _) = setup_owner(&app).await;
+    let (status, chat) = call(&app, "POST", "/api/chats", Some(&token), Some(json!({}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{chat}");
+    let url = format!("/api/chats/{}/messages", chat["id"].as_str().unwrap());
+
+    // Nothing to send.
+    let (status, body) = call(&app, "POST", &url, Some(&token), Some(json!({"content": "  "}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // Not an image, whatever it claims to be.
+    let (status, body) = call(
+        &app,
+        "POST",
+        &url,
+        Some(&token),
+        Some(json!({"content": "what is this?", "images": ["data:image/png;base64,aGVsbG8gd29ybGQ="]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "invalid");
+
+    // Too many.
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    let (status, _) = call(
+        &app,
+        "POST",
+        &url,
+        Some(&token),
+        Some(json!({"content": "", "images": [png, png, png, png, png]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A good image still needs a model that can see. Without one (Ollama off in the
+    // test, or no vision model) the request is refused and nothing is saved.
+    let (status, _) = call(&app, "POST", &url, Some(&token), Some(json!({"images": [png]}))).await;
+    if status != StatusCode::OK {
+        let (_, full) = call(
+            &app,
+            "GET",
+            &format!("/api/chats/{}", chat["id"].as_str().unwrap()),
+            Some(&token),
+            None,
+        )
+        .await;
+        assert_eq!(full["messages"].as_array().unwrap().len(), 0);
+    }
+
+    // Files are private and must exist.
+    let (status, _) = call(&app, "GET", "/api/files/nope", Some(&token), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(&app, "GET", "/api/files/nope", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn memory_settings_and_clearing_learned_memories() {
+    let app = app().await;
+    let (token, _) = setup_owner(&app).await;
+    let (status, s) = call(&app, "GET", "/api/memory/settings", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(s["auto"], true);
+
+    let (status, s) = call(
+        &app,
+        "PUT",
+        "/api/memory/settings",
+        Some(&token),
+        Some(json!({"auto": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(s["auto"], false);
+    let (_, s) = call(&app, "GET", "/api/memory/settings", Some(&token), None).await;
+    assert_eq!(s["auto"], false);
+
+    // Manual memories are marked as such and survive clearing the learned ones.
+    let (status, m) = call(
+        &app,
+        "POST",
+        "/api/memory",
+        Some(&token),
+        Some(json!({"text": "Call me Dan"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{m}");
+    assert_eq!(m["source"], "manual");
+    let (status, cleared) = call(&app, "DELETE", "/api/memory/auto", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert_eq!(cleared["removed"], 0);
+    let (_, list) = call(&app, "GET", "/api/memory", Some(&token), None).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
 }

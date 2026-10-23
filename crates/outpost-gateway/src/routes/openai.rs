@@ -27,8 +27,29 @@ async fn apply_persona(state: &AppState, auth: &Auth, body: &mut Value, slug: &s
                 format!("No persona \"{slug}\" on this account. See GET /v1/models."),
             )
         })?;
-    let (model, _) = llm::resolve_model(state, None, Some(&persona)).await?;
-    let system = llm::system_prompt(state, &auth.account.id, Some(&persona)).await?;
+    let model = llm::resolve_model(state, None, Some(&persona)).await?.model;
+    // The newest user message picks which learned memories are relevant.
+    let query = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .and_then(|m| {
+            m.iter()
+                .rev()
+                .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
+        })
+        .and_then(|m| match m.get("content") {
+            Some(Value::String(s)) => Some(s.clone()),
+            // Content parts: join the text ones.
+            Some(Value::Array(parts)) => Some(
+                parts
+                    .iter()
+                    .filter_map(|p| p.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            _ => None,
+        });
+    let system = llm::system_prompt(state, &auth.account.id, Some(&persona), query.as_deref()).await?;
     body["model"] = json!(model);
     if !system.is_empty() {
         if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
