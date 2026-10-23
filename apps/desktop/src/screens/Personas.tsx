@@ -96,6 +96,11 @@ function PersonaEditor({
   onDeleted: (id: string) => void;
 }) {
   const [name, setName] = useState(persona.name);
+  const [slug, setSlug] = useState(persona.slug);
+  const [slugTouched, setSlugTouched] = useState(false);
+  // A persona still called "New persona" gets its id from its first real name.
+  const placeholder = /^new-persona(-\d+)?$/.test(persona.slug);
+  const shownSlug = !slugTouched && placeholder ? toSlug(name) || persona.slug : slug;
   const [prompt, setPrompt] = useState(persona.system_prompt);
   const [model, setModel] = useState(persona.model ?? "");
   const [temperature, setTemperature] = useState(persona.temperature ?? 0.7);
@@ -113,6 +118,7 @@ function PersonaEditor({
     try {
       const p = await api.updatePersona(token, persona.id, {
         name,
+        ...(slugTouched && slug.trim() && slug.trim() !== persona.slug ? { slug: slug.trim() } : {}),
         system_prompt: prompt,
         model,
         ...(useTemp ? { temperature } : {}),
@@ -120,6 +126,8 @@ function PersonaEditor({
         use_memory: useMemory,
       });
       onSaved(p);
+      setSlug(p.slug);
+      setSlugTouched(false);
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
     } catch (err) {
@@ -153,6 +161,25 @@ function PersonaEditor({
         <Button type="submit">{saved ? "Saved" : "Save"}</Button>
       </div>
       <Field label="Name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} />
+      <label className="flex flex-col gap-1.5 text-sm text-muted">
+        API model id
+        <span className="flex items-center rounded-xl border border-line bg-surface focus-within:border-ember">
+          <span className="pl-3.5 font-mono text-[15px] text-muted">persona:</span>
+          <input
+            value={shownSlug}
+            onChange={(e) => {
+              setSlugTouched(true);
+              setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]+/g, "-"));
+            }}
+            maxLength={40}
+            spellCheck={false}
+            className="min-h-11 flex-1 bg-transparent pr-3.5 font-mono text-[15px] text-ink focus:outline-none"
+          />
+        </span>
+        <span className="text-xs">
+          What Hermes and other apps use as the model. Changing it means updating those apps too.
+        </span>
+      </label>
       <label className="flex flex-col gap-1.5 text-sm text-muted">
         System prompt
         <textarea
@@ -298,4 +325,13 @@ function MemoryPanel({ token, personas }: { token: string; personas: Persona[] }
       )}
     </section>
   );
+}
+
+/** Same idea as the gateway's slugify: lowercase words joined by dashes. */
+function toSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
 }

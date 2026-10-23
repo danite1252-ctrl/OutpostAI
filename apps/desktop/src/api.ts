@@ -163,6 +163,8 @@ export type PersonaInput = Partial<{
   think: boolean;
   use_memory: boolean;
   avatar_color: string;
+  /** Change the API id (persona:<slug>). Normally made from the name. */
+  slug: string;
 }>;
 
 export interface Chat {

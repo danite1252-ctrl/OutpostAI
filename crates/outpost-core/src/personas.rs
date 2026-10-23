@@ -39,6 +39,41 @@ pub struct PersonaInput {
     pub think: Option<bool>,
     pub use_memory: Option<bool>,
     pub avatar_color: Option<String>,
+    /// The id apps use, as in `persona:<slug>`. Normally made from the name; set it to
+    /// rename the id (apps using the old one then need updating).
+    pub slug: Option<String>,
+}
+
+/// The id a persona gets while it still has the "New persona" placeholder name.
+const PLACEHOLDER_SLUG: &str = "new-persona";
+
+fn is_placeholder(slug: &str) -> bool {
+    slug == PLACEHOLDER_SLUG
+        || slug
+            .strip_prefix(PLACEHOLDER_SLUG)
+            .and_then(|rest| rest.strip_prefix('-'))
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// A slug unique within the account: `base`, `base-2`, ... `except` is the persona
+/// being renamed, which may keep its own slug.
+async fn unique_slug(pool: &SqlitePool, account_id: &str, base: &str, except: Option<&str>) -> CoreResult<String> {
+    let mut slug = base.to_string();
+    let mut i = 2;
+    loop {
+        let taken: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM personas WHERE account_id = ? AND slug = ? AND id != ?")
+                .bind(account_id)
+                .bind(&slug)
+                .bind(except.unwrap_or(""))
+                .fetch_one(pool)
+                .await?;
+        if taken == 0 {
+            return Ok(slug);
+        }
+        slug = format!("{base}-{i}");
+        i += 1;
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -200,22 +235,8 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: PersonaInput) ->
         .ok_or_else(|| CoreError::Invalid("Give the persona a name.".into()))?
         .to_string();
 
-    // A slug unique within the account: assistant, assistant-2, ...
-    let base = slugify(&name);
-    let mut slug = base.clone();
-    let mut i = 2;
-    loop {
-        let taken: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM personas WHERE account_id = ? AND slug = ?")
-            .bind(account_id)
-            .bind(&slug)
-            .fetch_one(pool)
-            .await?;
-        if taken == 0 {
-            break;
-        }
-        slug = format!("{base}-{i}");
-        i += 1;
-    }
+    let base = slugify(input.slug.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or(&name));
+    let slug = unique_slug(pool, account_id, &base, None).await?;
 
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM personas WHERE account_id = ?")
         .bind(account_id)
@@ -259,12 +280,38 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: PersonaInput) ->
     Ok(persona)
 }
 
-/// Change the given fields. The slug never changes, so apps keep working after a rename.
+/// Change the given fields. Renaming keeps the slug, so apps keep working, with one
+/// exception: a persona still on its "New persona" placeholder id takes its id from
+/// the first real name it gets. Send `slug` to change the id on purpose.
 pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: PersonaInput) -> CoreResult<Persona> {
     check(&input)?;
     let mut p = get(pool, account_id, id).await?;
     if let Some(name) = input.name {
         p.name = name.trim().to_string();
+    }
+    let wanted = match input.slug.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => Some(slugify(s)),
+        None if is_placeholder(&p.slug) && slugify(&p.name) != PLACEHOLDER_SLUG => Some(slugify(&p.name)),
+        None => None,
+    };
+    if let Some(base) = wanted.filter(|b| *b != p.slug) {
+        if input.slug.is_some() {
+            let taken: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM personas WHERE account_id = ? AND slug = ? AND id != ?")
+                    .bind(account_id)
+                    .bind(&base)
+                    .bind(id)
+                    .fetch_one(pool)
+                    .await?;
+            if taken > 0 {
+                return Err(CoreError::Conflict(format!(
+                    "Another persona already uses persona:{base}."
+                )));
+            }
+            p.slug = base;
+        } else {
+            p.slug = unique_slug(pool, account_id, &base, Some(id)).await?;
+        }
     }
     if let Some(prompt) = input.system_prompt {
         p.system_prompt = prompt;
@@ -286,10 +333,11 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Person
     }
     p.updated_at = now();
     sqlx::query(
-        "UPDATE personas SET name = ?, system_prompt = ?, model = ?, temperature = ?, think = ?, use_memory = ?, avatar_color = ?, updated_at = ?
+        "UPDATE personas SET name = ?, slug = ?, system_prompt = ?, model = ?, temperature = ?, think = ?, use_memory = ?, avatar_color = ?, updated_at = ?
          WHERE id = ? AND account_id = ?",
     )
     .bind(&p.name)
+    .bind(&p.slug)
     .bind(&p.system_prompt)
     .bind(&p.model)
     .bind(p.temperature)
@@ -436,5 +484,54 @@ mod tests {
         assert_eq!(p2.name, "Senior Coder");
         assert!(p2.think);
         assert_eq!(p2.model.as_deref(), Some("huihui_ai/qwen3.5-abliterated:9b"));
+    }
+
+    #[tokio::test]
+    async fn new_persona_takes_its_id_from_its_first_name() {
+        let pool = open_in_memory().await.unwrap();
+        let dan = account(&pool, "Dan").await;
+        let new = |name: &str| PersonaInput {
+            name: Some(name.into()),
+            ..Default::default()
+        };
+        let a = create(&pool, &dan, new("New persona")).await.unwrap();
+        let b = create(&pool, &dan, new("New persona")).await.unwrap();
+        assert_eq!(a.slug, "new-persona");
+        assert_eq!(b.slug, "new-persona-2");
+
+        let a = update(&pool, &dan, &a.id, new("Anna")).await.unwrap();
+        assert_eq!(a.slug, "anna");
+        // Once it has a real id, renaming keeps it.
+        let a = update(&pool, &dan, &a.id, new("Anna Smith")).await.unwrap();
+        assert_eq!(a.slug, "anna");
+        // A second "Anna" gets anna-2 rather than clashing.
+        let b = update(&pool, &dan, &b.id, new("Anna")).await.unwrap();
+        assert_eq!(b.slug, "anna-2");
+
+        // Changing the id on purpose: taken ids are refused, free ones are tidied.
+        let clash = update(
+            &pool,
+            &dan,
+            &b.id,
+            PersonaInput {
+                slug: Some("anna".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(matches!(clash, Err(CoreError::Conflict(_))));
+        let b = update(
+            &pool,
+            &dan,
+            &b.id,
+            PersonaInput {
+                slug: Some("Anna Two!".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(b.slug, "anna-two");
+        assert!(get_by_slug(&pool, &dan, "anna-two").await.is_ok());
     }
 }

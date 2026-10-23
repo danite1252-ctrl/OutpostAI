@@ -50,6 +50,11 @@ impl ApiError {
         Self::new(StatusCode::UNAUTHORIZED, "unauthorized", "Sign in first.")
     }
 
+    /// 401 with a specific reason, so apps like Hermes can show what went wrong.
+    pub fn unauthorized_because(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, "unauthorized", message)
+    }
+
     pub fn forbidden(message: impl Into<String>) -> Self {
         Self::new(StatusCode::FORBIDDEN, "forbidden", message)
     }
