@@ -1,0 +1,16 @@
+{
+  "name": "outpost",
+  "private": true,
+  "license": "MIT",
+  "workspaces": [
+    "apps/desktop"
+  ],
+  "scripts": {
+    "dev": "npm run tauri -w @outpost/desktop -- dev",
+    "build": "npm run tauri -w @outpost/desktop -- build",
+    "typecheck": "npm run typecheck -w @outpost/desktop",
+    "test": "cargo test",
+    "gateway": "cargo run -p outpost-gateway",
+    "openapi": "cargo run -q -p outpost-gateway -- --print-openapi"
+  }
+}

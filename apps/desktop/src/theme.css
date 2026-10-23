@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+/* Ember palette: colours taken from the Outpost logo. */
+@theme {
+  --color-deep: #0c0a0d;
+  --color-night: #121013;
+  --color-surface: #1b181c;
+  --color-raised: #262127;
+  --color-line: #383238;
+  --color-ink: #f3eee8;
+  --color-soft: #d9d0c8;
+  --color-muted: #a9a09a;
+  --color-ember: #ff6a3d;
+  --color-ember-hover: #ff8a63;
+  --color-amber: #ffb547;
+  --color-on-ember: #1e0c05;
+  --color-ok: #7bd88f;
+  --color-danger: #ff8a9a;
+
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+  --font-display: "Montserrat", ui-sans-serif, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-night);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-amber);
+  outline-offset: 2px;
+}
+
+/* Logo glow, used on the welcome and sign-in screens only. */
+.glow {
+  filter: drop-shadow(0 0 18px rgb(255 106 61 / 0.35));
+}
