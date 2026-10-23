@@ -35,6 +35,19 @@ async fn app() -> Router {
     app_from([127, 0, 0, 1]).await
 }
 
+/// One Outpost seen two ways: from this PC and from another machine on the network.
+async fn local_and_remote() -> (Router, Router) {
+    let pool = outpost_core::db::open_in_memory().await.unwrap();
+    let mut config = Config::local_default();
+    config.data_dir = temp_data_dir();
+    config.ollama_url = "http://127.0.0.1:9".into();
+    let state = AppState::with_pool(pool, config);
+    (
+        router(state.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 50000)))),
+        router(state).layer(MockConnectInfo(SocketAddr::from(([192, 168, 1, 77], 50000)))),
+    )
+}
+
 async fn call(app: &Router, method: &str, uri: &str, token: Option<&str>, body: Option<Value>) -> (StatusCode, Value) {
     let mut req = Request::builder().method(method).uri(uri);
     if let Some(t) = token {
@@ -319,6 +332,7 @@ async fn openapi_lists_every_route() {
         "/api/memory/{id}",
         "/api/keys",
         "/api/keys/{id}",
+        "/api/settings/network",
     ] {
         assert!(paths.contains_key(p), "missing {p} in OpenAPI spec");
     }
@@ -613,4 +627,129 @@ async fn app_keys_act_as_their_account() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, _) = call(&app, "GET", "/api/me", Some(&key_token), None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn network_setting_is_for_the_owner_on_this_pc() {
+    let (local, remote) = local_and_remote().await;
+    let (owner_token, _) = setup_owner(&local).await;
+
+    let (status, net) = call(&local, "GET", "/api/settings/network", Some(&owner_token), None).await;
+    assert_eq!(status, StatusCode::OK, "{net}");
+    assert_eq!(net["lan_access"], false);
+    assert!(net["base_url"].is_null());
+
+    let (status, net) = call(
+        &local,
+        "PUT",
+        "/api/settings/network",
+        Some(&owner_token),
+        Some(json!({"lan_access": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{net}");
+    assert_eq!(net["lan_access"], true);
+    let (_, net) = call(&local, "GET", "/api/settings/network", Some(&owner_token), None).await;
+    assert_eq!(net["lan_access"], true);
+
+    // A member can't change it.
+    let (status, sam) = call(
+        &local,
+        "POST",
+        "/api/accounts",
+        Some(&owner_token),
+        Some(json!({"name": "Sam", "secret": "2468", "role": "member"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sam}");
+    let (_, signed_in) = call(
+        &local,
+        "POST",
+        "/api/auth/sign-in",
+        None,
+        Some(json!({"account_id": sam["id"], "secret": "2468"})),
+    )
+    .await;
+    let sam = signed_in["token"].as_str().unwrap().to_string();
+    let (status, _) = call(
+        &local,
+        "PUT",
+        "/api/settings/network",
+        Some(&sam),
+        Some(json!({"lan_access": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Nor can anyone from another machine, even with an owner app key.
+    let (_, key) = call(
+        &local,
+        "POST",
+        "/api/keys",
+        Some(&owner_token),
+        Some(json!({"label": "laptop"})),
+    )
+    .await;
+    let owner_key = key["token"].as_str().unwrap().to_string();
+    let (status, _) = call(
+        &remote,
+        "PUT",
+        "/api/settings/network",
+        Some(&owner_key),
+        Some(json!({"lan_access": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn from_the_network_only_app_keys_work() {
+    let (local, remote) = local_and_remote().await;
+    let (owner_token, owner_id) = setup_owner(&local).await;
+
+    // The account list, PIN sign-in and desktop sessions stay on this PC.
+    let (status, _) = call(&remote, "GET", "/api/accounts/directory", None, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = call(
+        &remote,
+        "POST",
+        "/api/auth/sign-in",
+        None,
+        Some(json!({"account_id": owner_id, "secret": "4821"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = call(&remote, "GET", "/api/me", Some(&owner_token), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = call(&local, "GET", "/api/me", Some(&owner_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Health answers so apps can find Outpost.
+    let (status, _) = call(&remote, "GET", "/api/health", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // An app key for a service account works from the other machine.
+    let (_, hermes) = call(
+        &local,
+        "POST",
+        "/api/accounts",
+        Some(&owner_token),
+        Some(json!({"name": "Hermes", "role": "service"})),
+    )
+    .await;
+    let (status, key) = call(
+        &local,
+        "POST",
+        "/api/keys",
+        Some(&owner_token),
+        Some(json!({"label": "Hermes box", "account_id": hermes["id"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{key}");
+    let key_token = key["token"].as_str().unwrap();
+    let (status, me) = call(&remote, "GET", "/api/me", Some(key_token), None).await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["account"]["name"], "Hermes");
+    let (status, models) = call(&remote, "GET", "/v1/models", Some(key_token), None).await;
+    assert_eq!(status, StatusCode::OK, "{models}");
 }

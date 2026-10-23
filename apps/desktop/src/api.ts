@@ -194,6 +194,19 @@ export interface Memory {
   created_at: number;
 }
 
+export interface NetworkStatus {
+  /** The saved "Allow other devices on my network" setting. */
+  lan_access: boolean;
+  /** Where the gateway is listening right now, e.g. "0.0.0.0:7420". */
+  listening_on: string | null;
+  /** The setting differs from what is running: restart Outpost to apply it. */
+  restart_required: boolean;
+  /** This PC's address on the local network. */
+  lan_address: string | null;
+  /** Base URL for apps on other devices, when network access is running. */
+  base_url: string | null;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -289,6 +302,9 @@ export const api = {
   createKey: (token: string, label: string, accountId?: string) =>
     request<SignInResponse>("POST", "/api/keys", { token, body: { label, account_id: accountId ?? null } }),
   revokeKey: (token: string, id: string) => request<void>("DELETE", `/api/keys/${id}`, { token }),
+  network: (token: string) => request<NetworkStatus>("GET", "/api/settings/network", { token }),
+  setNetwork: (token: string, lanAccess: boolean) =>
+    request<NetworkStatus>("PUT", "/api/settings/network", { token, body: { lan_access: lanAccess } }),
   engines: (token: string) => request<EnginesStatus>("GET", "/api/engines", { token }),
   engineAction: (token: string, id: EngineId, action: "install" | "start" | "stop") =>
     request<void>("POST", `/api/engines/${id}/${action}`, { token }),

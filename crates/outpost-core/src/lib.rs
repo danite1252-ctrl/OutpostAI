@@ -13,6 +13,7 @@ pub mod memory;
 pub mod personas;
 pub mod secret;
 pub mod sessions;
+pub mod settings;
 
 pub use error::{CoreError, CoreResult};
 

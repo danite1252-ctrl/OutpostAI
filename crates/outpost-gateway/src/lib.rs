@@ -10,8 +10,8 @@ pub mod llm;
 pub mod openapi;
 pub mod routes;
 
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::http::{header, HeaderValue, Method};
@@ -40,6 +40,8 @@ pub struct AppState {
     pub engines: Arc<EngineManager>,
     /// Chat and embedding models in Ollama: list, download, remove.
     pub models: Arc<ModelStore>,
+    /// The address the gateway actually bound, once it is listening.
+    pub listening: Arc<OnceLock<SocketAddr>>,
 }
 
 impl AppState {
@@ -69,7 +71,22 @@ impl AppState {
             config: Arc::new(config),
             http,
             setup_lock: Arc::new(Mutex::new(())),
+            listening: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Apply the saved "Allow other devices on my network" setting: listen on every
+    /// network interface (same port) when it is on, this PC only when it is off.
+    pub async fn apply_network_setting(&mut self) -> anyhow::Result<()> {
+        let open = outpost_core::settings::get_bool(&self.pool, outpost_core::settings::NETWORK_ACCESS).await?;
+        let port = self.config.bind.port();
+        let ip = if open {
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        } else {
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        };
+        Arc::make_mut(&mut self.config).bind = SocketAddr::new(ip, port);
+        Ok(())
     }
 }
 
@@ -84,7 +101,7 @@ const DESKTOP_ORIGINS: [&str; 5] = [
 ];
 
 pub fn router(state: AppState) -> Router {
-    use routes::{accounts, auth, chat, engines, health, keys, models, openai, setup};
+    use routes::{accounts, auth, chat, engines, health, keys, models, network, openai, setup};
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(
@@ -125,6 +142,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/memory/{id}", delete(chat::delete_memory))
         .route("/api/keys", get(keys::list).post(keys::create))
         .route("/api/keys/{id}", delete(keys::revoke))
+        .route(
+            "/api/settings/network",
+            get(network::get_network).put(network::set_network),
+        )
         .route("/api/hardware", get(models::hardware))
         .route("/api/models", get(models::overview))
         .route("/api/models/pull", post(models::pull))
@@ -152,7 +173,12 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     let engines = state.engines.clone();
     // Bind first: if the port is taken, fail before starting any engines.
     let listener = tokio::net::TcpListener::bind(bind).await?;
-    tracing::info!(%bind, "Outpost gateway listening");
+    let _ = state.listening.set(listener.local_addr().unwrap_or(bind));
+    if bind.ip().is_loopback() {
+        tracing::info!(%bind, "Outpost gateway listening (this PC only)");
+    } else {
+        tracing::info!(%bind, lan = ?routes::network::lan_ip(), "Outpost gateway listening on the network (app keys only)");
+    }
     let starter = engines.clone();
     tokio::spawn(async move { starter.init().await });
     let result = axum::serve(
@@ -168,8 +194,10 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Is an Outpost gateway already answering at `bind`?
+/// Is an Outpost gateway already answering at `bind`? A gateway listening on every
+/// interface (0.0.0.0) is checked through 127.0.0.1.
 pub async fn is_running(bind: SocketAddr) -> bool {
+    let bind = local_address(bind);
     let Ok(client) = reqwest::Client::builder()
         .no_proxy()
         .timeout(Duration::from_millis(800))
@@ -180,5 +208,16 @@ pub async fn is_running(bind: SocketAddr) -> bool {
     match client.get(format!("http://{bind}/api/health")).send().await {
         Ok(resp) => resp.status().is_success(),
         Err(_) => false,
+    }
+}
+
+/// The address to reach a gateway from this PC: 0.0.0.0 / :: become loopback.
+pub fn local_address(bind: SocketAddr) -> SocketAddr {
+    match bind.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), bind.port()),
+        IpAddr::V6(ip) if ip.is_unspecified() => {
+            SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST), bind.port())
+        }
+        _ => bind,
     }
 }

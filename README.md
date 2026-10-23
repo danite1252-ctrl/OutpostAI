@@ -15,7 +15,7 @@ Everything runs locally. No cloud models, accounts or services. MIT licensed.
 | --- | --- |
 | `crates/outpost-core` | Database, accounts, PIN hashing, sessions, audit log |
 | `crates/outpost-engines` | Installs, starts and supervises Ollama and ComfyUI |
-| `crates/outpost-gateway` | The HTTP API on `127.0.0.1:7420` (library + `outpost-gateway` binary) |
+| `crates/outpost-gateway` | The HTTP API on port 7420 (library + `outpost-gateway` binary) |
 | `apps/desktop` | Tauri 2 + React desktop app; starts the gateway if none is running |
 
 ## Prerequisites (Windows)
@@ -72,13 +72,34 @@ Data lives in `%LOCALAPPDATA%\Outpost` on Windows and `~/.local/share/Outpost` o
 
 The key sees only that account's personas and memory. Revoke it any time in Settings.
 
+### Hermes on another machine
+
+1. Settings → Network → **Allow other devices on my network**, then close and reopen Outpost.
+   It now listens on `0.0.0.0:7420`. Windows asks about the firewall: allow **Private networks**.
+2. Settings → App keys shows the address to use, e.g. `http://192.168.1.20:7420/v1`.
+3. Point Hermes at that base URL with the app key.
+
+From another machine only app keys work. PIN sign-in, the account list, first-run setup and
+the network switch itself stay on this PC, and desktop sign-ins are refused if they turn up
+from the network. Ollama and ComfyUI stay on `127.0.0.1`; Hermes reaches models through
+Outpost. Traffic is plain HTTP, so use it on a network you trust (Tailscale comes in phase 3).
+
+If the firewall prompt never appeared, add the rule yourself (admin PowerShell):
+
+```powershell
+New-NetFirewallRule -DisplayName "Outpost 7420" -Direction Inbound -Protocol TCP -LocalPort 7420 -Action Allow -Profile Private
+```
+
+Running only the gateway: `npm run gateway -- --bind 0.0.0.0:7420` (or set `OUTPOST_BIND`).
+Without `--bind` it follows the saved setting.
+
 ## API
 
 | Method | Path | Auth | What |
 | --- | --- | --- | --- |
 | GET | `/api/health` | none | Up? Version, PC name, whether setup is needed |
 | POST | `/api/setup/owner` | none, this PC only | Create the first owner and sign in |
-| GET | `/api/accounts/directory` | none | Accounts for the sign-in screen |
+| GET | `/api/accounts/directory` | none, this PC only | Accounts for the sign-in screen |
 | POST | `/api/auth/sign-in` | none, this PC only | PIN or password → bearer token |
 | POST | `/api/auth/sign-out` | bearer | End this session |
 | GET | `/api/me` | bearer | Who am I |
@@ -98,12 +119,13 @@ The key sees only that account's personas and memory. Revoke it any time in Sett
 | POST | `/api/chats/{id}/messages` | bearer | Send a message; reply streams as Server-Sent Events |
 | GET, POST, DELETE | `/api/memory[/{id}]` | bearer | Things to remember |
 | GET, POST, DELETE | `/api/keys[/{id}]` | bearer | App keys (owner can make them for service accounts) |
+| GET, PUT | `/api/settings/network` | bearer; PUT owner on this PC | Allow other devices on the network |
 | GET | `/openapi.json` | none | The full spec |
 
 Security notes: PINs and passwords are hashed with Argon2id; tokens are random 256-bit
 values stored only as SHA-256 hashes; five wrong attempts lock an account for 30 seconds,
-doubling up to 15 minutes. The gateway listens on `127.0.0.1` only until phone pairing
-lands in phase 3.
+doubling up to 15 minutes. The gateway listens on `127.0.0.1` unless the owner turns on
+network access, and even then only app keys work from other machines.
 
 ## Clean-room rule
 

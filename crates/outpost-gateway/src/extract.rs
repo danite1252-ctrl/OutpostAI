@@ -1,10 +1,12 @@
 //! Request extractors: who is calling.
 
-use axum::extract::FromRequestParts;
+use std::net::SocketAddr;
+
+use axum::extract::{ConnectInfo, FromRequestParts};
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
 use outpost_core::accounts::{Account, Role};
-use outpost_core::sessions::{self, Session};
+use outpost_core::sessions::{self, Session, SessionKind};
 
 use crate::error::ApiError;
 use crate::AppState;
@@ -37,9 +39,20 @@ impl FromRequestParts<AppState> for Auth {
             .map(str::trim)
             .filter(|t| !t.is_empty())
             .ok_or_else(ApiError::unauthorized)?;
-        match sessions::authenticate(&state.pool, token).await? {
-            Some((session, account)) => Ok(Auth { session, account }),
-            None => Err(ApiError::unauthorized()),
+        let Some((session, account)) = sessions::authenticate(&state.pool, token).await? else {
+            return Err(ApiError::unauthorized());
+        };
+        // Desktop sign-ins never leave this PC. If one turns up from the network it was
+        // copied, so refuse it. Unknown origin counts as the network.
+        if session.kind == SessionKind::Desktop {
+            // The ConnectInfo extractor also understands MockConnectInfo (used in tests).
+            let local = ConnectInfo::<SocketAddr>::from_request_parts(parts, state)
+                .await
+                .is_ok_and(|ConnectInfo(addr)| addr.ip().is_loopback());
+            if !local {
+                return Err(ApiError::unauthorized());
+            }
         }
+        Ok(Auth { session, account })
     }
 }

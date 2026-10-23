@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, ApiError, GATEWAY, type Account, type Session, type SignInResponse } from "../api";
+import { api, ApiError, GATEWAY, type Account, type NetworkStatus, type Session, type SignInResponse } from "../api";
 import { Button, ErrorNote, Field } from "./ui";
 
 /** App keys for Hermes and other OpenAI-compatible apps. */
@@ -11,6 +11,7 @@ export function AppKeysPanel({ auth }: { auth: SignInResponse }) {
   const [label, setLabel] = useState("");
   const [fresh, setFresh] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [network, setNetwork] = useState<NetworkStatus | null>(null);
 
   const fail = (err: unknown) => setError(err instanceof ApiError ? err.message : "Something went wrong.");
 
@@ -18,6 +19,9 @@ export function AppKeysPanel({ auth }: { auth: SignInResponse }) {
     api.keys(auth.token, accountId === auth.account.id ? undefined : accountId).then(setKeys, fail);
   }, [auth, accountId]);
   useEffect(load, [load]);
+  useEffect(() => {
+    api.network(auth.token).then(setNetwork, () => undefined);
+  }, [auth.token]);
   useEffect(() => {
     if (isOwner) api.listAccounts(auth.token).then(setAccounts, () => undefined);
   }, [auth.token, isOwner]);
@@ -55,8 +59,21 @@ export function AppKeysPanel({ auth }: { auth: SignInResponse }) {
         </p>
       </div>
       <div className="rounded-2xl border border-line bg-surface p-5 font-mono text-sm leading-relaxed text-soft">
-        Base URL: {GATEWAY}/v1
+        Base URL on this PC: {GATEWAY}/v1
         <br />
+        {network?.base_url ? (
+          <>
+            From other devices: {network.base_url}
+            <br />
+          </>
+        ) : (
+          <>
+            <span className="font-sans text-muted">
+              Other devices: turn on network access{isOwner ? " below" : " (ask the owner)"}.
+            </span>
+            <br />
+          </>
+        )}
         Model: persona:assistant (or any model from GET /v1/models)
       </div>
       <form onSubmit={create} className="flex flex-wrap items-end gap-3">

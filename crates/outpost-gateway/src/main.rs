@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use outpost_gateway::config::{default_data_dir, DEFAULT_OLLAMA_URL};
-use outpost_gateway::Config;
+use outpost_gateway::{AppState, Config};
 use tracing_subscriber::EnvFilter;
 
 /// Outpost local API gateway.
@@ -14,9 +14,10 @@ struct Args {
     #[arg(long, env = "OUTPOST_DATA_DIR")]
     data_dir: Option<PathBuf>,
 
-    /// Address to listen on.
-    #[arg(long, env = "OUTPOST_BIND", default_value = "127.0.0.1:7420")]
-    bind: SocketAddr,
+    /// Address to listen on, e.g. 0.0.0.0:7420 for other devices. Without it, Outpost
+    /// uses the "Allow other devices on my network" setting (127.0.0.1:7420 when off).
+    #[arg(long, env = "OUTPOST_BIND")]
+    bind: Option<SocketAddr>,
 
     /// Ollama's address.
     #[arg(long, env = "OUTPOST_OLLAMA_URL", default_value = DEFAULT_OLLAMA_URL)]
@@ -42,17 +43,25 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    if !args.bind.ip().is_loopback() {
+    let mut config = Config::local_default();
+    config.data_dir = args.data_dir.unwrap_or_else(default_data_dir);
+    config.ollama_url = args.ollama_url;
+    if let Some(bind) = args.bind {
+        config.bind = bind;
+    }
+    tracing::info!(data_dir = %config.data_dir.display(), "opening Outpost data");
+    let mut state = AppState::open(config).await?;
+    if args.bind.is_none() {
+        state.apply_network_setting().await?;
+    }
+
+    let bind = state.config.bind;
+    if !bind.ip().is_loopback() {
         tracing::warn!(
-            bind = %args.bind,
-            "listening beyond this PC; pairing is not built yet, so only do this on a network you trust"
+            %bind,
+            "listening on the network: app keys work from other devices, PIN sign-in stays on this PC. Plain HTTP, so use a network you trust"
         );
     }
 
-    let config = Config {
-        data_dir: args.data_dir.unwrap_or_else(default_data_dir),
-        bind: args.bind,
-        ollama_url: args.ollama_url,
-    };
-    outpost_gateway::serve(config).await
+    outpost_gateway::serve_state(state).await
 }

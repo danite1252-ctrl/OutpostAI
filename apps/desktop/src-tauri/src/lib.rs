@@ -2,9 +2,12 @@
 //!
 //! The window is just a client of the local gateway. On start-up we check whether
 //! a gateway already answers on 127.0.0.1:7420 (e.g. the standalone service); if not,
-//! we run one inside this process so the app works on its own. When the app exits we
+//! we run one inside this process so the app works on its own. It listens on this PC
+//! only, or on 0.0.0.0:7420 when "Allow other devices on my network" is on
+//! (`OUTPOST_BIND` overrides both). When the app exits we
 //! stop the engines it started, so Ollama and ComfyUI don't linger holding VRAM.
 
+use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
 
 use outpost_engines::EngineManager;
@@ -36,13 +39,24 @@ pub fn run() {
                     tracing::info!(bind = %config.bind, "using the Outpost gateway that is already running");
                     return;
                 }
-                let state = match AppState::open(config).await {
+                let mut state = match AppState::open(config).await {
                     Ok(s) => s,
                     Err(e) => {
                         tracing::error!(error = %e, "could not open Outpost data");
                         return;
                     }
                 };
+                match std::env::var("OUTPOST_BIND")
+                    .ok()
+                    .and_then(|v| v.parse::<SocketAddr>().ok())
+                {
+                    Some(bind) => Arc::make_mut(&mut state.config).bind = bind,
+                    None => {
+                        if let Err(e) = state.apply_network_setting().await {
+                            tracing::warn!(error = %e, "could not read the network setting; staying on this PC");
+                        }
+                    }
+                }
                 let _ = ENGINES.set(state.engines.clone());
                 if let Err(e) = outpost_gateway::serve_state(state).await {
                     tracing::error!(error = %e, "Outpost gateway stopped");

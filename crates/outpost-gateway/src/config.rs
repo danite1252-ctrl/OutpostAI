@@ -9,7 +9,7 @@ pub const DEFAULT_OLLAMA_URL: &str = "http://127.0.0.1:11434";
 pub struct Config {
     /// Where the database and per-account files live.
     pub data_dir: PathBuf,
-    /// Address to listen on. Loopback only until LAN pairing lands (phase 3).
+    /// Address to listen on. 127.0.0.1 by default; 0.0.0.0 when network access is on.
     pub bind: SocketAddr,
     /// Ollama's HTTP address.
     pub ollama_url: String,

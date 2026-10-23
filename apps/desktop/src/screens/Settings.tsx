@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, secretProblem, type Account, type EnginesStatus, type Role, type SignInResponse } from "../api";
 import { EnginesPanel } from "../components/engines";
 import { AppKeysPanel } from "../components/keys";
+import { NetworkPanel } from "../components/network";
 import { Avatar, Button, ErrorNote, Field } from "../components/ui";
 
 const ROLES: { value: Role; label: string; hint: string }[] = [
@@ -38,6 +39,7 @@ export default function Settings({
       </div>
       {isOwner && <AccountsPanel token={auth.token} selfId={auth.account.id} />}
       <AppKeysPanel auth={auth} />
+      {isOwner && <NetworkPanel token={auth.token} />}
       <ChangeMySecret token={auth.token} onChanged={onSignedOut} />
       <p className="text-xs text-muted">Outpost {version} · MIT licence · runs entirely on this PC</p>
     </section>

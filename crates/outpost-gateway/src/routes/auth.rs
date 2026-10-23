@@ -22,10 +22,16 @@ pub struct DirectoryEntry {
     pub avatar_color: String,
 }
 
-/// The accounts people can sign in to (service accounts are left out).
+/// The accounts people can sign in to (service accounts are left out). This PC only,
+/// so the household's names aren't listed to the whole network.
 #[utoipa::path(get, path = "/api/accounts/directory", tag = "auth",
-    responses((status = 200, description = "Accounts for the sign-in screen", body = [DirectoryEntry])))]
-pub async fn directory(State(state): State<AppState>) -> ApiResult<Json<Vec<DirectoryEntry>>> {
+    responses((status = 200, description = "Accounts for the sign-in screen", body = [DirectoryEntry]),
+        (status = 403, description = "Asked from another device", body = ErrorBody)))]
+pub async fn directory(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> ApiResult<Json<Vec<DirectoryEntry>>> {
+    require_loopback(&addr, "The account list")?;
     let entries = accounts::list(&state.pool)
         .await?
         .into_iter()

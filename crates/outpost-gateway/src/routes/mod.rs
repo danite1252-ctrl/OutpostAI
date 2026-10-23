@@ -5,6 +5,7 @@ pub mod engines;
 pub mod health;
 pub mod keys;
 pub mod models;
+pub mod network;
 pub mod openai;
 pub mod setup;
 
