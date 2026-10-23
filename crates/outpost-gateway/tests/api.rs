@@ -261,7 +261,10 @@ async fn models_need_auth_and_answer_without_ollama() {
     let (status, body) = call(&app, "GET", "/v1/models", Some(&token), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["object"], "list");
-    assert!(body["data"].as_array().unwrap().is_empty());
+    // With Ollama unreachable, only the account's personas are listed.
+    let data = body["data"].as_array().unwrap();
+    assert!(data.iter().all(|m| m["owned_by"] == "outpost-persona"), "{body}");
+    assert!(data.iter().any(|m| m["id"] == "persona:assistant"));
 
     let (status, body) = call(&app, "GET", "/api/engines", Some(&token), None).await;
     assert_eq!(status, StatusCode::OK);
