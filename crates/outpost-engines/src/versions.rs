@@ -8,6 +8,11 @@ pub const COMFYUI_VERSION: &str = "v0.42.5";
 pub const PYTHON_VERSION: &str = "3.13";
 
 pub const OLLAMA_PORT: u16 = 11434;
+
+/// Context window (tokens) Outpost starts Ollama with. Agents such as Hermes need at
+/// least 64K; Ollama's own default is much smaller. With flash attention and an 8-bit
+/// KV cache this fits a 9B model on a 16 GB card comfortably.
+pub const OLLAMA_CONTEXT_LENGTH: u32 = 65_536;
 pub const COMFYUI_PORT: u16 = 8188;
 
 /// PyTorch wheels for NVIDIA cards (ComfyUI: 20 series and newer need cu130+).

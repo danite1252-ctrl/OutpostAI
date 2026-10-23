@@ -6,7 +6,7 @@ use anyhow::{anyhow, bail};
 use tokio::process::Command;
 
 use crate::manager::{Ctx, Installed};
-use crate::versions::{self, exe, OLLAMA_PORT, OLLAMA_VERSION};
+use crate::versions::{self, exe, OLLAMA_CONTEXT_LENGTH, OLLAMA_PORT, OLLAMA_VERSION};
 use crate::{archive, download};
 
 pub async fn install(ctx: &Ctx) -> anyhow::Result<Installed> {
@@ -65,6 +65,11 @@ pub fn command(dir: &Path, models_root: &Path) -> anyhow::Result<Command> {
     cmd.arg("serve")
         .current_dir(&app)
         .env("OLLAMA_HOST", format!("127.0.0.1:{OLLAMA_PORT}"))
-        .env("OLLAMA_MODELS", models);
+        .env("OLLAMA_MODELS", models)
+        // A 64K window for agents, kept affordable: flash attention plus an 8-bit KV
+        // cache roughly halves the memory the window needs.
+        .env("OLLAMA_CONTEXT_LENGTH", OLLAMA_CONTEXT_LENGTH.to_string())
+        .env("OLLAMA_FLASH_ATTENTION", "1")
+        .env("OLLAMA_KV_CACHE_TYPE", "q8_0");
     Ok(cmd)
 }

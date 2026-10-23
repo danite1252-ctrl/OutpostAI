@@ -49,6 +49,8 @@ Outpost installs pinned versions into `<data folder>\engines` and runs them hidd
 | ComfyUI | v0.42.5 | Source release + Python 3.13 via uv 0.13.5, PyTorch cu130 (NVIDIA) or CPU | 8188 |
 
 Models are kept in `<data folder>\models`, so reinstalling an engine never deletes them.
+Ollama starts with a 64K-token context window (flash attention, 8-bit KV cache), which
+agents like Hermes need.
 If you already run your own Ollama or ComfyUI on those ports, Outpost uses it instead
 and shows it as "your own copy". Engines stop when the app closes. Versions live in
 `crates/outpost-engines/src/versions.rs`.
@@ -77,7 +79,8 @@ The key sees only that account's personas and memory. Revoke it any time in Sett
 1. Settings → Network → **Allow other devices on my network**, then close and reopen Outpost.
    It now listens on `0.0.0.0:7420`. Windows asks about the firewall: allow **Private networks**.
 2. Settings → App keys shows the address to use, e.g. `http://192.168.1.20:7420/v1`.
-3. Point Hermes at that base URL with the app key.
+3. Point Hermes at that base URL with the app key, and set `context_length: 65536` for
+   the model in Hermes' `config.yaml`.
 
 From another machine only app keys work. PIN sign-in, the account list, first-run setup and
 the network switch itself stay on this PC, and desktop sign-ins are refused if they turn up

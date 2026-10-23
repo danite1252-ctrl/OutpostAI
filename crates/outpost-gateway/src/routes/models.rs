@@ -27,6 +27,8 @@ pub struct ModelEntry {
     pub created: i64,
     /// Engine that serves it, e.g. `ollama`.
     pub owned_by: String,
+    /// Context window in tokens that Outpost starts Ollama with.
+    pub context_length: u32,
 }
 
 #[derive(Deserialize)]
@@ -59,6 +61,7 @@ pub async fn list_models(State(state): State<AppState>, auth: Auth) -> ApiResult
                     object: "model".into(),
                     created: 0,
                     owned_by: "ollama".into(),
+                    context_length: outpost_engines::versions::OLLAMA_CONTEXT_LENGTH,
                 })
                 .collect(),
             Err(e) => {
@@ -80,6 +83,7 @@ pub async fn list_models(State(state): State<AppState>, auth: Auth) -> ApiResult
             object: "model".into(),
             created: p.created_at,
             owned_by: "outpost-persona".into(),
+            context_length: outpost_engines::versions::OLLAMA_CONTEXT_LENGTH,
         });
     }
     Ok(Json(ModelList {
