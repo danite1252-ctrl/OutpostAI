@@ -540,7 +540,20 @@ export const downloadsApi = {
   list: (token: string) => request<{ items: Download[]; running: number }>("GET", "/api/downloads", { token }),
 };
 
+/** One job in the shared line for the GPU. Other people's show only whose and how far. */
+export interface LineEntry {
+  mine: boolean;
+  job_id: string | null;
+  pack_id: string | null;
+  by_name: string;
+  by_color: string;
+  status: JobStatus;
+  progress: Job["progress"];
+  eta_secs: number | null;
+}
+
 export const createApi = {
+  queue: (token: string) => request<LineEntry[]>("GET", "/api/queue", { token }),
   packs: (token: string) => request<Pack[]>("GET", "/api/packs", { token }),
   installPack: (token: string, id: string) =>
     request<void>("POST", `/api/packs/${encodeURIComponent(id)}/install`, { token }),

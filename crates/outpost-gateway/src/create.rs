@@ -27,6 +27,33 @@ pub struct Running {
     pub progress: JobProgress,
     /// Cancel was asked for; checked before the job reaches ComfyUI.
     pub cancelled: bool,
+    /// When the current sampling pass was first seen, and at which step, for the
+    /// time left.
+    pub sampling: Option<(std::time::Instant, u32, u32)>,
+}
+
+impl Running {
+    fn track(&mut self, p: &JobProgress) {
+        if p.steps == 0 || p.step == 0 {
+            return;
+        }
+        match self.sampling {
+            // A new pass (or the first): start timing from here.
+            Some((_, first, steps)) if p.step >= first && p.steps == steps => {}
+            _ => self.sampling = Some((std::time::Instant::now(), p.step, p.steps)),
+        }
+    }
+
+    /// Seconds left in this sampling pass, from the pace so far.
+    pub fn eta_secs(&self) -> Option<u64> {
+        let (since, first, steps) = self.sampling?;
+        let step = self.progress.step;
+        if step <= first || self.progress.steps != steps {
+            return None;
+        }
+        let per_step = since.elapsed().as_secs_f64() / f64::from(step - first);
+        Some((per_step * f64::from(steps.saturating_sub(step))).ceil() as u64)
+    }
 }
 
 /// Shared between the worker and the API.
@@ -95,6 +122,7 @@ pub async fn worker(state: AppState) {
                 ..Default::default()
             },
             cancelled: false,
+            sampling: None,
         }));
         // Run each job in its own task so a bug in one can't stop the queue.
         let outcome = match tokio::spawn(run(state.clone(), job.clone())).await {
@@ -205,7 +233,12 @@ async fn run(state: AppState, job: Job) -> Result<(), ComfyError> {
                 let queue = state.queue.clone();
                 move || queue.cancelled()
             },
-            move |p| queue.update(|r| r.progress = p),
+            move |p| {
+                queue.update(|r| {
+                    r.track(&p);
+                    r.progress = p;
+                })
+            },
         )
         .await?;
 
@@ -293,6 +326,48 @@ async fn free_ollama(state: &AppState) {
             .send()
             .await;
         tracing::info!(%model, "unloaded chat model to free the GPU");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(step: u32, steps: u32) -> JobProgress {
+        JobProgress {
+            phase: "Generating".into(),
+            step,
+            steps,
+            percent: None,
+        }
+    }
+
+    #[test]
+    fn time_left_follows_the_pass() {
+        let mut r = Running {
+            job_id: "j".into(),
+            prompt_id: None,
+            progress: JobProgress::default(),
+            cancelled: false,
+            sampling: None,
+        };
+        let p = at(1, 8);
+        r.track(&p);
+        r.progress = p;
+        // One step seen: no pace yet.
+        assert_eq!(r.eta_secs(), None);
+        let first = r.sampling.unwrap().0;
+        let p = at(4, 8);
+        r.track(&p);
+        r.progress = p;
+        assert_eq!(r.sampling.unwrap().0, first, "same pass keeps its start");
+        assert!(r.eta_secs().is_some());
+        // A second pass (e.g. a video's second sampler) starts timing again.
+        let p = at(1, 20);
+        r.track(&p);
+        r.progress = p;
+        assert_eq!(r.sampling.unwrap().2, 20);
+        assert_eq!(r.eta_secs(), None);
     }
 }
 

@@ -188,6 +188,7 @@ pub fn router(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
         )
         .route("/api/jobs/{id}", get(create::get_job).delete(create::cancel_job))
+        .route("/api/queue", get(create::queue))
         .route("/api/gallery", get(create::gallery))
         .route("/api/gallery/shared", get(create::shared_gallery))
         .route("/api/media/{id}/share", post(create::share_media))

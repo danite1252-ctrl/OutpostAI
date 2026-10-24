@@ -151,9 +151,10 @@ commercial use.
   the shared gallery with "Share with everyone", and take it out again); only the owner also
   gets a tab per account, to see everyone's. From a picture you can repeat it ("Use these settings"), edit it or
   animate it, and image inputs can be picked straight from it.
-- **Queue button** (top right, from any screen): how many of your jobs are waiting or
-  running, a ring that fills as the running one progresses, and a list with step counts,
-  places in line, Stop/Cancel, and jobs that just finished.
+- **Queue button** (top right, from any screen, for everyone): how many jobs are in line for
+  the graphics card, a ring that fills as the running one progresses, and the line in order.
+  Your jobs show what they are, their step, time left and Stop/Cancel; other people's show
+  only whose they are ("Sam is creating · 60% · 1 min left"), never what they're making.
 - **Downloads**: the button at the top right lists every download (chat models and Create
   files) with the file it's on, speed and time left.
 - **LoRAs**: put `.safetensors` files in `<data folder>\models\comfyui\loras` and pick them in
@@ -201,6 +202,7 @@ ai-toolkit trains Z-Image Turbo and Wan 2.2 on a 16 GB card. Its scripts live in
 | GET | `/api/loras` | bearer | LoRA files available to packs |
 | GET, POST | `/api/jobs` | bearer | My jobs (queue position, live progress) / queue one: `{pack, inputs}` |
 | GET, DELETE | `/api/jobs/{id}` | bearer | One job / cancel or stop it |
+| GET | `/api/queue` | bearer | Everyone's running and waiting jobs in order: yours in full, others' only by name and progress |
 | GET | `/api/gallery` | bearer | My pictures and videos, newest first; `?account_id=` for someone else's (owner only) |
 | GET, DELETE | `/api/media/{id}` | bearer | One gallery file (yours, a shared one, or for the owner anyone's) / delete it (yours; the owner: anyone's) |
 | GET | `/api/gallery/shared` | bearer | The shared gallery, most recently shared first, with who shared each |

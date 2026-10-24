@@ -272,6 +272,50 @@ pub async fn get_job(State(state): State<AppState>, auth: Auth, Path(id): Path<S
     Ok(Json(view(&state, job).await?))
 }
 
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct LineView {
+    /// Yours: you can see what it is and cancel it.
+    pub mine: bool,
+    /// Your job's id and workflow; left out for other people's.
+    pub job_id: Option<String>,
+    pub pack_id: Option<String>,
+    /// Who it belongs to.
+    pub by_name: String,
+    pub by_color: String,
+    pub status: JobStatus,
+    /// The running job's progress (anyone's: "Sam is creating, 60%").
+    pub progress: Option<outpost_engines::comfy::JobProgress>,
+    /// Seconds left in the running job's current pass, once it can be told.
+    pub eta_secs: Option<u64>,
+}
+
+/// The line for the graphics card, everyone's jobs in the order they run. Other
+/// people's jobs show only whose they are and how far along, never what they make.
+#[utoipa::path(get, path = "/api/queue", tag = "create", security(("bearer" = [])),
+    responses((status = 200, description = "The queue", body = [LineView])))]
+pub async fn queue(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<Vec<LineView>>> {
+    let running = state.queue.running();
+    let out = jobs::line(&state.pool)
+        .await?
+        .into_iter()
+        .map(|e| {
+            let mine = e.account_id == auth.account.id;
+            let live = running.as_ref().filter(|r| r.job_id == e.job_id);
+            LineView {
+                mine,
+                job_id: mine.then(|| e.job_id.clone()),
+                pack_id: mine.then(|| e.pack_id.clone()),
+                by_name: e.account_name,
+                by_color: e.avatar_color,
+                status: e.status,
+                progress: live.map(|r| r.progress.clone()),
+                eta_secs: live.and_then(|r| r.eta_secs()),
+            }
+        })
+        .collect();
+    Ok(Json(out))
+}
+
 /// Cancel one of my jobs: a queued one is removed, a running one is stopped.
 #[utoipa::path(delete, path = "/api/jobs/{id}", tag = "create", security(("bearer" = [])),
     params(("id" = String, Path, description = "Job id")),

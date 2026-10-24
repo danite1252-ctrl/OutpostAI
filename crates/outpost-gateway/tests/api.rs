@@ -346,6 +346,7 @@ async fn openapi_lists_every_route() {
         "/api/downloads",
         "/api/gallery/shared",
         "/api/media/{id}/share",
+        "/api/queue",
     ] {
         assert!(paths.contains_key(p), "missing {p} in OpenAPI spec");
     }
@@ -995,6 +996,11 @@ async fn create_lists_packs_and_checks_jobs() {
     let (status, packs) = call(&app, "GET", "/api/packs", Some(sam_token), None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(packs.as_array().unwrap().iter().all(|p| p["missing_nodes"].is_array()));
+
+    // The line for the GPU is visible to everyone (empty here).
+    let (status, line) = call(&app, "GET", "/api/queue", Some(sam_token), None).await;
+    assert_eq!(status, StatusCode::OK, "{line}");
+    assert!(line.as_array().unwrap().is_empty());
 
     // The shared gallery: everyone can read it; sharing needs an item of yours.
     let (status, shared) = call(&app, "GET", "/api/gallery/shared", Some(sam_token), None).await;

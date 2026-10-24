@@ -1,22 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createApi, type Job } from "../api";
-import { Icon, icons } from "./ui";
+import { createApi, type Job, type LineEntry } from "../api";
+import { formatEta } from "./downloads";
+import { Avatar, Icon, icons } from "./ui";
 
 /** Tell the Queue button to look again (after queueing or cancelling a job). */
 export function jobsChanged() {
   window.dispatchEvent(new Event("outpost:jobs"));
 }
 
+type Progress = Job["progress"];
+
 /** How far a running job is, 0 to 1, when it can be told. */
-export function jobFraction(j: Job): number | null {
-  const p = j.progress;
+export function progressFraction(p: Progress): number | null {
   if (!p) return null;
   if (p.percent != null) return Math.min(1, Math.max(0, p.percent / 100));
   if (p.steps > 0) return Math.min(1, p.step / p.steps);
   return null;
 }
 
-function promptOf(j: Job) {
+function promptOf(j: Job | undefined) {
+  if (!j) return "";
   try {
     return (JSON.parse(j.inputs).prompt as string) || "";
   } catch {
@@ -24,29 +27,36 @@ function promptOf(j: Job) {
   }
 }
 
-/** Finished jobs stay in the list this long, so you can see they're done. */
+/** Finished jobs of yours stay in the list this long, so you can see they're done. */
 const RECENT_SECS = 15 * 60;
 
-/** The header's Queue button: how many of your jobs are waiting or running, and how far the running one is. */
+/**
+ * The header's Queue button, for everyone: how many jobs are in line for the graphics
+ * card and how far the running one is. Your own jobs show what they are and can be
+ * cancelled; other people's show only whose they are ("Sam is creating").
+ */
 export function QueueButton({ token, onOpenCreate, onOpenGallery }: { token: string; onOpenCreate: () => void; onOpenGallery: () => void }) {
   const [open, setOpen] = useState(false);
+  const [line, setLine] = useState<LineEntry[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const box = useRef<HTMLDivElement | null>(null);
 
-  const active = jobs.filter((j) => j.status === "queued" || j.status === "running");
-  const refresh = useCallback(() => createApi.jobs(token).then(setJobs, () => undefined), [token]);
+  const refresh = useCallback(() => {
+    void createApi.queue(token).then(setLine, () => undefined);
+    void createApi.jobs(token).then(setJobs, () => undefined);
+  }, [token]);
 
+  const busy = line.length > 0;
   useEffect(() => {
-    void refresh();
-    const t = window.setInterval(() => void refresh(), active.length > 0 || open ? 1500 : 10000);
-    const now = () => void refresh();
-    window.addEventListener("outpost:jobs", now);
+    refresh();
+    const t = window.setInterval(refresh, busy || open ? 1500 : 10000);
+    window.addEventListener("outpost:jobs", refresh);
     return () => {
       window.clearInterval(t);
-      window.removeEventListener("outpost:jobs", now);
+      window.removeEventListener("outpost:jobs", refresh);
     };
-  }, [refresh, active.length, open]);
+  }, [refresh, busy, open]);
 
   // Workflow names, once.
   useEffect(() => {
@@ -74,43 +84,44 @@ export function QueueButton({ token, onOpenCreate, onOpenGallery }: { token: str
   const recent = jobs
     .filter((j) => (j.status === "done" || j.status === "failed") && (j.finished_at ?? 0) > now - RECENT_SECS)
     .slice(0, 4);
-  const running = active.find((j) => j.status === "running") ?? null;
-  const fraction = running ? jobFraction(running) : null;
-  // Running first, then by place in line.
-  const ordered = [...active].sort((a, b) =>
-    a.status === b.status ? (a.position ?? 0) - (b.position ?? 0) : a.status === "running" ? -1 : 1,
-  );
+  const running = line.find((e) => e.status === "running") ?? null;
+  const fraction = running ? progressFraction(running.progress) : null;
+  const mineWaiting = line.filter((e) => e.mine).length;
+  const jobOf = (e: LineEntry) => jobs.find((j) => j.id === e.job_id);
 
-  async function cancel(j: Job) {
+  async function cancel(e: LineEntry) {
+    if (!e.job_id) return;
     try {
-      await createApi.cancelJob(token, j.id);
+      await createApi.cancelJob(token, e.job_id);
     } finally {
-      void refresh();
+      refresh();
     }
   }
 
-  if (active.length === 0 && recent.length === 0 && !open) return null;
+  if (line.length === 0 && recent.length === 0 && !open) return null;
 
   const r = 19;
   const c = 2 * Math.PI * r;
   const failed = recent.some((j) => j.status === "failed");
+  // Orange when any of it is yours, blue when it's only other people's.
+  const tone = mineWaiting ? "text-ember" : busy ? "text-pick" : failed ? "text-danger" : "text-ok";
+  const label = busy
+    ? `Queue: ${line.length} job${line.length === 1 ? "" : "s"}${mineWaiting ? `, ${mineWaiting} yours` : ""}${
+        fraction != null ? `, running one ${Math.round(fraction * 100)}% done` : ""
+      }`
+    : "Queue";
+
   return (
     <div ref={box} className="relative">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        aria-label={
-          active.length
-            ? `Queue: ${active.length} job${active.length === 1 ? "" : "s"}${fraction != null ? `, ${Math.round(fraction * 100)}% done` : ""}`
-            : "Queue"
-        }
-        title="Queue"
-        className={`relative flex size-11 items-center justify-center rounded-xl border border-line bg-surface hover:bg-raised ${
-          active.length ? "text-ember" : failed ? "text-danger" : "text-ok"
-        }`}
+        aria-label={label}
+        title={running && !running.mine ? `${running.by_name} is creating` : "Queue"}
+        className={`relative flex size-11 items-center justify-center rounded-xl border border-line bg-surface hover:bg-raised ${tone}`}
       >
-        {active.length > 0 && (
+        {busy && (
           <svg className={`absolute inset-0 ${running && fraction == null ? "animate-spin" : "-rotate-90"}`} viewBox="0 0 44 44" aria-hidden="true">
             <circle cx="22" cy="22" r={r} fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2.5" />
             {running && (
@@ -130,9 +141,13 @@ export function QueueButton({ token, onOpenCreate, onOpenGallery }: { token: str
           </svg>
         )}
         <Icon d={icons.queue} size={19} />
-        {active.length > 0 && (
-          <span className="absolute -top-1 -right-1 flex size-5 items-center justify-center rounded-full bg-ember text-[11px] font-semibold text-on-ember">
-            {active.length}
+        {busy && (
+          <span
+            className={`absolute -top-1 -right-1 flex size-5 items-center justify-center rounded-full text-[11px] font-semibold ${
+              mineWaiting ? "bg-ember text-on-ember" : "bg-pick text-on-pick"
+            }`}
+          >
+            {line.length}
           </span>
         )}
       </button>
@@ -164,70 +179,99 @@ export function QueueButton({ token, onOpenCreate, onOpenGallery }: { token: str
               <Icon d={icons.close} size={16} />
             </button>
           </div>
-          {ordered.length === 0 && recent.length === 0 && <p className="px-4 py-6 text-center text-sm text-muted">Nothing waiting.</p>}
-          <ul className="flex max-h-[60vh] flex-col overflow-auto py-1">
-            {ordered.map((j) => {
-              const f = jobFraction(j);
-              const p = j.progress;
+          {busy && (
+            <p className="border-b border-line px-4 py-2 text-xs text-muted">
+              One job runs at a time on the graphics card, in the order they were added.
+            </p>
+          )}
+          {line.length === 0 && recent.length === 0 && <p className="px-4 py-6 text-center text-sm text-muted">Nothing waiting.</p>}
+          <ol className="flex max-h-[60vh] flex-col overflow-auto py-1">
+            {line.map((e, i) => {
+              const f = progressFraction(e.progress);
+              const p = e.progress;
+              const isRunning = e.status === "running";
+              const title = e.mine
+                ? promptOf(jobOf(e)) || (e.pack_id && names[e.pack_id]) || "Your job"
+                : isRunning
+                  ? `${e.by_name} is creating`
+                  : `${e.by_name}'s job`;
+              const detail = isRunning
+                ? [
+                    e.mine ? (p?.phase ?? "Running") : null,
+                    p && p.steps > 0 ? `step ${p.step} of ${p.steps}` : !e.mine ? (p?.phase ?? "Running") : null,
+                    f != null ? `${Math.round(f * 100)}%` : null,
+                    e.eta_secs != null ? formatEta(e.eta_secs) : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                : i === (running ? 1 : 0)
+                  ? "Next up"
+                  : `${i - (running ? 1 : 0)} ahead`;
               return (
-                <li key={j.id} className="flex flex-col gap-1.5 px-4 py-3" aria-live={j.status === "running" ? "polite" : undefined}>
-                  <div className="flex items-start gap-2">
+                <li key={e.job_id ?? `${e.by_name}-${i}`} className="flex flex-col gap-1.5 px-4 py-3" aria-live={isRunning ? "polite" : undefined}>
+                  <div className="flex items-start gap-2.5">
+                    <Avatar name={e.by_name} color={e.by_color} size={24} />
                     <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate text-sm font-medium" title={promptOf(j)}>
-                        {promptOf(j) || names[j.pack_id] || j.pack_id}
+                      <span className={`truncate text-sm ${e.mine ? "font-medium" : ""}`} title={title}>
+                        {title}
                       </span>
                       <span className="text-xs text-muted">
-                        {names[j.pack_id] ?? j.pack_id} ·{" "}
-                        {j.status === "running"
-                          ? `${p?.phase ?? "Running"}${p && p.steps > 0 ? ` · step ${p.step} of ${p.steps}` : ""}${f != null ? ` · ${Math.round(f * 100)}%` : ""}`
-                          : j.position
-                            ? `${j.position} ahead`
-                            : "Next up"}
+                        {e.mine && e.pack_id ? `${names[e.pack_id] ?? e.pack_id} · ` : ""}
+                        {detail}
                       </span>
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => void cancel(j)}
-                      className="shrink-0 rounded-lg border border-line px-2 py-1 text-xs hover:bg-raised"
-                    >
-                      {j.status === "running" ? "Stop" : "Cancel"}
-                    </button>
+                    {e.mine && (
+                      <button
+                        type="button"
+                        onClick={() => void cancel(e)}
+                        className="shrink-0 rounded-lg border border-line px-2 py-1 text-xs hover:bg-raised"
+                      >
+                        {isRunning ? "Stop" : "Cancel"}
+                      </button>
+                    )}
                   </div>
-                  {j.status === "running" && (
+                  {isRunning && (
                     <div className="h-1.5 overflow-hidden rounded-full bg-raised">
                       {f != null ? (
-                        <div className="h-1.5 rounded-full bg-ember transition-all" style={{ width: `${f * 100}%` }} />
+                        <div
+                          className={`h-1.5 rounded-full transition-all ${e.mine ? "bg-ember" : "bg-pick"}`}
+                          style={{ width: `${f * 100}%` }}
+                        />
                       ) : (
-                        <div className="h-1.5 w-1/3 animate-pulse rounded-full bg-ember/70" />
+                        <div className={`h-1.5 w-1/3 animate-pulse rounded-full ${e.mine ? "bg-ember/70" : "bg-pick/70"}`} />
                       )}
                     </div>
                   )}
                 </li>
               );
             })}
-            {recent.map((j) => (
-              <li key={j.id} className="flex items-start gap-2 px-4 py-3">
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-sm">{promptOf(j) || names[j.pack_id] || j.pack_id}</span>
-                  <span className={`text-xs ${j.status === "failed" ? "text-danger" : "text-ok"}`}>
-                    {j.status === "failed" ? (j.error ?? "Failed") : "Done"}
+          </ol>
+          {recent.length > 0 && (
+            <ul className="flex flex-col border-t border-line py-1">
+              {recent.map((j) => (
+                <li key={j.id} className="flex items-start gap-2 px-4 py-3">
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-sm">{promptOf(j) || names[j.pack_id] || j.pack_id}</span>
+                    <span className={`text-xs ${j.status === "failed" ? "text-danger" : "text-ok"}`}>
+                      {j.status === "failed" ? (j.error ?? "Failed") : "Done"}
+                    </span>
                   </span>
-                </span>
-                {j.status === "done" && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpen(false);
-                      onOpenGallery();
-                    }}
-                    className="shrink-0 rounded-lg border border-line px-2 py-1 text-xs hover:bg-raised"
-                  >
-                    View
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
+                  {j.status === "done" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpen(false);
+                        onOpenGallery();
+                      }}
+                      className="shrink-0 rounded-lg border border-line px-2 py-1 text-xs hover:bg-raised"
+                    >
+                      View
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </div>

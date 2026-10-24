@@ -146,6 +146,29 @@ pub async fn position(pool: &SqlitePool, job: &Job) -> CoreResult<i64> {
     .await?)
 }
 
+/// One job in the shared line for the GPU: whose it is, not what it makes.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
+pub struct LineEntry {
+    pub job_id: String,
+    pub account_id: String,
+    pub account_name: String,
+    pub avatar_color: String,
+    pub pack_id: String,
+    pub status: JobStatus,
+}
+
+/// Everyone's running and waiting jobs, in the order they run.
+pub async fn line(pool: &SqlitePool) -> CoreResult<Vec<LineEntry>> {
+    Ok(sqlx::query_as(
+        "SELECT j.id AS job_id, j.account_id, a.name AS account_name, a.avatar_color, j.pack_id, j.status
+         FROM jobs j JOIN accounts a ON a.id = j.account_id
+         WHERE j.status IN ('queued', 'running')
+         ORDER BY CASE j.status WHEN 'running' THEN 0 ELSE 1 END, j.created_at, j.rowid",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
 /// The oldest queued job, marked running. `None` when the queue is empty.
 pub async fn take_next(pool: &SqlitePool) -> CoreResult<Option<Job>> {
     let mut tx = pool.begin().await?;
@@ -267,6 +290,11 @@ mod tests {
 
         let first = take_next(&pool).await.unwrap().unwrap();
         assert_eq!(first.id, a.id);
+        // The shared line: running first, then waiting, with names only.
+        let l = line(&pool).await.unwrap();
+        assert_eq!(l.len(), 2);
+        assert_eq!((l[0].account_name.as_str(), l[0].status), ("Dan", JobStatus::Running));
+        assert_eq!((l[1].account_name.as_str(), l[1].status), ("Eve", JobStatus::Queued));
         assert_eq!(first.status, JobStatus::Running);
         set_seed(&pool, &a.id, 123).await.unwrap();
         finish(&pool, &a.id, JobStatus::Done, None).await.unwrap();

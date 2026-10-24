@@ -63,6 +63,7 @@ use crate::routes::{
         create::list_jobs,
         create::get_job,
         create::cancel_job,
+        create::queue,
         create::gallery,
         create::shared_gallery,
         create::share_media,
