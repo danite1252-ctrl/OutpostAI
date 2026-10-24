@@ -2,6 +2,8 @@
   "id": "qwen_image",
   "name": "Qwen-Image",
   "lane": "text_to_image",
+  "task": "picture",
+  "rank": 10,
   "description": "Detailed pictures that follow long prompts closely and draw readable text, including signs and posters.",
   "license": "Apache-2.0",
   "vram_gb": 20,

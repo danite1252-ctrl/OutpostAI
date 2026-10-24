@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
+use crate::catalog::Fit;
+
 /// What a pack makes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -18,6 +20,36 @@ pub enum Lane {
     EditImage,
     TextToVideo,
     ImageToVideo,
+}
+
+/// The jobs Create offers, one tab each. A task can have several packs; Outpost
+/// picks the one that suits the graphics card best (see [`pick`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Task {
+    /// Text to image.
+    Picture,
+    /// Pictures of a trained character (a LoRA).
+    Character,
+    /// Change a picture.
+    Edit,
+    /// Text to video.
+    Video,
+    /// A picture brought to life (image to video).
+    Animate,
+}
+
+impl Task {
+    pub const ALL: [Task; 5] = [Task::Picture, Task::Character, Task::Edit, Task::Video, Task::Animate];
+
+    fn of_lane(lane: Lane) -> Task {
+        match lane {
+            Lane::TextToImage => Task::Picture,
+            Lane::EditImage => Task::Edit,
+            Lane::TextToVideo => Task::Video,
+            Lane::ImageToVideo => Task::Animate,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -116,6 +148,10 @@ pub struct InputSpec {
     #[serde(default)]
     #[schema(value_type = Object)]
     pub presets: std::collections::HashMap<String, Vec<(String, String, Value)>>,
+    /// For an optional image: nodes to take out of the graph when none is given
+    /// (with every link to them), e.g. the LoadImage of an unused reference picture.
+    #[serde(default)]
+    pub prune: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -123,6 +159,13 @@ pub struct Pack {
     pub id: String,
     pub name: String,
     pub lane: Lane,
+    /// The Create tab it belongs to. Left out, it follows the lane. (The API
+    /// reports it as `task` beside the pack; see [`Pack::task`].)
+    #[serde(default, skip_serializing)]
+    pub task: Option<Task>,
+    /// Higher is better: among the packs of a task that fit the card, the highest wins.
+    #[serde(default)]
+    pub rank: i32,
     pub description: String,
     #[serde(default)]
     pub license: Option<String>,
@@ -145,17 +188,24 @@ pub enum PackError {
 
 macro_rules! pack {
     ($id:literal) => {
+        pack!($id, $id)
+    };
+    // A pack that reuses another pack's graph.
+    ($id:literal, $graph:literal) => {
         (
             include_str!(concat!("../packs/", $id, "/pack.json")),
-            include_str!(concat!("../packs/", $id, "/graph.json")),
+            include_str!(concat!("../packs/", $graph, "/graph.json")),
         )
     };
 }
 
-/// Built-in packs, in the order Create shows them.
+/// Built-in packs, in the order Create lists them within a task.
 const BUILT_IN: &[(&str, &str)] = &[
     pack!("z_image_turbo"),
+    pack!("qwen_image_21_turbo"),
     pack!("qwen_image"),
+    pack!("character_z_image", "z_image_turbo"),
+    pack!("qwen_image_21_edit"),
     pack!("qwen_image_edit"),
     pack!("wan22_t2v"),
     pack!("wan22_i2v"),
@@ -177,6 +227,20 @@ pub fn find(id: &str) -> Option<Pack> {
 pub fn parse(pack_json: &str, graph_json: &str) -> Result<Pack, PackError> {
     let mut pack: Pack = serde_json::from_str(pack_json).map_err(|e| PackError::Invalid(format!("pack.json: {e}")))?;
     pack.graph = serde_json::from_str(graph_json).map_err(|e| PackError::Invalid(format!("graph.json: {e}")))?;
+    pack.task.get_or_insert(Task::of_lane(pack.lane));
+    for input in &pack.inputs {
+        if !input.prune.is_empty() && (input.kind != InputKind::Image || input.required) {
+            return Err(PackError::Invalid(format!(
+                "{}: only an optional image can prune nodes",
+                input.key
+            )));
+        }
+        for node in &input.prune {
+            if pack.graph.get(node).is_none() || *node == pack.output.node {
+                return Err(PackError::Invalid(format!("{}: can't prune node {node}", input.key)));
+            }
+        }
+    }
     let has_input = |node: &str, input: &str| {
         pack.graph
             .get(node)
@@ -359,7 +423,11 @@ impl Pack {
                     None if input.required => {
                         return Err(PackError::Invalid(format!("Add an image for {}.", input.label)));
                     }
-                    None => {}
+                    None => {
+                        for node in &input.prune {
+                            prune(&mut graph, node);
+                        }
+                    }
                 },
                 InputKind::Lora => {
                     let Some(name) = value.as_str().filter(|s| !s.is_empty()) else {
@@ -400,6 +468,79 @@ fn default_of(pack: &Pack, key: &str) -> Option<f64> {
         .iter()
         .find(|i| i.key == key)
         .and_then(|i| i.default.as_f64())
+}
+
+/// Take a node out of the graph, and every input that reads from it.
+fn prune(graph: &mut Value, id: &str) {
+    let Some(nodes) = graph.as_object_mut() else { return };
+    nodes.remove(id);
+    for node in nodes.values_mut() {
+        if let Some(inputs) = node.get_mut("inputs").and_then(Value::as_object_mut) {
+            inputs.retain(|_, v| v.get(0).and_then(Value::as_str) != Some(id) || !v.is_array());
+        }
+    }
+}
+
+impl Pack {
+    pub fn task(&self) -> Task {
+        self.task.unwrap_or(Task::of_lane(self.lane))
+    }
+
+    /// Every ComfyUI node type the pack can use, sorted.
+    pub fn node_types(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .graph
+            .as_object()
+            .into_iter()
+            .flat_map(|g| g.values())
+            .filter_map(|n| n.get("class_type").and_then(Value::as_str).map(str::to_string))
+            .collect();
+        if self.inputs.iter().any(|i| i.kind == InputKind::Lora) {
+            out.push("LoraLoaderModelOnly".into());
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// The node types it needs that a ComfyUI with `have` lacks.
+    pub fn missing_nodes(&self, have: &std::collections::HashSet<String>) -> Vec<String> {
+        self.node_types().into_iter().filter(|n| !have.contains(n)).collect()
+    }
+}
+
+/// Does a pack needing `vram_gb` at its peak run on a card with `card_gb` and
+/// `ram_gb` of system memory? ComfyUI can spill to system memory, so between the
+/// two it runs, slowly.
+pub fn fit(vram_gb: f32, card_gb: f32, ram_gb: f32) -> Fit {
+    if card_gb > 0.0 && vram_gb <= card_gb * 0.98 {
+        Fit::Fits
+    } else if vram_gb <= card_gb + ram_gb * 0.5 {
+        Fit::Partial
+    } else {
+        Fit::TooLarge
+    }
+}
+
+/// The pack Outpost suggests for a task: the best-ranked one that fits the card;
+/// failing that, the smallest that runs at all. `None` when nothing will run.
+pub fn pick<'a>(packs: &'a [Pack], task: Task, fit: impl Fn(&Pack) -> Fit) -> Option<&'a Pack> {
+    let of_task = || packs.iter().filter(move |p| p.task() == task);
+    // Ties go to the pack listed first.
+    of_task()
+        .filter(|p| fit(p) == Fit::Fits)
+        .fold(None::<&Pack>, |best, p| match best {
+            Some(b) if b.rank >= p.rank => Some(b),
+            _ => Some(p),
+        })
+        .or_else(|| {
+            of_task()
+                .filter(|p| fit(p) == Fit::Partial)
+                .fold(None::<&Pack>, |best, p| match best {
+                    Some(b) if b.vram_gb <= p.vram_gb => Some(b),
+                    _ => Some(p),
+                })
+        })
 }
 
 fn set(graph: &mut Value, (node, field): &(String, String), value: Value) {
@@ -633,6 +774,125 @@ mod tests {
         assert_eq!(parse_size("1000x1000"), None);
         assert_eq!(parse_size("4096x4096"), None);
         assert_eq!(parse_size("big"), None);
+    }
+
+    #[test]
+    fn qwen_21_edit_drops_unused_references() {
+        let p = find("qwen_image_21_edit").unwrap();
+        let mut up = HashMap::new();
+        up.insert("image".to_string(), "outpost/a.png".to_string());
+        let v = values(json!({"prompt": "make it night", "seed": 5}));
+        let g = p.build(&v, || 1, &up, &[]).unwrap().graph;
+        assert_eq!(g["470"]["inputs"]["image"], "outpost/a.png");
+        assert!(g.get("471").is_none() && g.get("472").is_none());
+        let enc = &g["474"]["inputs"];
+        assert_eq!(enc["images.image_1"], json!(["470", 0]));
+        assert!(enc.get("images.image_2").is_none() && enc.get("images.image_3").is_none());
+        assert_eq!(enc["resolution"], 1024);
+        assert_eq!(g["504"]["inputs"]["noise_seed"], 5);
+        // Nothing left pointing at a removed node.
+        for node in g.as_object().unwrap().values() {
+            for input in node["inputs"].as_object().unwrap().values() {
+                if let Some(from) = input.get(0).and_then(Value::as_str) {
+                    assert!(g.get(from).is_some(), "dangling link to {from}");
+                }
+            }
+        }
+
+        up.insert("ref2".to_string(), "outpost/b.png".to_string());
+        let v = values(json!({"prompt": "she wears <image2>", "detail": "Same as the picture"}));
+        let g = p.build(&v, || 1, &up, &[]).unwrap().graph;
+        assert_eq!(g["474"]["inputs"]["images.image_2"], json!(["471", 0]));
+        assert_eq!(g["471"]["inputs"]["image"], "outpost/b.png");
+        assert!(g.get("472").is_none());
+        assert_eq!(g["474"]["inputs"]["resolution"], 0);
+
+        // The picture to edit is still required.
+        assert!(p.build(&v, || 1, &HashMap::new(), &[]).is_err());
+    }
+
+    #[test]
+    fn character_needs_a_lora() {
+        let p = find("character_z_image").unwrap();
+        assert_eq!(p.task(), Task::Character);
+        let loras = vec!["zd4nni.safetensors".to_string()];
+        let none = HashMap::new();
+        assert!(p.build(&values(json!({"prompt": "zd4nni on a beach"})), || 1, &none, &loras).is_err());
+        let g = p
+            .build(
+                &values(json!({"prompt": "zd4nni on a beach", "lora": "zd4nni.safetensors"})),
+                || 1,
+                &none,
+                &loras,
+            )
+            .unwrap()
+            .graph;
+        assert_eq!(g[LORA_NODE]["inputs"]["lora_name"], "zd4nni.safetensors");
+        // It shares Z-Image Turbo's graph and files.
+        assert_eq!(p.graph, find("z_image_turbo").unwrap().graph);
+    }
+
+    #[test]
+    fn every_task_has_a_pack_and_ids_are_unique() {
+        let packs = built_in();
+        for t in Task::ALL {
+            assert!(packs.iter().any(|p| p.task() == t), "{t:?}");
+        }
+        let mut ids: Vec<_> = packs.iter().map(|p| p.id.as_str()).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), packs.len());
+        // A file shared by two packs is described the same way in both.
+        let mut seen: HashMap<String, (String, Option<String>, Option<u64>)> = HashMap::new();
+        for p in &packs {
+            for m in &p.models {
+                let key = format!("{}/{}", m.folder, m.file);
+                let v = (m.url.clone(), m.sha256.clone(), m.bytes);
+                if let Some(old) = seen.insert(key.clone(), v.clone()) {
+                    assert_eq!(old, v, "{key}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn picks_suit_the_card() {
+        let packs = built_in();
+        let pick_on = |card: f32, ram: f32, task: Task| {
+            pick(&packs, task, |p| fit(p.vram_gb, card, ram)).map(|p| p.id.clone())
+        };
+        // 16 GB card, 64 GB RAM: the best that fits.
+        assert_eq!(pick_on(16.0, 64.0, Task::Picture).as_deref(), Some("z_image_turbo"));
+        assert_eq!(pick_on(16.0, 64.0, Task::Edit).as_deref(), Some("qwen_image_21_edit"));
+        assert_eq!(pick_on(16.0, 64.0, Task::Character).as_deref(), Some("character_z_image"));
+        // 12 GB: Z-Image (14 GB) no longer fits, so the 11 GB Qwen 2.1 Turbo wins.
+        assert_eq!(pick_on(12.0, 32.0, Task::Picture).as_deref(), Some("qwen_image_21_turbo"));
+        // 8 GB laptop: nothing fits, so the smallest that runs.
+        assert_eq!(pick_on(8.0, 16.0, Task::Picture).as_deref(), Some("qwen_image_21_turbo"));
+        assert_eq!(pick_on(8.0, 16.0, Task::Character).as_deref(), Some("character_z_image"));
+        // 48 GB: still the best-ranked, not merely the biggest.
+        assert_eq!(pick_on(48.0, 128.0, Task::Edit).as_deref(), Some("qwen_image_21_edit"));
+        // No GPU and little memory: nothing.
+        assert_eq!(pick_on(0.0, 8.0, Task::Edit), None);
+    }
+
+    #[test]
+    fn packs_know_the_nodes_they_need() {
+        let edit = find("qwen_image_21_edit").unwrap();
+        let nodes = edit.node_types();
+        assert!(nodes.contains(&"TextEncodeQwenImage21".to_string()));
+        assert!(nodes.contains(&"SaveImage".to_string()));
+        let z = find("z_image_turbo").unwrap();
+        assert!(z.node_types().contains(&"LoraLoaderModelOnly".to_string()));
+
+        let old: std::collections::HashSet<String> = edit
+            .node_types()
+            .into_iter()
+            .filter(|n| !n.starts_with("TextEncodeQwenImage21") && n != "QwenImage21Cache")
+            .collect();
+        assert_eq!(edit.missing_nodes(&old), vec!["QwenImage21Cache", "TextEncodeQwenImage21"]);
+        let all: std::collections::HashSet<String> = edit.node_types().into_iter().collect();
+        assert!(edit.missing_nodes(&all).is_empty());
     }
 
     #[test]

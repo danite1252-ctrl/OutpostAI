@@ -1,7 +1,9 @@
 {
   "id": "wan22_i2v",
-  "name": "Wan 2.2 Image to Video",
+  "name": "Wan 2.2 (5B)",
   "lane": "image_to_video",
+  "task": "animate",
+  "rank": 10,
   "description": "Bring a picture to life: a 2 to 5 second 720p clip that starts from your image.",
   "license": "Apache-2.0",
   "vram_gb": 12,

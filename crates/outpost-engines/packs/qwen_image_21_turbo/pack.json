@@ -1,0 +1,97 @@
+{
+  "id": "qwen_image_21_turbo",
+  "name": "Qwen-Image 2.1 Turbo",
+  "lane": "text_to_image",
+  "task": "picture",
+  "rank": 25,
+  "description": "Text to image in 8 steps, strong at posters, signs and lettering. Up to 2048 px.",
+  "license": "Qwen Research",
+  "vram_gb": 11,
+  "output": {
+    "node": "9",
+    "kind": "image"
+  },
+  "models": [
+    {
+      "file": "qwen_image_2.1_turbo_int8_convrot.safetensors",
+      "folder": "diffusion_models",
+      "size_gb": 7.26,
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors",
+      "sha256": "8144a0182964aa8403ad6dbc011db837304167d235161b9aabaa8532e967314c",
+      "bytes": 7256787829
+    },
+    {
+      "file": "qwen3vl_8b_int8_convrot.safetensors",
+      "folder": "text_encoders",
+      "size_gb": 9.35,
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+      "sha256": "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f",
+      "bytes": 9350798360
+    },
+    {
+      "file": "qwen_image_2.1_vae_bf16.safetensors",
+      "folder": "vae",
+      "size_gb": 0.68,
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
+      "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9",
+      "bytes": 675509688
+    }
+  ],
+  "inputs": [
+    {
+      "key": "prompt",
+      "label": "Prompt",
+      "kind": "text",
+      "required": true,
+      "default": "",
+      "help": "Describe the picture. Put any words it should show in quotes.",
+      "targets": [
+        [
+          "474",
+          "prompt"
+        ]
+      ]
+    },
+    {
+      "key": "size",
+      "label": "Size",
+      "kind": "size",
+      "default": "1024x1024",
+      "options": [
+        "1024x1024",
+        "896x1152",
+        "1152x896",
+        "832x1216",
+        "1216x832",
+        "768x1344",
+        "1344x768",
+        "1536x1536",
+        "2048x2048"
+      ],
+      "targets": [
+        [
+          "456",
+          "width"
+        ],
+        [
+          "456",
+          "height"
+        ]
+      ]
+    },
+    {
+      "key": "seed",
+      "label": "Seed",
+      "kind": "seed",
+      "help": "Leave empty for a new picture each time; reuse a seed to repeat one.",
+      "default": null,
+      "advanced": true,
+      "targets": [
+        [
+          "504",
+          "noise_seed"
+        ]
+      ]
+    }
+  ]
+}

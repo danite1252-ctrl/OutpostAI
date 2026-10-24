@@ -50,8 +50,20 @@ pub struct JobProgress {
     pub percent: Option<f32>,
 }
 
+/// What the running (or last seen) ComfyUI can do.
+#[derive(Debug, Clone, Default)]
+pub struct ComfyNodes {
+    /// From `/system_stats`, e.g. `0.42.5`; `None` on old builds that don't say.
+    pub version: Option<String>,
+    /// Every node type it has, from `/object_info`.
+    pub nodes: std::collections::HashSet<String>,
+}
+
 pub struct Comfy {
     base: String,
+    /// The last node list read, kept while ComfyUI is stopped. Read again when the
+    /// version changes or after a while (custom nodes can be added).
+    nodes: std::sync::Mutex<Option<(ComfyNodes, std::time::Instant)>>,
     http: reqwest::Client,
     /// Long requests (uploads, downloads of results).
     big: reqwest::Client,
@@ -66,6 +78,7 @@ impl Comfy {
     pub fn at(base: &str) -> Self {
         Comfy {
             base: base.trim_end_matches('/').to_string(),
+            nodes: std::sync::Mutex::new(None),
             http: reqwest::Client::builder()
                 .no_proxy()
                 .timeout(Duration::from_secs(15))
@@ -79,6 +92,38 @@ impl Comfy {
                 .expect("HTTP client"),
             client_id: format!("outpost-{}", std::process::id()),
         }
+    }
+
+    /// ComfyUI's version and node types: read from ComfyUI when it's up, else the
+    /// last ones seen. `None` if it has never been seen running.
+    pub async fn node_types(&self) -> Option<ComfyNodes> {
+        let cached = self.nodes.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let stats = self
+            .http
+            .get(format!("{}/system_stats", self.base))
+            .send()
+            .await
+            .ok()
+            .filter(|r| r.status().is_success());
+        let Some(stats) = stats else {
+            return cached.map(|(n, _)| n);
+        };
+        let version = stats
+            .json::<Value>()
+            .await
+            .ok()
+            .and_then(|v| v.pointer("/system/comfyui_version").and_then(Value::as_str).map(str::to_string));
+        if let Some((n, at)) = &cached {
+            if n.version == version && at.elapsed() < Duration::from_secs(300) {
+                return Some(n.clone());
+            }
+        }
+        let info = self.big.get(format!("{}/object_info", self.base)).send().await.ok()?;
+        let body: Value = info.json().await.ok()?;
+        let nodes = body.as_object()?.keys().cloned().collect();
+        let fresh = ComfyNodes { version, nodes };
+        *self.nodes.lock().unwrap_or_else(|p| p.into_inner()) = Some((fresh.clone(), std::time::Instant::now()));
+        Some(fresh)
     }
 
     pub async fn is_up(&self) -> bool {
@@ -332,6 +377,16 @@ fn queue_has(body: &Value, prompt_id: &str) -> bool {
 
 /// Turn ComfyUI's validation error into one readable sentence.
 pub fn explain_rejection(body: &Value) -> String {
+    // A node this ComfyUI doesn't have: it is older than the workflow.
+    if body.pointer("/error/type").and_then(Value::as_str) == Some("missing_node_type") {
+        let class = body
+            .pointer("/error/extra_info/class_type")
+            .and_then(Value::as_str)
+            .unwrap_or("a node it needs");
+        return format!(
+            "This ComfyUI is too old for this workflow (it has no {class}). Reinstall it in Settings › Engines to get the version Outpost needs (or update your own ComfyUI), or pick another model."
+        );
+    }
     let top = body
         .pointer("/error/message")
         .and_then(Value::as_str)
@@ -471,6 +526,11 @@ mod tests {
         let text = explain_rejection(&body);
         assert!(text.contains("UNETLoader can't find"), "{text}");
         assert!(text.contains("downloaded"), "{text}");
+
+        let old = json!({"error": {"type": "missing_node_type", "message": "Node 'X' not found.",
+            "extra_info": {"node_id": "474", "class_type": "TextEncodeQwenImage21"}}, "node_errors": {}});
+        let text = explain_rejection(&old);
+        assert!(text.contains("too old") && text.contains("TextEncodeQwenImage21"), "{text}");
     }
 
     #[test]

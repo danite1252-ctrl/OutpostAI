@@ -22,9 +22,21 @@ pub struct Media {
     pub prompt: Option<String>,
     pub seed: Option<i64>,
     pub created_at: i64,
+    /// When it was put in the shared gallery; `None` while private.
+    pub shared_at: Option<i64>,
 }
 
-const COLS: &str = "id, account_id, job_id, kind, mime, bytes, pack_id, prompt, seed, created_at";
+const COLS: &str = "id, account_id, job_id, kind, mime, bytes, pack_id, prompt, seed, created_at, shared_at";
+
+/// An item in the shared gallery, with who shared it.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
+pub struct SharedMedia {
+    #[serde(flatten)]
+    #[sqlx(flatten)]
+    pub media: Media,
+    pub by_name: String,
+    pub by_color: String,
+}
 
 /// What a new gallery item is.
 pub struct NewMedia<'a> {
@@ -73,6 +85,7 @@ pub async fn add(pool: &SqlitePool, files_dir: &Path, new: NewMedia<'_>) -> Core
         prompt: new.prompt.map(Into::into),
         seed: new.seed.map(|s| s as i64),
         created_at: now(),
+        shared_at: None,
     };
     let saved = sqlx::query(
         "INSERT INTO media (id, account_id, job_id, kind, mime, bytes, path, pack_id, prompt, seed, created_at)
@@ -102,10 +115,12 @@ fn io(e: std::io::Error) -> CoreError {
     CoreError::Invalid(format!("Could not save to the gallery: {e}"))
 }
 
-/// My gallery, newest first. `before` (a created_at) pages back.
+/// My gallery, newest first. `before` (a created_at) pages back; items made in that
+/// same second are included again, so a page boundary never skips any (callers drop
+/// the repeats).
 pub async fn list(pool: &SqlitePool, account_id: &str, limit: i64, before: Option<i64>) -> CoreResult<Vec<Media>> {
     Ok(sqlx::query_as(&format!(
-        "SELECT {COLS} FROM media WHERE account_id = ? AND created_at < ? ORDER BY created_at DESC, rowid DESC LIMIT ?"
+        "SELECT {COLS} FROM media WHERE account_id = ? AND created_at <= ? ORDER BY created_at DESC, rowid DESC LIMIT ?"
     ))
     .bind(account_id)
     .bind(before.unwrap_or(i64::MAX))
@@ -138,6 +153,69 @@ pub async fn get(pool: &SqlitePool, files_dir: &Path, account_id: &str, id: &str
         .fetch_one(pool)
         .await?;
     Ok((m, files_dir.join(rel)))
+}
+
+/// Put one of my items in the shared gallery, or take it out. `as_owner` may change
+/// anyone's (an owner tidying the shared gallery).
+pub async fn set_shared(pool: &SqlitePool, account_id: &str, as_owner: bool, id: &str, shared: bool) -> CoreResult<Media> {
+    let at = shared.then(now);
+    let done = sqlx::query(
+        "UPDATE media SET shared_at = CASE WHEN ? IS NULL THEN NULL ELSE COALESCE(shared_at, ?) END
+         WHERE id = ? AND (account_id = ? OR ?)",
+    )
+    .bind(at)
+    .bind(at)
+    .bind(id)
+    .bind(account_id)
+    .bind(as_owner)
+    .execute(pool)
+    .await?;
+    if done.rows_affected() == 0 {
+        return Err(CoreError::NotFound);
+    }
+    Ok(sqlx::query_as(&format!("SELECT {COLS} FROM media WHERE id = ?"))
+        .bind(id)
+        .fetch_one(pool)
+        .await?)
+}
+
+/// The shared gallery, most recently shared first. `before` (a shared_at) pages back,
+/// repeating that second like [`list`].
+pub async fn list_shared(pool: &SqlitePool, limit: i64, before: Option<i64>) -> CoreResult<Vec<SharedMedia>> {
+    let cols = COLS
+        .split(", ")
+        .map(|c| format!("m.{c}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(sqlx::query_as(&format!(
+        "SELECT {cols}, a.name AS by_name, a.avatar_color AS by_color
+         FROM media m JOIN accounts a ON a.id = m.account_id
+         WHERE m.shared_at IS NOT NULL AND m.shared_at <= ?
+         ORDER BY m.shared_at DESC, m.rowid DESC LIMIT ?"
+    ))
+    .bind(before.unwrap_or(i64::MAX))
+    .bind(limit.clamp(1, 200))
+    .fetch_all(pool)
+    .await?)
+}
+
+/// A shared item and its file, for anyone signed in.
+pub async fn get_shared(pool: &SqlitePool, files_dir: &Path, id: &str) -> CoreResult<(Media, PathBuf)> {
+    let (m, path) = get_any(pool, files_dir, id).await?;
+    if m.shared_at.is_none() {
+        return Err(CoreError::NotFound);
+    }
+    Ok((m, path))
+}
+
+/// Any account's item and its file (the owner's view of every gallery).
+pub async fn get_any(pool: &SqlitePool, files_dir: &Path, id: &str) -> CoreResult<(Media, PathBuf)> {
+    let account_id: String = sqlx::query_scalar("SELECT account_id FROM media WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(CoreError::NotFound)?;
+    get(pool, files_dir, &account_id, id).await
 }
 
 /// Delete one of my items and its file.
@@ -192,6 +270,25 @@ mod tests {
         assert!(matches!(get(&pool, &dir, &eve, &m.id).await, Err(CoreError::NotFound)));
         let (_, path) = get(&pool, &dir, &dan, &m.id).await.unwrap();
         assert!(path.is_file());
+
+        // The owner's view reaches any account's item.
+        assert_eq!(get_any(&pool, &dir, &m.id).await.unwrap().0.account_id, dan);
+        assert!(matches!(get_any(&pool, &dir, "nope").await, Err(CoreError::NotFound)));
+
+        // Sharing: only Dan can share his own; then Eve can open it.
+        assert!(get_shared(&pool, &dir, &m.id).await.is_err());
+        assert!(matches!(set_shared(&pool, &eve, false, &m.id, true).await, Err(CoreError::NotFound)));
+        let shared = set_shared(&pool, &dan, false, &m.id, true).await.unwrap();
+        let first = shared.shared_at.unwrap();
+        assert!(get_shared(&pool, &dir, &m.id).await.is_ok());
+        let everyone = list_shared(&pool, 50, None).await.unwrap();
+        assert_eq!(everyone.len(), 1);
+        assert_eq!(everyone[0].by_name, "Dan");
+        // Sharing again keeps the first time; an owner can take it out.
+        assert_eq!(set_shared(&pool, &dan, false, &m.id, true).await.unwrap().shared_at, Some(first));
+        assert!(set_shared(&pool, &eve, true, &m.id, false).await.unwrap().shared_at.is_none());
+        assert!(list_shared(&pool, 50, None).await.unwrap().is_empty());
+        assert!(get_shared(&pool, &dir, &m.id).await.is_err());
 
         assert!(delete(&pool, &dir, &eve, &m.id).await.is_err());
         delete(&pool, &dir, &dan, &m.id).await.unwrap();

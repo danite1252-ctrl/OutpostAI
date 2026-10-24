@@ -18,6 +18,7 @@ pub mod models;
 mod ollama;
 pub mod packs;
 mod process;
+pub mod rate;
 pub mod types;
 pub mod versions;
 

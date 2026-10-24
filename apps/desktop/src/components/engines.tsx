@@ -94,6 +94,7 @@ export function EngineCard({
   const s = engine.state;
   const p = engine.progress;
   const installed = engine.version !== null;
+  const outdated = installed && engine.version !== engine.pinned_version;
 
   return (
     <article className="flex flex-col gap-4 rounded-2xl border border-line bg-surface p-5">
@@ -107,6 +108,7 @@ export function EngineCard({
       <p className="text-sm text-muted">
         {PURPOSE[engine.id]}{" "}
         {installed ? `Version ${engine.version}.` : s === "external" ? "" : `Installs ${engine.pinned_version}, ${engine.size_hint}.`}
+        {outdated && <span className="text-pick"> Version {engine.pinned_version} is available.</span>}
       </p>
 
       {s === "external" && (
@@ -166,8 +168,8 @@ export function EngineCard({
             </Button>
           )}
           {installed && s !== "installing" && (
-            <Button variant="ghost" onClick={() => void act("install")} disabled={sending}>
-              Reinstall
+            <Button variant={outdated ? "primary" : "ghost"} onClick={() => void act("install")} disabled={sending}>
+              {outdated ? `Update to ${engine.pinned_version}` : "Reinstall"}
             </Button>
           )}
         </div>

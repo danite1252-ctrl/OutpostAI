@@ -120,7 +120,7 @@ const DESKTOP_ORIGINS: [&str; 5] = [
 ];
 
 pub fn router(state: AppState) -> Router {
-    use routes::{accounts, auth, chat, create, engines, health, keys, models, network, openai, setup};
+    use routes::{accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, setup};
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(
@@ -189,7 +189,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/jobs/{id}", get(create::get_job).delete(create::cancel_job))
         .route("/api/gallery", get(create::gallery))
+        .route("/api/gallery/shared", get(create::shared_gallery))
+        .route("/api/media/{id}/share", post(create::share_media))
         .route("/api/media/{id}", get(create::get_media).delete(create::delete_media))
+        .route("/api/downloads", get(downloads::list))
         .route("/api/hardware", get(models::hardware))
         .route("/api/models", get(models::overview))
         .route("/api/models/pull", post(models::pull))

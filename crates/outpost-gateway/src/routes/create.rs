@@ -29,20 +29,19 @@ pub struct PackInfo {
     pub models: PackModels,
     /// How the pack's peak video memory compares with this PC.
     pub fit: Fit,
+    /// The Create tab it belongs to.
+    pub task: packs::Task,
+    /// Outpost's pick for its task on this PC.
+    pub recommended: bool,
+    /// ComfyUI node types this pack needs that the installed ComfyUI lacks: it needs
+    /// a newer ComfyUI. Empty when all are there, or ComfyUI hasn't been seen yet.
+    pub missing_nodes: Vec<String>,
 }
 
 /// Does a pack needing `vram_gb` at its peak run here? ComfyUI can spill to
 /// system memory, so between the two it runs, slowly.
 pub fn pack_fit(vram_gb: f32, hw: &Hardware) -> Fit {
-    let vram = hw.vram_mb as f32 / 1024.0;
-    let ram = hw.ram_mb as f32 / 1024.0;
-    if vram > 0.0 && vram_gb <= vram * 0.98 {
-        Fit::Fits
-    } else if vram_gb <= vram + ram * 0.5 {
-        Fit::Partial
-    } else {
-        Fit::TooLarge
-    }
+    packs::fit(vram_gb, hw.vram_mb as f32 / 1024.0, hw.ram_mb as f32 / 1024.0)
 }
 
 fn pack_or_404(id: &str) -> Result<Pack, ApiError> {
@@ -54,16 +53,41 @@ fn pack_or_404(id: &str) -> Result<Pack, ApiError> {
     responses((status = 200, description = "Packs", body = [PackInfo])))]
 pub async fn list_packs(State(state): State<AppState>, _auth: Auth) -> Json<Vec<PackInfo>> {
     let hw = crate::routes::models::measure(&state).await;
-    Json(
-        packs::built_in()
-            .into_iter()
-            .map(|pack| PackInfo {
-                models: state.assets.status(&pack),
-                fit: pack_fit(pack.vram_gb, &hw),
-                pack,
+    let nodes = state.comfy.node_types().await;
+    Json(pack_infos(&state, &hw, nodes.as_ref().map(|n| &n.nodes)))
+}
+
+fn pack_infos(
+    state: &AppState,
+    hw: &Hardware,
+    comfy_nodes: Option<&std::collections::HashSet<String>>,
+) -> Vec<PackInfo> {
+    let all = packs::built_in();
+    let missing = |p: &Pack| comfy_nodes.map(|have| p.missing_nodes(have)).unwrap_or_default();
+    // A pack this ComfyUI can't run is never the pick.
+    let picks: Vec<String> = packs::Task::ALL
+        .iter()
+        .filter_map(|t| {
+            packs::pick(&all, *t, |p| {
+                if missing(p).is_empty() {
+                    pack_fit(p.vram_gb, hw)
+                } else {
+                    Fit::TooLarge
+                }
             })
-            .collect(),
-    )
+        })
+        .map(|p| p.id.clone())
+        .collect();
+    all.iter()
+        .map(|pack| PackInfo {
+            models: state.assets.status(pack),
+            fit: pack_fit(pack.vram_gb, hw),
+            task: pack.task(),
+            recommended: picks.contains(&pack.id),
+            missing_nodes: missing(pack),
+            pack: pack.clone(),
+        })
+        .collect()
 }
 
 /// Download a pack's models (owner only). Runs in the background; poll `GET /api/packs`.
@@ -165,6 +189,20 @@ pub async fn create_job(
             format!("{}'s models aren't downloaded yet.", pack.name),
         ));
     }
+    if let Some(have) = state.comfy.node_types().await {
+        let missing = pack.missing_nodes(&have.nodes);
+        if !missing.is_empty() {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "comfyui_too_old",
+                format!(
+                    "{} needs a newer ComfyUI (it has no {}). Update ComfyUI in Settings › Engines.",
+                    pack.name,
+                    missing.join(", ")
+                ),
+            ));
+        }
+    }
     // Only the pack's own inputs are kept.
     let mut inputs: serde_json::Map<String, Value> = req
         .inputs
@@ -252,12 +290,15 @@ pub async fn cancel_job(State(state): State<AppState>, auth: Auth, Path(id): Pat
 
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct GalleryQuery {
+    /// Someone else's gallery (owner only).
+    pub account_id: Option<String>,
     pub limit: Option<i64>,
-    /// Show items made before this time (Unix seconds), for paging.
+    /// Show items made up to this time (Unix seconds), for paging. Items from that
+    /// same second come again; drop the ones you already have.
     pub before: Option<i64>,
 }
 
-/// My gallery, newest first.
+/// My gallery, newest first. The owner can ask for any account's.
 #[utoipa::path(get, path = "/api/gallery", tag = "create", security(("bearer" = [])),
     params(GalleryQuery),
     responses((status = 200, description = "Gallery", body = [Media])))]
@@ -266,17 +307,24 @@ pub async fn gallery(
     auth: Auth,
     Query(q): Query<GalleryQuery>,
 ) -> ApiResult<Json<Vec<Media>>> {
+    let account_id = match q.account_id {
+        Some(id) if id != auth.account.id => {
+            auth.require_owner()?;
+            id
+        }
+        _ => auth.account.id.clone(),
+    };
     Ok(Json(
-        media::list(&state.pool, &auth.account.id, q.limit.unwrap_or(60), q.before).await?,
+        media::list(&state.pool, &account_id, q.limit.unwrap_or(60), q.before).await?,
     ))
 }
 
-/// One of my gallery items, as the image or video itself.
+/// One of my gallery items (the owner: anyone's), as the image or video itself.
 #[utoipa::path(get, path = "/api/media/{id}", tag = "create", security(("bearer" = [])),
     params(("id" = String, Path, description = "Media id")),
     responses((status = 200, description = "The file"), (status = 404, description = "Not found", body = ErrorBody)))]
 pub async fn get_media(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Response> {
-    let (m, path) = media::get(&state.pool, &state.config.files_dir(), &auth.account.id, &id).await?;
+    let (m, path) = find_media(&state, &auth, &id, true).await?;
     let data = tokio::fs::read(&path)
         .await
         .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, "not_found", "That file is missing."))?;
@@ -294,12 +342,78 @@ pub async fn get_media(State(state): State<AppState>, auth: Auth, Path(id): Path
         })
 }
 
-/// Delete one of my gallery items.
+/// Mine, for the owner anyone's; for viewing, also anything in the shared gallery.
+async fn find_media(state: &AppState, auth: &Auth, id: &str, viewing: bool) -> ApiResult<(Media, std::path::PathBuf)> {
+    let dir = state.config.files_dir();
+    if auth.require_owner().is_ok() {
+        return Ok(media::get_any(&state.pool, &dir, id).await?);
+    }
+    match media::get(&state.pool, &dir, &auth.account.id, id).await {
+        Err(outpost_core::CoreError::NotFound) if viewing => Ok(media::get_shared(&state.pool, &dir, id).await?),
+        other => Ok(other?),
+    }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct SharedQuery {
+    pub limit: Option<i64>,
+    /// Show items shared up to this time (Unix seconds), for paging; that second repeats.
+    pub before: Option<i64>,
+}
+
+/// The shared gallery: pictures and videos anyone chose to share with everyone here.
+#[utoipa::path(get, path = "/api/gallery/shared", tag = "create", security(("bearer" = [])),
+    params(SharedQuery),
+    responses((status = 200, description = "Shared gallery", body = [outpost_core::media::SharedMedia])))]
+pub async fn shared_gallery(
+    State(state): State<AppState>,
+    _auth: Auth,
+    Query(q): Query<SharedQuery>,
+) -> ApiResult<Json<Vec<outpost_core::media::SharedMedia>>> {
+    Ok(Json(media::list_shared(&state.pool, q.limit.unwrap_or(60), q.before).await?))
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ShareRequest {
+    /// `true` to put it in the shared gallery, `false` to take it out.
+    pub shared: bool,
+}
+
+/// Share one of my items with everyone, or stop sharing it. The owner can take
+/// anyone's out of the shared gallery.
+#[utoipa::path(post, path = "/api/media/{id}/share", tag = "create", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Media id")),
+    request_body = ShareRequest,
+    responses((status = 200, description = "Updated", body = Media), (status = 404, description = "Not found", body = ErrorBody)))]
+pub async fn share_media(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(id): Path<String>,
+    Json(req): Json<ShareRequest>,
+) -> ApiResult<Json<Media>> {
+    let owner = auth.require_owner().is_ok();
+    // An owner may unshare anyone's, but shares only their own.
+    let m = media::set_shared(&state.pool, &auth.account.id, owner && !req.shared, &id, req.shared).await?;
+    Ok(Json(m))
+}
+
+/// Delete one of my gallery items (the owner can delete anyone's).
 #[utoipa::path(delete, path = "/api/media/{id}", tag = "create", security(("bearer" = [])),
     params(("id" = String, Path, description = "Media id")),
     responses((status = 204, description = "Deleted"), (status = 404, description = "Not found", body = ErrorBody)))]
 pub async fn delete_media(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {
-    media::delete(&state.pool, &state.config.files_dir(), &auth.account.id, &id).await?;
+    let (m, _) = find_media(&state, &auth, &id, false).await?;
+    media::delete(&state.pool, &state.config.files_dir(), &m.account_id, &id).await?;
+    if m.account_id != auth.account.id {
+        outpost_core::audit::log_quiet(
+            &state.pool,
+            Some(&auth.account.id),
+            Some(&auth.session.id),
+            "media_delete_other",
+            Some(&id),
+        )
+        .await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -89,6 +89,9 @@ export const icons = {
     "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M19 12h2 M3 12h2 M12 3v2 M12 19v2 M17 7l1.4-1.4 M5.6 18.4L7 17 M17 17l1.4 1.4 M5.6 5.6L7 7",
   lock: "M6 11h12v10H6z M8.5 11V7.5a3.5 3.5 0 0 1 7 0V11",
   back: "M15 5l-7 7 7 7",
+  gallery: "M7 3h14v14 M3 7h14v14H3z M3 17l4-4 3 3 3-3 4 4",
+  download: "M12 4v11 M7 10l5 5 5-5 M5 20h14",
+  close: "M6 6l12 12 M18 6L6 18",
 } as const;
 
 export function Icon({ d, size = 20 }: { d: string; size?: number }) {

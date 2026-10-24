@@ -1,7 +1,9 @@
 {
   "id": "qwen_image_edit",
-  "name": "Qwen-Image-Edit",
+  "name": "Qwen-Image-Edit 2509",
   "lane": "edit_image",
+  "task": "edit",
+  "rank": 20,
   "description": "Change a picture by asking: swap objects, change clothes or backgrounds, restyle, fix text. Keeps the rest as it was.",
   "license": "Apache-2.0",
   "vram_gb": 20,

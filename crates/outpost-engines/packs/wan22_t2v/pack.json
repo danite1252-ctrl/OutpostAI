@@ -1,7 +1,9 @@
 {
   "id": "wan22_t2v",
-  "name": "Wan 2.2 Text to Video",
+  "name": "Wan 2.2 (5B)",
   "lane": "text_to_video",
+  "task": "video",
+  "rank": 10,
   "description": "Short 720p clips (2 to 5 seconds) from a description. Expect several minutes per clip.",
   "license": "Apache-2.0",
   "vram_gb": 12,

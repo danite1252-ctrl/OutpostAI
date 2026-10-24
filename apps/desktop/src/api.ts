@@ -130,6 +130,10 @@ export interface PullState {
   percent: number | null;
   done: boolean;
   error: string | null;
+  part: number;
+  speed_bps: number | null;
+  eta_secs: number | null;
+  finished_at: number | null;
 }
 
 export interface ModelsOverview {
@@ -441,7 +445,15 @@ export interface PackSetup {
   total_bytes: number;
   percent: number | null;
   error: string | null;
+  file_index: number;
+  file_count: number;
+  speed_bps: number | null;
+  eta_secs: number | null;
+  finished_at: number | null;
 }
+
+/** The Create tabs. */
+export type Task = "picture" | "character" | "edit" | "video" | "animate";
 
 export interface Pack {
   id: string;
@@ -459,6 +471,30 @@ export interface Pack {
     setup: PackSetup | null;
   };
   fit: Fit;
+  task: Task;
+  /** Higher is better within a task. */
+  rank: number;
+  /** Outpost's pick for its task on this PC. */
+  recommended: boolean;
+  /** ComfyUI node types it needs that this ComfyUI lacks: update ComfyUI to use it. */
+  missing_nodes: string[];
+}
+
+export interface Download {
+  id: string;
+  kind: "model" | "workflow";
+  name: string;
+  detail: string | null;
+  part: number;
+  parts: number | null;
+  done_bytes: number;
+  total_bytes: number;
+  percent: number | null;
+  speed_bps: number | null;
+  eta_secs: number | null;
+  running: boolean;
+  error: string | null;
+  finished_at: number | null;
 }
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
@@ -474,6 +510,14 @@ export interface Media {
   prompt: string | null;
   seed: number | null;
   created_at: number;
+  /** In the shared gallery since; null while private. */
+  shared_at: number | null;
+}
+
+/** A shared-gallery item, with who shared it. */
+export interface SharedMedia extends Media {
+  by_name: string;
+  by_color: string;
 }
 
 export interface Job {
@@ -492,6 +536,10 @@ export interface Job {
   media: Media[];
 }
 
+export const downloadsApi = {
+  list: (token: string) => request<{ items: Download[]; running: number }>("GET", "/api/downloads", { token }),
+};
+
 export const createApi = {
   packs: (token: string) => request<Pack[]>("GET", "/api/packs", { token }),
   installPack: (token: string, id: string) =>
@@ -502,15 +550,29 @@ export const createApi = {
     request<Job>("POST", "/api/jobs", { token, body: { pack, inputs } }),
   job: (token: string, id: string) => request<Job>("GET", `/api/jobs/${encodeURIComponent(id)}`, { token }),
   cancelJob: (token: string, id: string) => request<void>("DELETE", `/api/jobs/${encodeURIComponent(id)}`, { token }),
-  gallery: (token: string, before?: number) =>
-    request<Media[]>("GET", `/api/gallery?limit=60${before ? `&before=${before}` : ""}`, { token }),
+  /** `accountId`: someone else's gallery (owner only). */
+  gallery: (token: string, before?: number, accountId?: string) =>
+    request<Media[]>(
+      "GET",
+      `/api/gallery?limit=60${before ? `&before=${before}` : ""}${accountId ? `&account_id=${encodeURIComponent(accountId)}` : ""}`,
+      { token },
+    ),
+  sharedGallery: (token: string, before?: number) =>
+    request<SharedMedia[]>("GET", `/api/gallery/shared?limit=60${before ? `&before=${before}` : ""}`, { token }),
+  shareMedia: (token: string, id: string, shared: boolean) =>
+    request<Media>("POST", `/api/media/${encodeURIComponent(id)}/share`, { token, body: { shared } }),
   deleteMedia: (token: string, id: string) =>
     request<void>("DELETE", `/api/media/${encodeURIComponent(id)}`, { token }),
 };
 
-/** Any authenticated file (attachment or gallery item) as an object URL. */
-export async function authedObjectUrl(token: string, path: string): Promise<string> {
+/** Any authenticated file (attachment or gallery item) as a blob. */
+export async function authedBlob(token: string, path: string): Promise<Blob> {
   const res = await fetch(`${GATEWAY}${path}`, { headers: { Authorization: `Bearer ${token}` } }).catch(() => null);
   if (!res || !res.ok) throw new ApiError(res?.status ?? 0, "not_found", "File not found.");
-  return URL.createObjectURL(await res.blob());
+  return res.blob();
+}
+
+/** Any authenticated file (attachment or gallery item) as an object URL. */
+export async function authedObjectUrl(token: string, path: string): Promise<string> {
+  return URL.createObjectURL(await authedBlob(token, path));
 }

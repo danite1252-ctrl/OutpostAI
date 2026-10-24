@@ -9,7 +9,8 @@ Everything runs locally. No cloud models, accounts or services. MIT licensed.
 > Status: **phase 2, Create (in testing).** Phase 1 (chat) is complete: accounts with PINs,
 > the local gateway and API spec, managed Ollama and ComfyUI, the model catalogue, personas,
 > chat with formatted replies and images, memory that learns, app keys for Hermes and network
-> access. Phase 2 adds Create: image and video workflows, a GPU queue and a gallery.
+> access. Phase 2 adds Create: image, edit, character and video workflows picked to suit your
+> graphics card, a GPU queue, a gallery and a downloads list.
 
 ## Layout
 
@@ -116,13 +117,28 @@ Create runs **workflow packs** in ComfyUI. Each pack is a ComfyUI graph (API for
 `pack.json` describing its inputs and model files (`crates/outpost-engines/packs/<id>/`), so
 the desktop app, the phone and other apps all drive it the same way.
 
-| Pack | Makes | Models to download | Video memory |
+Create has a tab per **task**. Each task can have several packs; Outpost picks the
+best-ranked one that fits the graphics card (or, if none fits, the smallest that runs), and
+the Model row lets you switch, coloured like the Models page: blue best for this PC, green
+fits, orange runs slowly (asks before downloading), red too big.
+
+| Task | Pack | Models to download | Video memory |
 | --- | --- | --- | --- |
-| Z-Image Turbo | Photoreal images in 8 steps; takes character LoRAs | about 21 GB | ~14 GB |
-| Qwen-Image | Detailed images that follow long prompts and draw text; Fast (Lightning) or Quality | about 32 GB | ~20 GB (runs slower on 16 GB) |
-| Qwen-Image-Edit | Edits a picture from an instruction | about 31 GB (10 GB shared with Qwen-Image) | ~20 GB (runs slower on 16 GB) |
-| Wan 2.2 Text to Video | 2 to 5 second 720p clips | about 18 GB | ~12 GB |
-| Wan 2.2 Image to Video | Clips that start from your picture | (same files) | ~12 GB |
+| Text to image | Z-Image Turbo: photoreal, 8 steps | about 21 GB | ~14 GB |
+| Text to image | Qwen-Image 2.1 Turbo: posters and lettering, 8 steps, up to 2048 px | about 17 GB | ~11 GB |
+| Text to image | Qwen-Image: long prompts and text; Fast (Lightning) or Quality | about 32 GB | ~20 GB |
+| Characters | Z-Image Turbo with your character LoRA (required) | Z-Image Turbo's files | ~14 GB |
+| Edit | Qwen-Image 2.1 Edit: 8 steps, up to two reference pictures (`<image2>`, `<image3>`) | about 17 GB (shared with 2.1 Turbo) | ~11 GB |
+| Edit | Qwen-Image-Edit 2509: Fast (Lightning) or Quality | about 31 GB | ~20 GB |
+| Video | Wan 2.2 (5B): 2 to 5 second 720p clips | about 18 GB | ~12 GB |
+| Animate | Wan 2.2 (5B), starting from your picture | (same files) | ~12 GB |
+
+Outpost reads ComfyUI's version and node list (`/system_stats`, `/object_info`) and greys out
+any workflow that needs nodes your ComfyUI lacks ("Needs a newer ComfyUI"), offering **Update
+ComfyUI** when Outpost installed it (or saying how, for one you installed yourself). It never
+picks such a workflow, and refuses jobs for it with `comfyui_too_old`. Qwen-Image 2.1 needs a
+recent ComfyUI; Outpost installs 0.42.5, which has it. Its licence is Qwen's research licence; check it before
+commercial use.
 
 - **Models** download from Create, once, into `<data folder>\models\comfyui` (shared between
   packs, resumable, disk space checked first). ComfyUI is pointed there, so reinstalling it
@@ -130,9 +146,16 @@ the desktop app, the phone and other apps all drive it the same way.
 - **The queue** runs one job at a time, oldest first, for everyone. Before a job Outpost
   unloads Ollama's chat model to free the GPU (chat reloads it on the next message), and
   starts ComfyUI if it isn't running. Each account can have 20 jobs waiting.
-- **The gallery** keeps results per account in `<data folder>\files\<account>\gallery`.
+- **The gallery** keeps results per account in `<data folder>\files\<account>\gallery`. It
+  has its own screen with **Mine** and **Shared** tabs (anyone can put one of theirs in
+  the shared gallery with "Share with everyone", and take it out again); only the owner also
+  gets a tab per account, to see everyone's. From a picture you can repeat it ("Use these settings"), edit it or
+  animate it, and image inputs can be picked straight from it.
+- **Downloads**: the button at the top right lists every download (chat models and Create
+  files) with the file it's on, speed and time left.
 - **LoRAs**: put `.safetensors` files in `<data folder>\models\comfyui\loras` and pick them in
-  the form (Z-Image Turbo and Qwen-Image). Start the prompt with the LoRA's trigger word.
+  the form (Characters, or a style LoRA in Z-Image Turbo and Qwen-Image). Start the prompt
+  with the LoRA's trigger word.
 
 ## Training spike
 
@@ -170,13 +193,16 @@ ai-toolkit trains Z-Image Turbo and Wan 2.2 on a 16 GB card. Its scripts live in
 | GET | `/api/files/{id}` | bearer | An attached image (your own only) |
 | GET, POST, DELETE | `/api/keys[/{id}]` | bearer | App keys (owner can make them for service accounts) |
 | GET, PUT | `/api/settings/network` | bearer; PUT owner on this PC | Allow other devices on the network |
-| GET | `/api/packs` | bearer | Workflow packs, their inputs, model status and fit for this PC |
+| GET | `/api/packs` | bearer | Workflow packs, their inputs, model status, fit for this PC, `task`, whether it's the `recommended` pick, and `missing_nodes` (needs a newer ComfyUI) |
 | POST | `/api/packs/{id}/install` | owner | Download a pack's models (background) |
 | GET | `/api/loras` | bearer | LoRA files available to packs |
 | GET, POST | `/api/jobs` | bearer | My jobs (queue position, live progress) / queue one: `{pack, inputs}` |
 | GET, DELETE | `/api/jobs/{id}` | bearer | One job / cancel or stop it |
-| GET | `/api/gallery` | bearer | My pictures and videos, newest first |
-| GET, DELETE | `/api/media/{id}` | bearer | One gallery file / delete it |
+| GET | `/api/gallery` | bearer | My pictures and videos, newest first; `?account_id=` for someone else's (owner only) |
+| GET, DELETE | `/api/media/{id}` | bearer | One gallery file (yours, a shared one, or for the owner anyone's) / delete it (yours; the owner: anyone's) |
+| GET | `/api/gallery/shared` | bearer | The shared gallery, most recently shared first, with who shared each |
+| POST | `/api/media/{id}/share` | bearer | `{"shared": true}` to share one of yours with everyone, `false` to stop (the owner can unshare anyone's) |
+| GET | `/api/downloads` | bearer | Every download, running and finished: file n of m, bytes, speed, time left |
 | GET | `/openapi.json` | none | The full spec |
 
 Security notes: PINs and passwords are hashed with Argon2id; tokens are random 256-bit

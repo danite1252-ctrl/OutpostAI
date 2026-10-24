@@ -14,6 +14,7 @@ import {
 } from "../api";
 import { EngineCard } from "../components/engines";
 import { Button, ErrorNote } from "../components/ui";
+import { downloadsChanged, formatEta, formatSpeed } from "../components/downloads";
 
 const BADGE_LABEL: Record<Badge, string> = {
   vision: "Vision",
@@ -113,8 +114,10 @@ export default function Models({
     setError(null);
     if (kind === "remove" && !window.confirm(`Remove ${model}? You can download it again later.`)) return;
     try {
-      if (kind === "pull") await api.pullModel(token, model);
-      else await api.removeModel(token, model);
+      if (kind === "pull") {
+        await api.pullModel(token, model);
+        downloadsChanged();
+      } else await api.removeModel(token, model);
       void refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong.");
@@ -357,6 +360,8 @@ function CatalogRow({
             {pull.total > 0 && (
               <span>
                 {bytes(pull.completed)} of {bytes(pull.total)}
+                {pull.speed_bps ? ` · ${formatSpeed(pull.speed_bps)}` : ""}
+                {pull.eta_secs != null ? ` · ${formatEta(pull.eta_secs)}` : ""}
               </span>
             )}
           </div>

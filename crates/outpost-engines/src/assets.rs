@@ -51,6 +51,15 @@ pub struct Setup {
     pub total_bytes: u64,
     pub percent: Option<f32>,
     pub error: Option<String>,
+    /// Which missing file is downloading (1-based) and how many there are.
+    pub file_index: u32,
+    pub file_count: u32,
+    /// Bytes a second, once known.
+    pub speed_bps: Option<u64>,
+    /// Seconds left at the current speed.
+    pub eta_secs: Option<u64>,
+    /// When it finished or failed (Unix seconds).
+    pub finished_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -131,6 +140,11 @@ impl AssetStore {
         }
     }
 
+    /// Every pack download since Outpost started, running or finished, by pack id.
+    pub fn all_setups(&self) -> Vec<(String, Setup)> {
+        self.setups().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    }
+
     /// LoRA files in the LoRA folder (`.safetensors`), by name, for packs to offer.
     pub fn loras(&self) -> Vec<String> {
         let mut out: Vec<String> = std::fs::read_dir(self.loras_dir())
@@ -187,6 +201,11 @@ impl AssetStore {
                     total_bytes: total,
                     percent: Some(0.0),
                     error: None,
+                    file_index: 0,
+                    file_count: missing.len() as u32,
+                    speed_bps: None,
+                    eta_secs: None,
+                    finished_at: None,
                 },
             );
         }
@@ -198,6 +217,9 @@ impl AssetStore {
             if let Some(s) = setups.get_mut(&id) {
                 s.running = false;
                 s.current = None;
+                s.speed_bps = None;
+                s.eta_secs = None;
+                s.finished_at = Some(unix_now());
                 match result {
                     Ok(()) => s.percent = Some(100.0),
                     Err(e) => {
@@ -221,9 +243,11 @@ impl AssetStore {
 
     async fn download_all(&self, pack_id: &str, files: &[(ModelFile, PathBuf)]) -> anyhow::Result<()> {
         let mut before: u64 = 0;
-        for (m, path) in files {
+        let mut rate = crate::rate::Rate::new();
+        for (index, (m, path)) in files.iter().enumerate() {
             if let Some(s) = self.setups().get_mut(pack_id) {
                 s.current = Some(m.file.clone());
+                s.file_index = index as u32 + 1;
             }
             // Another pack may be fetching the same file: wait for it, then skip.
             let lock = self.file_lock(path);
@@ -248,6 +272,9 @@ impl AssetStore {
                     if s.total_bytes > 0 {
                         s.percent = Some((s.done_bytes as f32 / s.total_bytes as f32 * 100.0).min(100.0));
                     }
+                    rate.update(s.done_bytes);
+                    s.speed_bps = rate.bytes_per_sec();
+                    s.eta_secs = rate.eta_secs(s.total_bytes.saturating_sub(s.done_bytes));
                 }
             })
             .await
@@ -373,6 +400,13 @@ pub fn extra_model_paths_yaml(root: &Path) -> String {
         out.push_str(&format!("    {f}: {f}\n"));
     }
     out
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

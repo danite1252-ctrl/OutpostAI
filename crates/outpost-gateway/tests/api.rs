@@ -343,6 +343,9 @@ async fn openapi_lists_every_route() {
         "/api/jobs/{id}",
         "/api/gallery",
         "/api/media/{id}",
+        "/api/downloads",
+        "/api/gallery/shared",
+        "/api/media/{id}/share",
     ] {
         assert!(paths.contains_key(p), "missing {p} in OpenAPI spec");
     }
@@ -929,9 +932,34 @@ async fn create_lists_packs_and_checks_jobs() {
         "qwen_image_edit",
         "wan22_t2v",
         "wan22_i2v",
+        "qwen_image_21_edit",
+        "qwen_image_21_turbo",
+        "character_z_image",
     ] {
         assert!(ids.contains(&id.to_string()), "{id} missing");
     }
+    // Each pack says its task once, and each task has at most one pick.
+    for p in packs.as_array().unwrap() {
+        assert!(p["task"].is_string(), "{}", p["id"]);
+        assert!(p["recommended"].is_boolean());
+    }
+    for task in ["picture", "character", "edit", "video", "animate"] {
+        let picks = packs
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["task"] == task && p["recommended"] == true)
+            .count();
+        assert!(picks <= 1, "{task}: {picks} picks");
+    }
+
+    // Nothing downloading yet.
+    let (status, downloads) = call(&app, "GET", "/api/downloads", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK, "{downloads}");
+    assert_eq!(downloads["running"], 0);
+    assert!(downloads["items"].as_array().unwrap().is_empty());
+    let (status, _) = call(&app, "GET", "/api/downloads", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     // Only the owner downloads models.
     let (_, sam) = call(
@@ -953,4 +981,27 @@ async fn create_lists_packs_and_checks_jobs() {
     let sam_token = signed_in["token"].as_str().unwrap();
     let (status, _) = call(&app, "POST", "/api/packs/z_image_turbo/install", Some(sam_token), None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // The owner can open anyone's gallery; others only their own.
+    let sam_id = sam["id"].as_str().unwrap();
+    let (status, list) = call(&app, "GET", &format!("/api/gallery?account_id={sam_id}"), Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let (_, me) = call(&app, "GET", "/api/me", Some(&owner), None).await;
+    let owner_id = me["account"]["id"].as_str().unwrap().to_string();
+    let (status, _) = call(&app, "GET", &format!("/api/gallery?account_id={owner_id}"), Some(sam_token), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = call(&app, "GET", &format!("/api/gallery?account_id={sam_id}"), Some(sam_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, packs) = call(&app, "GET", "/api/packs", Some(sam_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(packs.as_array().unwrap().iter().all(|p| p["missing_nodes"].is_array()));
+
+    // The shared gallery: everyone can read it; sharing needs an item of yours.
+    let (status, shared) = call(&app, "GET", "/api/gallery/shared", Some(sam_token), None).await;
+    assert_eq!(status, StatusCode::OK, "{shared}");
+    assert!(shared.as_array().unwrap().is_empty());
+    let (status, _) = call(&app, "POST", "/api/media/nope/share", Some(sam_token), Some(json!({"shared": true}))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(&app, "GET", "/api/gallery/shared", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

@@ -34,6 +34,14 @@ pub struct PullState {
     pub percent: Option<f32>,
     pub done: bool,
     pub error: Option<String>,
+    /// Which part (layer) is downloading; Ollama doesn't say how many there are.
+    pub part: u32,
+    /// Bytes a second, once known.
+    pub speed_bps: Option<u64>,
+    /// Seconds left on this part at the current speed.
+    pub eta_secs: Option<u64>,
+    /// When it finished or failed (Unix seconds).
+    pub finished_at: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -92,6 +100,8 @@ struct PullLine {
     status: String,
     total: Option<u64>,
     completed: Option<u64>,
+    #[serde(default)]
+    digest: Option<String>,
     error: Option<String>,
 }
 
@@ -231,6 +241,10 @@ impl ModelStore {
                     percent: None,
                     done: false,
                     error: None,
+                    part: 0,
+                    speed_bps: None,
+                    eta_secs: None,
+                    finished_at: None,
                 },
             );
         }
@@ -241,6 +255,12 @@ impl ModelStore {
             let mut pulls = me.pulls();
             if let Some(p) = pulls.get_mut(&model) {
                 p.done = true;
+                p.speed_bps = None;
+                p.eta_secs = None;
+                p.finished_at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_secs() as i64);
                 if let Err(e) = result {
                     p.error = Some(e);
                     p.status = "failed".into();
@@ -267,6 +287,8 @@ impl ModelStore {
         }
         let mut stream = resp.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();
+        let mut rate = crate::rate::Rate::new();
+        let mut digests: Vec<String> = Vec::new();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| format!("Download interrupted: {e}"))?;
             buf.extend_from_slice(&chunk);
@@ -283,11 +305,20 @@ impl ModelStore {
                     if !update.status.is_empty() {
                         p.status = update.status;
                     }
+                    if let Some(d) = update.digest.filter(|d| !digests.contains(d)) {
+                        digests.push(d);
+                        p.part = digests.len() as u32;
+                        // A new part starts its count from zero.
+                        rate.update(0);
+                    }
                     if let (Some(total), Some(done)) = (update.total, update.completed) {
                         if total > 0 {
                             p.total = total;
                             p.completed = done;
                             p.percent = Some((done as f32 / total as f32 * 100.0).min(100.0));
+                            rate.update(done);
+                            p.speed_bps = rate.bytes_per_sec();
+                            p.eta_secs = rate.eta_secs(total.saturating_sub(done));
                         }
                     }
                 }

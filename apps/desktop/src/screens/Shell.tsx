@@ -7,12 +7,16 @@ import Models from "./Models";
 import Chat from "./Chat";
 import Personas from "./Personas";
 import Create from "./Create";
+import Gallery from "./Gallery";
+import { DownloadsButton } from "../components/downloads";
+import type { CreateRequest } from "../components/gallery";
 
-type Section = "chat" | "create" | "train" | "models" | "personas" | "connections" | "settings";
+type Section = "chat" | "create" | "gallery" | "train" | "models" | "personas" | "connections" | "settings";
 
 const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "chat", label: "Chat", icon: icons.chat },
   { id: "create", label: "Create", icon: icons.create },
+  { id: "gallery", label: "Gallery", icon: icons.gallery },
   { id: "train", label: "Train", icon: icons.train },
   { id: "models", label: "Models", icon: icons.models },
   { id: "personas", label: "Personas", icon: icons.personas },
@@ -20,7 +24,7 @@ const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "settings", label: "Settings", icon: icons.settings },
 ];
 
-type Built = "chat" | "personas" | "models" | "settings" | "create";
+type Built = "chat" | "personas" | "models" | "settings" | "create" | "gallery";
 
 const COMING: Record<Exclude<Section, Built>, { phase: number; text: string }> = {
   train: { phase: 4, text: "Training Studio: datasets, vision captions and Z-Image LoRAs." },
@@ -39,6 +43,7 @@ export default function Shell({
   onSignedOutElsewhere: () => void;
 }) {
   const [section, setSection] = useState<Section>("chat");
+  const [createRequest, setCreateRequest] = useState<CreateRequest | null>(null);
   const { status: engines, refresh: refreshEngines } = useEngines(auth.token, onSignedOutElsewhere);
   const ollamaUp = engineReady(engines, "ollama");
   const comfyUp = engineReady(engines, "comfyui");
@@ -92,6 +97,7 @@ export default function Shell({
               ComfyUI
             </span>
           </div>
+          <DownloadsButton token={auth.token} />
           <div className="flex items-center gap-2.5 rounded-xl border border-line bg-surface py-1.5 pr-3 pl-1.5">
             <Avatar name={auth.account.name} color={auth.account.avatar_color} size={32} />
             <span className="flex flex-col leading-tight">
@@ -113,6 +119,22 @@ export default function Shell({
               token={auth.token}
               canManage={auth.account.role === "owner"}
               comfyInstalled={(engines?.engines.find((e) => e.id === "comfyui")?.state ?? "not_installed") !== "not_installed"}
+              comfy={engines?.engines.find((e) => e.id === "comfyui") ?? null}
+              onEnginesChanged={() => void refreshEngines()}
+              request={createRequest}
+              onRequestHandled={() => setCreateRequest(null)}
+              onOpenGallery={() => setSection("gallery")}
+              onUnauthorized={onSignedOutElsewhere}
+            />
+          )}
+          {section === "gallery" && (
+            <Gallery
+              token={auth.token}
+              me={auth.account}
+              onRequest={(r) => {
+                setCreateRequest(r);
+                setSection("create");
+              }}
               onUnauthorized={onSignedOutElsewhere}
             />
           )}

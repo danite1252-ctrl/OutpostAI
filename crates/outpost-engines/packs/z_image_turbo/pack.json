@@ -2,7 +2,7 @@
   "id": "z_image_turbo",
   "name": "Z-Image Turbo",
   "lane": "text_to_image",
-  "description": "Fast, photoreal text-to-image in 8 steps. Works with character LoRAs trained in Outpost or ai-toolkit.",
+  "description": "Fast, photoreal text to image in 8 steps.",
   "license": "Apache-2.0",
   "vram_gb": 14,
   "output": {
@@ -79,7 +79,7 @@
       "key": "lora",
       "label": "Character or style (LoRA)",
       "kind": "lora",
-      "help": "Optional. A Z-Image LoRA from your LoRA folder.",
+      "help": "Optional. A style LoRA from your LoRA folder. For a trained character, use Characters.",
       "default": null,
       "lora": {
         "model_from": [
@@ -135,5 +135,7 @@
         ]
       ]
     }
-  ]
+  ],
+  "task": "picture",
+  "rank": 30
 }

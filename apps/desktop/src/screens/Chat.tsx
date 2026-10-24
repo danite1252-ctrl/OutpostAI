@@ -11,7 +11,18 @@ import {
 } from "../api";
 import { AttachmentImage, prepareImage, type PendingImage } from "../components/images";
 import { Markdown } from "../components/markdown";
+import { ContextPanel } from "../components/context";
 import { Avatar, Button, ErrorNote } from "../components/ui";
+
+const CONTEXT_KEY = "outpost.chat.context";
+
+function loadShowContext() {
+  try {
+    return localStorage.getItem(CONTEXT_KEY) !== "hidden";
+  } catch {
+    return true;
+  }
+}
 
 interface Draft {
   content: string;
@@ -34,6 +45,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
   const [dragging, setDragging] = useState(false);
   const [installed, setInstalled] = useState<InstalledModel[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [showContext, setShowContext] = useState(loadShowContext);
   const filePicker = useRef<HTMLInputElement | null>(null);
   const abort = useRef<AbortController | null>(null);
   const bottom = useRef<HTMLDivElement | null>(null);
@@ -217,6 +229,15 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
     if (activeId) window.setTimeout(() => api.chat(token, activeId).then((r) => setMessages(r.messages), fail), 1500);
   }
 
+  function toggleContext(show: boolean) {
+    setShowContext(show);
+    try {
+      localStorage.setItem(CONTEXT_KEY, show ? "shown" : "hidden");
+    } catch {
+      // Not remembered: it shows again next time.
+    }
+  }
+
   function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -291,6 +312,15 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
             {draft?.model || persona?.model || "default model"}
             {persona?.think ? " · thinking on" : ""}
           </span>
+          {!showContext && (
+            <button
+              type="button"
+              onClick={() => toggleContext(true)}
+              className="ml-auto hidden min-h-9 items-center rounded-lg border border-line px-3 text-sm hover:bg-raised lg:flex"
+            >
+              Context
+            </button>
+          )}
         </header>
 
         <div className="min-h-0 flex-1 overflow-auto">
@@ -387,6 +417,17 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
           </div>
         </div>
       </section>
+
+      {showContext && (
+        <div className="hidden min-h-0 lg:flex">
+          <ContextPanel
+            token={token}
+            persona={persona}
+            refreshKey={messages.length}
+            onClose={() => toggleContext(false)}
+          />
+        </div>
+      )}
     </div>
   );
 }

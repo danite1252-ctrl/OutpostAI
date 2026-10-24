@@ -8,22 +8,46 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { ApiError, createApi, type Job, type Lane, type Media, type Pack, type PackInput } from "../api";
-import { dropCached, Lightbox, prepareImage, useAuthedUrl } from "../components/images";
+import { api, ApiError, createApi, type EngineInfo, type Job, type Media, type Pack, type PackInput, type Task } from "../api";
+import { downloadsChanged, formatBytes, formatEta, formatSpeed } from "../components/downloads";
+import { GalleryGrid, GalleryPicker, mediaAsInput, Viewer, type CreateRequest } from "../components/gallery";
+import { dropCached, prepareImage } from "../components/images";
 import { Button, ErrorNote } from "../components/ui";
 
-const LANE: Record<Lane, string> = {
-  text_to_image: "Text to image",
-  edit_image: "Edit an image",
-  text_to_video: "Text to video",
-  image_to_video: "Image to video",
-};
+const TASKS: { id: Task; label: string; blurb: string }[] = [
+  { id: "picture", label: "Text to image", blurb: "Describe a picture" },
+  { id: "character", label: "Characters", blurb: "Your trained characters" },
+  { id: "edit", label: "Edit", blurb: "Change a picture" },
+  { id: "video", label: "Video", blurb: "Text to video" },
+  { id: "animate", label: "Animate", blurb: "Bring a picture to life" },
+];
 
-const FIT_NOTE = {
-  fits: { text: "Fits your graphics card", style: "text-ok" },
-  partial: { text: "Bigger than your graphics card: runs, but slowly", style: "text-warn" },
-  too_large: { text: "Too big for your machine", style: "text-danger" },
-} as const;
+/** How a workflow fits this PC, in the same colours as the Models page. */
+function fitBadge(p: Pack) {
+  if (p.missing_nodes.length > 0) return { text: "Needs a newer ComfyUI", style: "text-muted", dot: "bg-line" };
+  if (p.fit === "too_large") return { text: "Too big for your machine", style: "text-danger", dot: "bg-danger" };
+  if (p.fit === "partial") return { text: "Bigger than your card: runs slowly", style: "text-warn", dot: "bg-warn" };
+  if (p.recommended) return { text: "Best for this PC", style: "text-pick", dot: "bg-pick" };
+  return { text: "Fits your PC", style: "text-ok", dot: "bg-ok" };
+}
+
+const CHOICE_KEY = "outpost.create.choice";
+
+function loadChoices(): Partial<Record<Task, string>> {
+  try {
+    return JSON.parse(localStorage.getItem(CHOICE_KEY) ?? "{}") as Partial<Record<Task, string>>;
+  } catch {
+    return {};
+  }
+}
+
+function saveChoices(c: Partial<Record<Task, string>>) {
+  try {
+    localStorage.setItem(CHOICE_KEY, JSON.stringify(c));
+  } catch {
+    // Not remembered: Outpost's pick is used next time.
+  }
+}
 
 type Values = Record<string, unknown>;
 
@@ -37,19 +61,40 @@ function defaults(pack: Pack): Values {
   return v;
 }
 
+/** A task's workflows, Outpost's pick first, then best first; ones that can't run last. */
+function packsOf(packs: Pack[], task: Task) {
+  const order = (p: Pack) => (p.fit === "too_large" || p.missing_nodes.length ? 2 : p.fit === "partial" ? 1 : 0);
+  return packs
+    .filter((p) => p.task === task)
+    .sort((a, b) => Number(b.recommended) - Number(a.recommended) || order(a) - order(b) || b.rank - a.rank);
+}
+
 export default function Create({
   token,
   canManage,
   comfyInstalled,
+  comfy,
+  onEnginesChanged,
+  request,
+  onRequestHandled,
+  onOpenGallery,
   onUnauthorized,
 }: {
   token: string;
   canManage: boolean;
   comfyInstalled: boolean;
+  /** ComfyUI's engine card, for its version and the update button. */
+  comfy: EngineInfo | null;
+  onEnginesChanged: () => void;
+  /** Something the Gallery asked for: repeat a picture, or use one as an input. */
+  request: CreateRequest | null;
+  onRequestHandled: () => void;
+  onOpenGallery: () => void;
   onUnauthorized: () => void;
 }) {
   const [packs, setPacks] = useState<Pack[]>([]);
-  const [packId, setPackId] = useState<string | null>(null);
+  const [task, setTask] = useState<Task>("picture");
+  const [choices, setChoices] = useState<Partial<Record<Task, string>>>(loadChoices);
   const [values, setValues] = useState<Values>({});
   const [loras, setLoras] = useState<{ loras: string[]; folder: string }>({ loras: [], folder: "" });
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -58,8 +103,8 @@ export default function Create({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const finishedSeen = useRef<Set<string>>(new Set());
-  // "Use these settings" from another pack: applied once that pack is showing.
-  const pendingReuse = useRef<{ pack: string; values: Values } | null>(null);
+  // Values to apply once a given pack is showing ("Use these settings", "Edit this picture").
+  const pending = useRef<{ pack?: string; task: Task; values?: Values; image?: string } | null>(null);
 
   const fail = useCallback(
     (err: unknown) => {
@@ -99,20 +144,54 @@ export default function Create({
     }, fail);
   }, [token, loadPacks, loadLoras, loadGallery, fail]);
 
-  const pack = packs.find((p) => p.id === packId) ?? packs[0] ?? null;
-  useEffect(() => {
-    if (pack && packId !== pack.id) setPackId(pack.id);
-  }, [pack, packId]);
+  const options = useMemo(() => packsOf(packs, task), [packs, task]);
+  const pack = options.find((p) => p.id === choices[task]) ?? options[0] ?? null;
+
+  function choose(p: Pack) {
+    const next = { ...choices, [p.task]: p.id };
+    setChoices(next);
+    saveChoices(next);
+  }
+
   useEffect(() => {
     if (!pack) return;
-    const reuse = pendingReuse.current;
-    if (reuse && reuse.pack === pack.id) {
-      pendingReuse.current = null;
-      setValues({ ...defaults(pack), ...reuse.values });
+    const want = pending.current;
+    if (want && want.task === pack.task && (!want.pack || want.pack === pack.id)) {
+      pending.current = null;
+      const v: Values = { ...defaults(pack), ...pickKnown(values, pack), ...(want.values ?? {}) };
+      const imageInput = pack.inputs.find((i) => i.kind === "image");
+      if (want.image && imageInput) v[imageInput.key] = want.image;
+      setValues(v);
     } else {
       setValues((v) => ({ ...defaults(pack), ...pickKnown(v, pack) }));
     }
   }, [pack?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Requests from the Gallery screen.
+  useEffect(() => {
+    if (!request || packs.length === 0) return;
+    onRequestHandled();
+    void handle(request);
+  }, [request, packs.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handle(r: CreateRequest) {
+    setError(null);
+    if (r.kind === "reuse") return reuse(r.media);
+    try {
+      const image = await mediaAsInput(token, r.media);
+      pending.current = { task: r.task, image };
+      if (task === r.task && pack) {
+        // Already showing: apply now.
+        const imageInput = pack.inputs.find((i) => i.kind === "image");
+        pending.current = null;
+        if (imageInput) setValues((v) => ({ ...v, [imageInput.key]: image }));
+      } else {
+        setTask(r.task);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That picture couldn't be used.");
+    }
+  }
 
   // Poll while something is moving: jobs queued or running, or models downloading.
   const active = jobs.some((j) => j.status === "queued" || j.status === "running");
@@ -148,9 +227,33 @@ export default function Create({
 
   async function install(p: Pack) {
     setError(null);
+    if (
+      p.fit === "partial" &&
+      !window.confirm(
+        `${p.name} needs about ${p.vram_gb} GB of video memory, more than your graphics card has. It will run, but slowly. Download it anyway?`,
+      )
+    )
+      return;
     try {
       await createApi.installPack(token, p.id);
+      downloadsChanged();
       await loadPacks();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function updateComfy() {
+    if (
+      !window.confirm(
+        "Update ComfyUI now? It stops for a few minutes while the new version installs, and a running job is stopped. Your models and gallery stay.",
+      )
+    )
+      return;
+    setError(null);
+    try {
+      await api.engineAction(token, "comfyui", "install");
+      onEnginesChanged();
     } catch (err) {
       fail(err);
     }
@@ -177,6 +280,16 @@ export default function Create({
     }
   }
 
+  async function share(m: Media, shared: boolean) {
+    try {
+      const updated = await createApi.shareMedia(token, m.id, shared);
+      setGallery((g) => g.map((x) => (x.id === m.id ? updated : x)));
+      setViewing(updated);
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   /** Fill the form with everything a picture was made with (pictures it was given aren't kept). */
   async function reuse(m: Media) {
     setViewing(null);
@@ -193,14 +306,16 @@ export default function Create({
         // Older item or job gone: prompt and seed are enough.
       }
     }
-    const target = m.pack_id && packs.some((p) => p.id === m.pack_id) ? m.pack_id : pack?.id;
+    const target = packs.find((p) => p.id === m.pack_id) ?? pack;
     if (!target) return;
-    if (target === pack?.id) {
+    if (target.id === pack?.id) {
       setValues((v) => ({ ...v, ...restored }));
-    } else {
-      pendingReuse.current = { pack: target, values: restored };
-      setPackId(target);
+      return;
     }
+    pending.current = { pack: target.id, task: target.task, values: restored };
+    // Show the workflow that made it, for this once (the saved choice stays).
+    setChoices((c) => ({ ...c, [target.task]: target.id }));
+    setTask(target.task);
   }
 
   const queue = jobs.filter((j) => j.status === "queued" || j.status === "running");
@@ -211,7 +326,7 @@ export default function Create({
       <div>
         <h1 className="text-2xl font-semibold">Create</h1>
         <p className="text-sm text-muted">
-          Make images on this PC. Jobs wait their turn for the graphics card, so chat may pause while one runs.
+          Make pictures and videos on this PC. Jobs wait their turn for the graphics card, so chat may pause while one runs.
         </p>
       </div>
       {!comfyInstalled && (
@@ -220,21 +335,34 @@ export default function Create({
         </p>
       )}
       <ErrorNote>{error}</ErrorNote>
+      {comfy?.managed && comfy.version && comfy.version !== comfy.pinned_version && comfy.state !== "installing" && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-pick/40 bg-surface p-4 text-sm" role="status">
+          <span className="flex-1">
+            ComfyUI {comfy.pinned_version} is available (you have {comfy.version}). Newer workflows may need it.
+          </span>
+          {canManage && <Button onClick={() => void updateComfy()}>Update ComfyUI</Button>}
+        </div>
+      )}
+      {comfy?.state === "installing" && (
+        <p className="rounded-2xl border border-line bg-surface p-4 text-sm" role="status">
+          ComfyUI is updating. Workflows come back when it's done (see Settings › Engines for progress).
+        </p>
+      )}
 
-      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Workflow">
-        {packs.map((p) => (
+      <div className="flex flex-wrap gap-2" role="tablist" aria-label="What to make">
+        {TASKS.map((t) => (
           <button
-            key={p.id}
+            key={t.id}
             type="button"
             role="tab"
-            aria-selected={p.id === pack?.id}
-            onClick={() => setPackId(p.id)}
+            aria-selected={t.id === task}
+            onClick={() => setTask(t.id)}
             className={`flex min-h-11 flex-col items-start rounded-xl border px-4 py-2 text-left ${
-              p.id === pack?.id ? "border-ember bg-raised" : "border-line bg-surface hover:bg-raised"
+              t.id === task ? "border-ember bg-raised" : "border-line bg-surface hover:bg-raised"
             }`}
           >
-            <span className="text-sm font-semibold">{p.name}</span>
-            <span className="text-xs text-muted">{LANE[p.lane]}</span>
+            <span className="text-sm font-semibold">{t.label}</span>
+            <span className="text-xs text-muted">{t.blurb}</span>
           </button>
         ))}
       </div>
@@ -242,16 +370,24 @@ export default function Create({
       {pack && (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="flex flex-col gap-4 rounded-2xl border border-line bg-surface p-5">
+            <ModelPicker options={options} current={pack} onChoose={choose} />
             <div>
-              <h2 className="text-lg font-semibold">{pack.name}</h2>
               <p className="text-sm text-soft">{pack.description}</p>
-              <p className={`mt-1 text-xs ${FIT_NOTE[pack.fit].style}`}>
-                {FIT_NOTE[pack.fit].text} · needs about {pack.vram_gb} GB of video memory
-                {pack.license ? ` · ${pack.license}` : ""}
+              <p className={`mt-1 text-xs ${fitBadge(pack).style}`}>
+                {fitBadge(pack).text} · needs about {pack.vram_gb} GB of video memory
+                {pack.license ? ` · ${pack.license} licence` : ""}
               </p>
             </div>
-            {pack.models.ready ? (
+            {pack.missing_nodes.length > 0 ? (
+              <NeedsNewerComfy
+                pack={pack}
+                comfy={comfy}
+                canManage={canManage}
+                onUpdate={() => void updateComfy()}
+              />
+            ) : pack.models.ready ? (
               <PackForm
+                token={token}
                 pack={pack}
                 values={values}
                 loras={loras}
@@ -283,17 +419,18 @@ export default function Create({
       )}
 
       <div className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">Gallery</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="flex-1 text-lg font-semibold">Recent</h2>
+          {gallery.length > 0 && (
+            <Button variant="ghost" onClick={onOpenGallery}>
+              Open the gallery
+            </Button>
+          )}
+        </div>
         {gallery.length === 0 ? (
           <p className="text-sm text-muted">Your pictures will appear here. They're private to your account.</p>
         ) : (
-          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {gallery.map((m) => (
-              <li key={m.id}>
-                <Thumb token={token} media={m} onOpen={() => setViewing(m)} />
-              </li>
-            ))}
-          </ul>
+          <GalleryGrid token={token} items={gallery.slice(0, 10)} onOpen={setViewing} />
         )}
       </div>
 
@@ -301,8 +438,13 @@ export default function Create({
         <Viewer
           token={token}
           media={viewing}
+          packName={packs.find((p) => p.id === viewing.pack_id)?.name}
           onClose={() => setViewing(null)}
-          onReuse={() => void reuse(viewing)}
+          onRequest={(r) => {
+            setViewing(null);
+            void handle(r);
+          }}
+          onShare={(shared) => void share(viewing, shared)}
           onDelete={() => void remove(viewing)}
         />
       )}
@@ -310,46 +452,143 @@ export default function Create({
   );
 }
 
-/** Keep values whose keys the pack has (when switching packs, the prompt carries over). */
+/** Keep values whose keys the new pack also has: prompts and chosen pictures carry over. */
 function pickKnown(v: Values, pack: Pack): Values {
   const out: Values = {};
-  for (const i of pack.inputs) if (i.key in v && i.kind === "text") out[i.key] = v[i.key];
+  for (const i of pack.inputs) if (i.key in v && (i.kind === "text" || i.kind === "image") && v[i.key]) out[i.key] = v[i.key];
   return out;
+}
+
+/** A workflow this ComfyUI can't run: say why, and offer the update when Outpost manages ComfyUI. */
+function NeedsNewerComfy({
+  pack,
+  comfy,
+  canManage,
+  onUpdate,
+}: {
+  pack: Pack;
+  comfy: EngineInfo | null;
+  canManage: boolean;
+  onUpdate: () => void;
+}) {
+  const managed = comfy?.managed ?? false;
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-line bg-night p-4 text-sm">
+      <p>
+        <b>{pack.name}</b> needs a newer ComfyUI{comfy?.version ? ` than ${comfy.version}` : ""}. It's missing{" "}
+        <span className="font-mono text-xs">{pack.missing_nodes.join(", ")}</span>.
+      </p>
+      {managed ? (
+        canManage ? (
+          <>
+            <p className="text-muted">
+              Updating installs ComfyUI {comfy?.pinned_version} in a few minutes. Models and the gallery stay.
+            </p>
+            <Button onClick={onUpdate} className="self-start">
+              {comfy?.version === comfy?.pinned_version ? "Reinstall ComfyUI" : "Update ComfyUI"}
+            </Button>
+          </>
+        ) : (
+          <p className="text-muted">Ask the owner to update ComfyUI.</p>
+        )
+      ) : (
+        <p className="text-muted">
+          This ComfyUI is one you installed yourself, so Outpost can't update it. Update it (for example with ComfyUI
+          Manager or <span className="font-mono">git pull</span>), restart it, then reopen Create. Or pick another model
+          above.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The task's workflows, coloured by how they fit; Outpost's pick is marked. */
+function ModelPicker({ options, current, onChoose }: { options: Pack[]; current: Pack; onChoose: (p: Pack) => void }) {
+  if (options.length <= 1) return <h2 className="text-lg font-semibold">{current.name}</h2>;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span id="model-picker" className="text-sm text-muted">
+        Model
+      </span>
+      <div className="flex flex-wrap gap-2" role="radiogroup" aria-labelledby="model-picker">
+        {options.map((p) => {
+          const badge = fitBadge(p);
+          const blocked = p.fit === "too_large";
+          return (
+            <button
+              key={p.id}
+              type="button"
+              role="radio"
+              aria-checked={p.id === current.id}
+              disabled={blocked}
+              onClick={() => onChoose(p)}
+              title={badge.text}
+              className={`flex min-h-11 items-center gap-2 rounded-xl border px-3 py-1.5 text-left ${
+                p.id === current.id ? "border-ember bg-raised" : "border-line hover:bg-raised"
+              } ${blocked ? "cursor-not-allowed opacity-45" : ""}`}
+            >
+              <span className={`size-2.5 shrink-0 rounded-full ${badge.dot}`} aria-hidden="true" />
+              <span className="flex flex-col leading-tight">
+                <span className="text-sm font-semibold">{p.name}</span>
+                <span className={`text-xs ${badge.style}`}>
+                  {badge.text}
+                  {p.models.ready ? "" : ` · ${p.models.missing_gb.toFixed(1)} GB to download`}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function ModelSetup({ pack, canManage, onInstall }: { pack: Pack; canManage: boolean; onInstall: () => void }) {
   const s = pack.models.setup;
   const running = s?.running ?? false;
+  const line = s
+    ? [
+        s.file_count > 1 ? `File ${Math.max(1, s.file_index)} of ${s.file_count}` : null,
+        `${formatBytes(s.done_bytes)} of ${formatBytes(s.total_bytes)}`,
+        s.speed_bps ? formatSpeed(s.speed_bps) : null,
+        s.eta_secs != null ? formatEta(s.eta_secs) : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm">
         This workflow needs <b>{pack.models.missing_gb.toFixed(1)} GB</b> of model files before its first picture. They
-        download once and stay in Outpost's models folder.
+        download once and stay in Outpost's models folder; files another workflow already has aren't fetched again.
       </p>
       <ul className="flex flex-col gap-1 text-sm">
         {pack.models.files.map((f) => (
           <li key={f.file} className="flex items-center gap-2">
             <span className={f.present ? "text-ok" : "text-muted"}>{f.present ? "✓" : "○"}</span>
-            <span className="font-mono text-xs">{f.file}</span>
-            <span className="text-xs text-muted">· {f.size_gb} GB</span>
+            <span className="font-mono text-xs break-all">{f.file}</span>
+            <span className="shrink-0 text-xs text-muted">· {f.size_gb} GB</span>
           </li>
         ))}
       </ul>
       {running && s && (
         <div className="flex flex-col gap-1.5" aria-live="polite">
           <div className="h-2 overflow-hidden rounded-full bg-raised">
-            <div className="h-2 rounded-full bg-ember transition-all" style={{ width: `${s.percent ?? 0}%` }} />
+            <div className="h-2 rounded-full bg-pick transition-all" style={{ width: `${s.percent ?? 0}%` }} />
           </div>
-          <span className="text-xs text-muted">
-            {s.current ? `Downloading ${s.current}` : "Starting"} · {gb(s.done_bytes)} of {gb(s.total_bytes)}
-          </span>
+          <span className="text-xs text-muted">{s.current ? `Downloading ${s.current}` : "Starting"}</span>
+          <span className="text-xs text-soft">{line}</span>
         </div>
       )}
       {s?.error && !running && <p className="text-sm text-danger">{s.error}</p>}
       {canManage ? (
         !running && (
           <Button onClick={onInstall} disabled={pack.fit === "too_large"}>
-            {s?.error ? "Try again" : `Download ${pack.models.missing_gb.toFixed(1)} GB`}
+            {pack.fit === "too_large"
+              ? "Too big for your machine"
+              : s?.error
+                ? "Try again"
+                : `Download ${pack.models.missing_gb.toFixed(1)} GB`}
           </Button>
         )
       ) : (
@@ -359,11 +598,8 @@ function ModelSetup({ pack, canManage, onInstall }: { pack: Pack; canManage: boo
   );
 }
 
-function gb(bytes: number) {
-  return `${(bytes / 1e9).toFixed(1)} GB`;
-}
-
 function PackForm({
+  token,
   pack,
   values,
   loras,
@@ -372,6 +608,7 @@ function PackForm({
   onRefreshLoras,
   onSubmit,
 }: {
+  token: string;
   pack: Pack;
   values: Values;
   loras: { loras: string[]; folder: string };
@@ -383,19 +620,25 @@ function PackForm({
   const basic = pack.inputs.filter((i) => !i.advanced);
   const advanced = pack.inputs.filter((i) => i.advanced);
   const missingRequired = pack.inputs.some((i) => i.required && !values[i.key]);
+  const field = (i: PackInput) => (
+    <InputField
+      key={i.key}
+      token={token}
+      input={i}
+      value={values[i.key]}
+      loras={loras}
+      onChange={onChange}
+      onRefreshLoras={onRefreshLoras}
+      onSubmit={onSubmit}
+    />
+  );
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
-      {basic.map((i) => (
-        <InputField key={i.key} input={i} value={values[i.key]} loras={loras} onChange={onChange} onRefreshLoras={onRefreshLoras} onSubmit={onSubmit} />
-      ))}
+      {basic.map(field)}
       {advanced.length > 0 && (
         <details className="flex flex-col gap-3">
           <summary className="cursor-pointer text-sm text-muted">More settings</summary>
-          <div className="mt-3 flex flex-col gap-4">
-            {advanced.map((i) => (
-              <InputField key={i.key} input={i} value={values[i.key]} loras={loras} onChange={onChange} onRefreshLoras={onRefreshLoras} onSubmit={onSubmit} />
-            ))}
-          </div>
+          <div className="mt-3 flex flex-col gap-4">{advanced.map(field)}</div>
         </details>
       )}
       <div className="flex items-center gap-3">
@@ -409,6 +652,7 @@ function PackForm({
 }
 
 function InputField({
+  token,
   input: i,
   value,
   loras,
@@ -416,6 +660,7 @@ function InputField({
   onRefreshLoras,
   onSubmit,
 }: {
+  token: string;
   input: PackInput;
   value: unknown;
   loras: { loras: string[]; folder: string };
@@ -549,18 +794,22 @@ function InputField({
         </div>
       );
     case "image":
-      return <ImageField id={id} label={label} help={help} value={value as string | null} onPick={(v) => onChange(i.key, v)} />;
+      return (
+        <ImageField token={token} id={id} label={label} help={help} value={value as string | null} onPick={(v) => onChange(i.key, v)} />
+      );
   }
 }
 
 /** Pick, paste or drop a picture; it is sent with the job (large photos are shrunk). */
 function ImageField({
+  token,
   id,
   label,
   help,
   value,
   onPick,
 }: {
+  token: string;
   id: string;
   label: ReactNode;
   help: ReactNode;
@@ -569,6 +818,7 @@ function ImageField({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [over, setOver] = useState(false);
+  const [choosing, setChoosing] = useState(false);
   const picker = useRef<HTMLInputElement | null>(null);
   async function take(file: File | undefined) {
     if (!file) return;
@@ -599,7 +849,7 @@ function ImageField({
         {value ? (
           <img src={value} alt="Chosen picture" className="h-28 max-w-[50%] rounded-lg object-contain" />
         ) : (
-          <span className="flex-1 text-sm text-muted">Drop a picture here, paste one, or choose a file.</span>
+          <span className="flex-1 text-sm text-muted">Drop a picture here, paste one, or choose one.</span>
         )}
         <div className="flex flex-col gap-2">
           <input
@@ -616,6 +866,9 @@ function ImageField({
           <Button variant="ghost" onClick={() => picker.current?.click()}>
             {value ? "Change" : "Choose…"}
           </Button>
+          <Button variant="ghost" onClick={() => setChoosing(true)}>
+            From gallery…
+          </Button>
           {value && (
             <Button variant="ghost" onClick={() => onPick(null)}>
               Remove
@@ -625,6 +878,19 @@ function ImageField({
       </div>
       {error && <span className="text-xs text-danger">{error}</span>}
       {help}
+      {choosing && (
+        <GalleryPicker
+          token={token}
+          onClose={() => setChoosing(false)}
+          onPick={(m) => {
+            setChoosing(false);
+            setError(null);
+            mediaAsInput(token, m).then(onPick, (e: unknown) =>
+              setError(e instanceof Error ? e.message : "That picture couldn't be used."),
+            );
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -688,73 +954,5 @@ function JobRow({ job: j, packs, onCancel }: { job: Job; packs: Pack[]; onCancel
       )}
       {j.status === "failed" && j.error && <p className="text-sm text-danger">{j.error}</p>}
     </li>
-  );
-}
-
-function Thumb({ token, media: m, onOpen }: { token: string; media: Media; onOpen: () => void }) {
-  const { src, failed } = useAuthedUrl(token, `/api/media/${m.id}`);
-  const box = "aspect-square w-full overflow-hidden rounded-xl border border-line bg-raised";
-  if (failed) return <div className={`${box} flex items-center justify-center text-xs text-muted`}>Missing</div>;
-  if (!src) return <div className={`${box} animate-pulse`} />;
-  return (
-    <button type="button" onClick={onOpen} className={`${box} block hover:border-ember`} title={m.prompt ?? undefined}>
-      {m.kind === "video" ? (
-        <video src={src} muted playsInline className="h-full w-full object-cover" />
-      ) : (
-        <img src={src} alt={m.prompt ?? "Generated image"} className="h-full w-full object-cover" loading="lazy" />
-      )}
-    </button>
-  );
-}
-
-function Viewer({
-  token,
-  media: m,
-  onClose,
-  onReuse,
-  onDelete,
-}: {
-  token: string;
-  media: Media;
-  onClose: () => void;
-  onReuse: () => void;
-  onDelete: () => void;
-}) {
-  const { src } = useAuthedUrl(token, `/api/media/${m.id}`);
-  const [big, setBig] = useState(false);
-  useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  return (
-    <div role="dialog" aria-modal="true" aria-label="Picture" className="fixed inset-0 z-40 flex bg-black/80 p-6" onClick={onClose}>
-      <div className="mx-auto flex max-h-full w-full max-w-5xl flex-col gap-4 lg:flex-row" onClick={(e) => e.stopPropagation()}>
-        <div className="flex min-h-0 flex-1 items-center justify-center">
-          {src &&
-            (m.kind === "video" ? (
-              <video src={src} controls autoPlay loop className="max-h-full max-w-full rounded-xl" />
-            ) : (
-              <button type="button" onClick={() => setBig(true)} className="max-h-full">
-                <img src={src} alt={m.prompt ?? "Generated image"} className="max-h-[80vh] max-w-full rounded-xl object-contain" />
-              </button>
-            ))}
-        </div>
-        <aside className="flex w-full flex-col gap-3 rounded-2xl border border-line bg-surface p-4 lg:w-72">
-          <p className="text-sm whitespace-pre-wrap">{m.prompt || "No prompt"}</p>
-          <p className="font-mono text-xs text-muted">
-            {m.pack_id} · seed {m.seed ?? "—"} · {new Date(m.created_at * 1000).toLocaleString()}
-          </p>
-          <Button onClick={onReuse}>Use these settings</Button>
-          <Button variant="danger" onClick={onDelete}>
-            Delete
-          </Button>
-          <Button variant="ghost" onClick={onClose}>
-            Close
-          </Button>
-        </aside>
-        {big && src && <Lightbox src={src} alt={m.prompt ?? "Generated image"} onClose={() => setBig(false)} />}
-      </div>
-    </div>
   );
 }

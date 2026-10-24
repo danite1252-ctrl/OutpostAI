@@ -3,7 +3,7 @@ use utoipa::{Modify, OpenApi};
 
 use crate::error::{ErrorBody, ErrorDetail};
 use crate::routes::{
-    accounts, auth, chat, create, engines, health, keys, models, network, openai, setup, SignInResponse,
+    accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, setup, SignInResponse,
 };
 
 #[derive(OpenApi)]
@@ -64,8 +64,11 @@ use crate::routes::{
         create::get_job,
         create::cancel_job,
         create::gallery,
+        create::shared_gallery,
+        create::share_media,
         create::get_media,
         create::delete_media,
+        downloads::list,
         network::set_network,
     ),
     components(schemas(
