@@ -6,6 +6,7 @@ import Settings from "./Settings";
 import Models from "./Models";
 import Chat from "./Chat";
 import Personas from "./Personas";
+import Create from "./Create";
 
 type Section = "chat" | "create" | "train" | "models" | "personas" | "connections" | "settings";
 
@@ -19,10 +20,9 @@ const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "settings", label: "Settings", icon: icons.settings },
 ];
 
-type Built = "chat" | "personas" | "models" | "settings";
+type Built = "chat" | "personas" | "models" | "settings" | "create";
 
 const COMING: Record<Exclude<Section, Built>, { phase: number; text: string }> = {
-  create: { phase: 2, text: "Qwen-Image, Z-Image and Wan 2.2 workflows, with a shared GPU queue." },
   train: { phase: 4, text: "Training Studio: datasets, vision captions and Z-Image LoRAs." },
   connections: { phase: 3, text: "Pair your phone over Wi-Fi, Tailscale or Cloudflare." },
 };
@@ -108,6 +108,14 @@ export default function Shell({
         )}
         <main className={`min-h-0 flex-1 overflow-auto p-8 ${section === "chat" ? "hidden" : ""}`}>
           {section === "personas" && <Personas token={auth.token} />}
+          {section === "create" && (
+            <Create
+              token={auth.token}
+              canManage={auth.account.role === "owner"}
+              comfyInstalled={(engines?.engines.find((e) => e.id === "comfyui")?.state ?? "not_installed") !== "not_installed"}
+              onUnauthorized={onSignedOutElsewhere}
+            />
+          )}
           {section === "models" && (
             <Models
               token={auth.token}
@@ -125,7 +133,7 @@ export default function Shell({
               onSignedOut={onSignedOutElsewhere}
             />
           )}
-          {section !== "models" && section !== "settings" && section !== "chat" && section !== "personas" && (
+          {(section === "train" || section === "connections") && (
             <ComingSoon label={NAV.find((n) => n.id === section)!.label} {...COMING[section]} />
           )}
         </main>

@@ -10,6 +10,8 @@ pub mod auth;
 pub mod chats;
 pub mod db;
 pub mod error;
+pub mod jobs;
+pub mod media;
 pub mod memory;
 pub mod personas;
 pub mod secret;

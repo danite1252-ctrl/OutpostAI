@@ -6,7 +6,9 @@
 //! installed Ollama themselves), Outpost uses that one and marks it `external`.
 
 mod archive;
+pub mod assets;
 pub mod catalog;
+pub mod comfy;
 mod comfyui;
 mod download;
 pub mod gpu;
@@ -14,6 +16,7 @@ pub mod hardware;
 mod manager;
 pub mod models;
 mod ollama;
+pub mod packs;
 mod process;
 pub mod types;
 pub mod versions;

@@ -414,3 +414,103 @@ export async function fileObjectUrl(token: string, id: string): Promise<string> 
 /** Max images per message and size each, matching the gateway. */
 export const MAX_IMAGES = 4;
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+// ---------------------------------------------------------------- Create
+
+export type Lane = "text_to_image" | "edit_image" | "text_to_video" | "image_to_video";
+export type InputKind = "text" | "size" | "integer" | "number" | "seed" | "choice" | "image" | "lora";
+
+export interface PackInput {
+  key: string;
+  label: string;
+  kind: InputKind;
+  help: string | null;
+  default: unknown;
+  required: boolean;
+  options: string[];
+  min: number | null;
+  max: number | null;
+  step: number | null;
+  advanced: boolean;
+}
+
+export interface PackSetup {
+  running: boolean;
+  current: string | null;
+  done_bytes: number;
+  total_bytes: number;
+  percent: number | null;
+  error: string | null;
+}
+
+export interface Pack {
+  id: string;
+  name: string;
+  lane: Lane;
+  description: string;
+  license: string | null;
+  vram_gb: number;
+  output: { node: string; kind: "image" | "video" };
+  inputs: PackInput[];
+  models: {
+    ready: boolean;
+    files: { file: string; folder: string; size_gb: number; present: boolean }[];
+    missing_gb: number;
+    setup: PackSetup | null;
+  };
+  fit: Fit;
+}
+
+export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
+
+export interface Media {
+  id: string;
+  account_id: string;
+  job_id: string | null;
+  kind: "image" | "video";
+  mime: string;
+  bytes: number;
+  pack_id: string | null;
+  prompt: string | null;
+  seed: number | null;
+  created_at: number;
+}
+
+export interface Job {
+  id: string;
+  account_id: string;
+  pack_id: string;
+  inputs: string;
+  status: JobStatus;
+  error: string | null;
+  seed: number | null;
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+  position: number | null;
+  progress: { phase: string; step: number; steps: number; percent: number | null } | null;
+  media: Media[];
+}
+
+export const createApi = {
+  packs: (token: string) => request<Pack[]>("GET", "/api/packs", { token }),
+  installPack: (token: string, id: string) =>
+    request<void>("POST", `/api/packs/${encodeURIComponent(id)}/install`, { token }),
+  loras: (token: string) => request<{ loras: string[]; folder: string }>("GET", "/api/loras", { token }),
+  jobs: (token: string) => request<Job[]>("GET", "/api/jobs?limit=30", { token }),
+  createJob: (token: string, pack: string, inputs: Record<string, unknown>) =>
+    request<Job>("POST", "/api/jobs", { token, body: { pack, inputs } }),
+  job: (token: string, id: string) => request<Job>("GET", `/api/jobs/${encodeURIComponent(id)}`, { token }),
+  cancelJob: (token: string, id: string) => request<void>("DELETE", `/api/jobs/${encodeURIComponent(id)}`, { token }),
+  gallery: (token: string, before?: number) =>
+    request<Media[]>("GET", `/api/gallery?limit=60${before ? `&before=${before}` : ""}`, { token }),
+  deleteMedia: (token: string, id: string) =>
+    request<void>("DELETE", `/api/media/${encodeURIComponent(id)}`, { token }),
+};
+
+/** Any authenticated file (attachment or gallery item) as an object URL. */
+export async function authedObjectUrl(token: string, path: string): Promise<string> {
+  const res = await fetch(`${GATEWAY}${path}`, { headers: { Authorization: `Bearer ${token}` } }).catch(() => null);
+  if (!res || !res.ok) throw new ApiError(res?.status ?? 0, "not_found", "File not found.");
+  return URL.createObjectURL(await res.blob());
+}

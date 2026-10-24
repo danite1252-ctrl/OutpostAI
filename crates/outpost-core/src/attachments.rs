@@ -200,6 +200,30 @@ pub async fn paths_for_message(pool: &SqlitePool, files_dir: &Path, message_id: 
     Ok(rows.into_iter().map(|(p,)| files_dir.join(p)).collect())
 }
 
+/// Keep an image given to a Create job (e.g. the picture to edit) until the job runs.
+/// Returns its path relative to `files_dir`: `<account_id>/inputs/<id>.<ext>`.
+pub async fn save_job_input(files_dir: &Path, account_id: &str, image: &ImageUpload) -> CoreResult<String> {
+    let rel = format!("{account_id}/inputs/{}.{}", uuid::Uuid::new_v4(), extension(image.mime));
+    let full = files_dir.join(&rel);
+    if let Some(parent) = full.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(io)?;
+    }
+    tokio::fs::write(&full, &image.data).await.map_err(io)?;
+    Ok(rel)
+}
+
+/// Read back a job input saved by [`save_job_input`], only from that account's inputs.
+pub async fn read_job_input(files_dir: &Path, account_id: &str, rel: &str) -> CoreResult<Vec<u8>> {
+    let prefix = format!("{account_id}/inputs/");
+    let name = rel.strip_prefix(&prefix).ok_or(CoreError::NotFound)?;
+    if name.is_empty() || name.contains(['/', '\\']) || name.contains("..") {
+        return Err(CoreError::NotFound);
+    }
+    tokio::fs::read(files_dir.join(rel))
+        .await
+        .map_err(|_| CoreError::NotFound)
+}
+
 /// Delete files; missing ones are fine.
 pub async fn remove_files(paths: &[PathBuf]) {
     for p in paths {
@@ -248,6 +272,20 @@ mod tests {
         assert!(matches!(decode_image("%%%not base64%%%"), Err(CoreError::Invalid(_))));
         assert_eq!(sniff_image(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image/jpeg"));
         assert_eq!(sniff_image(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+    }
+
+    #[tokio::test]
+    async fn job_inputs_stay_in_their_account() {
+        let dir = std::env::temp_dir().join(format!("outpost-inputs-{}", uuid::Uuid::new_v4()));
+        let img = decode_image(TINY_PNG).unwrap();
+        let rel = save_job_input(&dir, "dan", &img).await.unwrap();
+        assert!(rel.starts_with("dan/inputs/") && rel.ends_with(".png"));
+        assert_eq!(read_job_input(&dir, "dan", &rel).await.unwrap(), img.data);
+        assert!(read_job_input(&dir, "eve", &rel).await.is_err());
+        assert!(read_job_input(&dir, "dan", "dan/inputs/../../etc/passwd")
+            .await
+            .is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

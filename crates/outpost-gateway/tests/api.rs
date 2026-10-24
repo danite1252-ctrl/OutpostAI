@@ -336,6 +336,13 @@ async fn openapi_lists_every_route() {
         "/api/files/{id}",
         "/api/memory/settings",
         "/api/memory/auto",
+        "/api/packs",
+        "/api/packs/{id}/install",
+        "/api/loras",
+        "/api/jobs",
+        "/api/jobs/{id}",
+        "/api/gallery",
+        "/api/media/{id}",
     ] {
         assert!(paths.contains_key(p), "missing {p} in OpenAPI spec");
     }
@@ -852,4 +859,98 @@ async fn memory_settings_and_clearing_learned_memories() {
     assert_eq!(cleared["removed"], 0);
     let (_, list) = call(&app, "GET", "/api/memory", Some(&token), None).await;
     assert_eq!(list.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn create_lists_packs_and_checks_jobs() {
+    let app = app().await;
+    let (owner, _) = setup_owner(&app).await;
+
+    let (status, packs) = call(&app, "GET", "/api/packs", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK, "{packs}");
+    let z = packs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "z_image_turbo")
+        .expect("Z-Image Turbo pack");
+    assert_eq!(z["models"]["ready"], false);
+    assert!(z.get("graph").is_none(), "the graph stays on the server");
+    assert!(z["inputs"].as_array().unwrap().iter().any(|i| i["key"] == "prompt"));
+
+    // Models not downloaded yet: refused with a clear code.
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/api/jobs",
+        Some(&owner),
+        Some(json!({"pack": "z_image_turbo", "inputs": {"prompt": "a lighthouse"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "models_missing");
+
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/jobs",
+        Some(&owner),
+        Some(json!({"pack": "nope", "inputs": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Lists start empty and are private.
+    let (status, jobs) = call(&app, "GET", "/api/jobs", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(jobs.as_array().unwrap().is_empty());
+    let (status, gallery) = call(&app, "GET", "/api/gallery", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(gallery.as_array().unwrap().is_empty());
+    let (status, _) = call(&app, "GET", "/api/media/nope", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(&app, "GET", "/api/gallery", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, loras) = call(&app, "GET", "/api/loras", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(loras["folder"].as_str().unwrap().contains("loras"));
+
+    // Every built-in pack is listed, edit and video lanes included.
+    let ids: Vec<_> = packs
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap().to_string())
+        .collect();
+    for id in [
+        "z_image_turbo",
+        "qwen_image",
+        "qwen_image_edit",
+        "wan22_t2v",
+        "wan22_i2v",
+    ] {
+        assert!(ids.contains(&id.to_string()), "{id} missing");
+    }
+
+    // Only the owner downloads models.
+    let (_, sam) = call(
+        &app,
+        "POST",
+        "/api/accounts",
+        Some(&owner),
+        Some(json!({"name": "Sam", "secret": "2468", "role": "member"})),
+    )
+    .await;
+    let (_, signed_in) = call(
+        &app,
+        "POST",
+        "/api/auth/sign-in",
+        None,
+        Some(json!({"account_id": sam["id"], "secret": "2468"})),
+    )
+    .await;
+    let sam_token = signed_in["token"].as_str().unwrap();
+    let (status, _) = call(&app, "POST", "/api/packs/z_image_turbo/install", Some(sam_token), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }

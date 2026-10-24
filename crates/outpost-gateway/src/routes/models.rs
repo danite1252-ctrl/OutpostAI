@@ -111,7 +111,7 @@ fn model_error(e: ModelError) -> ApiError {
     }
 }
 
-async fn measure(state: &AppState) -> Hardware {
+pub(crate) async fn measure(state: &AppState) -> Hardware {
     let gpus = state.engines.gpus().await;
     let dir = state.config.data_dir.clone();
     tokio::task::spawn_blocking(move || hardware::measure(gpus, &dir))

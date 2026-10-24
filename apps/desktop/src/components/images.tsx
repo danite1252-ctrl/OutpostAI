@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fileObjectUrl, MAX_IMAGE_BYTES } from "../api";
+import { authedObjectUrl, MAX_IMAGE_BYTES } from "../api";
 
 /** An image picked for the next message, ready to send. */
 export interface PendingImage {
@@ -65,7 +65,9 @@ function loadImage(src: string): Promise<HTMLImageElement> {
  * them. Kept small: the oldest are released (revoked) once there are too many.
  */
 const cache = new Map<string, Promise<string>>();
-const CACHE_LIMIT = 48;
+// Comfortably more than one gallery page (60) plus a chat's images, so nothing on
+// screen is released while it is still shown.
+const CACHE_LIMIT = 240;
 
 function remember(id: string, p: Promise<string>) {
   cache.set(id, p);
@@ -82,23 +84,26 @@ export function clearImageCache() {
   cache.clear();
 }
 
-/** An attached image from the gateway (fetched with the token). Click to view it larger. */
-export function AttachmentImage({ token, id, alt }: { token: string; id: string; alt: string }) {
+/**
+ * A file from the gateway (fetched with the token) as an object URL, cached.
+ * `path` is the API path, e.g. `/api/files/<id>` or `/api/media/<id>`.
+ */
+export function useAuthedUrl(token: string, path: string): { src: string | null; failed: boolean } {
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  const [open, setOpen] = useState(false);
-
   useEffect(() => {
     let live = true;
-    let p = cache.get(id);
+    setSrc(null);
+    setFailed(false);
+    let p = cache.get(path);
     if (p) {
       // Most recently used goes to the back of the queue.
-      cache.delete(id);
-      cache.set(id, p);
+      cache.delete(path);
+      cache.set(path, p);
     } else {
-      p = fileObjectUrl(token, id);
-      remember(id, p);
-      p.catch(() => cache.delete(id));
+      p = authedObjectUrl(token, path);
+      remember(path, p);
+      p.catch(() => cache.delete(path));
     }
     p.then(
       (url) => live && setSrc(url),
@@ -107,8 +112,21 @@ export function AttachmentImage({ token, id, alt }: { token: string; id: string;
     return () => {
       live = false;
     };
-  }, [token, id]);
+  }, [token, path]);
+  return { src, failed };
+}
 
+/** Forget one cached file (after deleting it). */
+export function dropCached(path: string) {
+  const p = cache.get(path);
+  cache.delete(path);
+  void p?.then((u) => URL.revokeObjectURL(u), () => undefined);
+}
+
+/** An attached image from the gateway. Click to view it larger. */
+export function AttachmentImage({ token, id, alt }: { token: string; id: string; alt: string }) {
+  const { src, failed } = useAuthedUrl(token, `/api/files/${id}`);
+  const [open, setOpen] = useState(false);
   if (failed) {
     return <span className="flex h-24 w-32 items-center justify-center rounded-xl bg-raised text-xs text-muted">Image missing</span>;
   }

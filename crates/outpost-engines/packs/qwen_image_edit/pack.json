@@ -1,0 +1,137 @@
+{
+  "id": "qwen_image_edit",
+  "name": "Qwen-Image-Edit",
+  "lane": "edit_image",
+  "description": "Change a picture by asking: swap objects, change clothes or backgrounds, restyle, fix text. Keeps the rest as it was.",
+  "license": "Apache-2.0",
+  "vram_gb": 20,
+  "output": {
+    "node": "9",
+    "kind": "image"
+  },
+  "models": [
+    {
+      "file": "qwen_image_edit_2509_fp8_e4m3fn.safetensors",
+      "folder": "diffusion_models",
+      "size_gb": 20.43,
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors",
+      "sha256": "318568f61951ab9da21100c7b896e3c1da67f0d2efad6421545e022cfaa2b2b4",
+      "bytes": 20430698424
+    },
+    {
+      "file": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "folder": "text_encoders",
+      "size_gb": 9.38,
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4",
+      "bytes": 9384670680
+    },
+    {
+      "file": "qwen_image_vae.safetensors",
+      "folder": "vae",
+      "size_gb": 0.25,
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+      "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+      "bytes": 253806246
+    },
+    {
+      "file": "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+      "folder": "loras",
+      "size_gb": 0.85,
+      "url": "https://huggingface.co/lightx2v/Qwen-Image-Lightning/resolve/main/Qwen-Image-Edit-2509/Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+      "sha256": "2a32ce938ec71db2b49a817b4844ae86995569518dea56ee0ddc209cbe8e1377",
+      "bytes": 849608296
+    }
+  ],
+  "inputs": [
+    {
+      "key": "image",
+      "label": "Picture to edit",
+      "kind": "image",
+      "required": true,
+      "default": null,
+      "targets": [
+        [
+          "78",
+          "image"
+        ]
+      ]
+    },
+    {
+      "key": "prompt",
+      "label": "What to change",
+      "kind": "text",
+      "help": "e.g. \"Replace the cat with a dalmatian, keep everything else the same\".",
+      "default": "",
+      "required": true,
+      "targets": [
+        [
+          "111",
+          "prompt"
+        ]
+      ]
+    },
+    {
+      "key": "speed",
+      "label": "Speed",
+      "kind": "choice",
+      "default": "Fast (4 steps)",
+      "options": [
+        "Fast (4 steps)",
+        "Quality (20 steps)"
+      ],
+      "help": "Fast uses the Lightning LoRA. Quality is slower and sometimes more faithful.",
+      "presets": {
+        "Fast (4 steps)": [
+          [
+            "89",
+            "strength_model",
+            1
+          ],
+          [
+            "3",
+            "steps",
+            4
+          ],
+          [
+            "3",
+            "cfg",
+            1
+          ]
+        ],
+        "Quality (20 steps)": [
+          [
+            "89",
+            "strength_model",
+            0
+          ],
+          [
+            "3",
+            "steps",
+            20
+          ],
+          [
+            "3",
+            "cfg",
+            4
+          ]
+        ]
+      },
+      "targets": []
+    },
+    {
+      "key": "seed",
+      "label": "Seed",
+      "kind": "seed",
+      "help": "Leave empty for a new picture each time; reuse a seed to repeat one.",
+      "default": null,
+      "advanced": true,
+      "targets": [
+        [
+          "3",
+          "seed"
+        ]
+      ]
+    }
+  ]
+}

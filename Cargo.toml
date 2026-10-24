@@ -27,7 +27,7 @@ flate2 = "1"
 fs2 = "0.4"
 futures-util = "0.3"
 getrandom = "0.2"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "multipart"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -36,6 +36,8 @@ sysinfo = "0.33"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 thiserror = "2"
 tokio-stream = "0.1"
+# ComfyUI progress over its local websocket (plain ws://127.0.0.1, so no TLS).
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }

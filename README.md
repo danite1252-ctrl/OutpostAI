@@ -6,10 +6,10 @@ on your own GPU, all reachable over one API so phones and apps like Hermes can p
 
 Everything runs locally. No cloud models, accounts or services. MIT licensed.
 
-> Status: **phase 1, chat (complete).** Accounts with PINs, the local gateway and API
-> spec, managed installs of Ollama and ComfyUI, the model catalogue, personas, chat with
-> formatted replies and image attachments, memory that learns from chats, app keys for
-> Hermes, and optional network access. Next: phase 2, Create (images and video).
+> Status: **phase 2, Create (in testing).** Phase 1 (chat) is complete: accounts with PINs,
+> the local gateway and API spec, managed Ollama and ComfyUI, the model catalogue, personas,
+> chat with formatted replies and images, memory that learns, app keys for Hermes and network
+> access. Phase 2 adds Create: image and video workflows, a GPU queue and a gallery.
 
 ## Layout
 
@@ -110,6 +110,30 @@ New-NetFirewallRule -DisplayName "Outpost 7420" -Direction Inbound -Protocol TCP
 Running only the gateway: `npm run gateway -- --bind 0.0.0.0:7420` (or set `OUTPOST_BIND`).
 Without `--bind` it follows the saved setting.
 
+## Create
+
+Create runs **workflow packs** in ComfyUI. Each pack is a ComfyUI graph (API format) plus a
+`pack.json` describing its inputs and model files (`crates/outpost-engines/packs/<id>/`), so
+the desktop app, the phone and other apps all drive it the same way.
+
+| Pack | Makes | Models to download | Video memory |
+| --- | --- | --- | --- |
+| Z-Image Turbo | Photoreal images in 8 steps; takes character LoRAs | about 21 GB | ~14 GB |
+| Qwen-Image | Detailed images that follow long prompts and draw text; Fast (Lightning) or Quality | about 32 GB | ~20 GB (runs slower on 16 GB) |
+| Qwen-Image-Edit | Edits a picture from an instruction | about 31 GB (10 GB shared with Qwen-Image) | ~20 GB (runs slower on 16 GB) |
+| Wan 2.2 Text to Video | 2 to 5 second 720p clips | about 18 GB | ~12 GB |
+| Wan 2.2 Image to Video | Clips that start from your picture | (same files) | ~12 GB |
+
+- **Models** download from Create, once, into `<data folder>\models\comfyui` (shared between
+  packs, resumable, disk space checked first). ComfyUI is pointed there, so reinstalling it
+  keeps them.
+- **The queue** runs one job at a time, oldest first, for everyone. Before a job Outpost
+  unloads Ollama's chat model to free the GPU (chat reloads it on the next message), and
+  starts ComfyUI if it isn't running. Each account can have 20 jobs waiting.
+- **The gallery** keeps results per account in `<data folder>\files\<account>\gallery`.
+- **LoRAs**: put `.safetensors` files in `<data folder>\models\comfyui\loras` and pick them in
+  the form (Z-Image Turbo and Qwen-Image). Start the prompt with the LoRA's trigger word.
+
 ## Training spike
 
 Before Training Studio (phase 4) is built, `docs/spike-ai-toolkit.md` checks that
@@ -146,6 +170,13 @@ ai-toolkit trains Z-Image Turbo and Wan 2.2 on a 16 GB card. Its scripts live in
 | GET | `/api/files/{id}` | bearer | An attached image (your own only) |
 | GET, POST, DELETE | `/api/keys[/{id}]` | bearer | App keys (owner can make them for service accounts) |
 | GET, PUT | `/api/settings/network` | bearer; PUT owner on this PC | Allow other devices on the network |
+| GET | `/api/packs` | bearer | Workflow packs, their inputs, model status and fit for this PC |
+| POST | `/api/packs/{id}/install` | owner | Download a pack's models (background) |
+| GET | `/api/loras` | bearer | LoRA files available to packs |
+| GET, POST | `/api/jobs` | bearer | My jobs (queue position, live progress) / queue one: `{pack, inputs}` |
+| GET, DELETE | `/api/jobs/{id}` | bearer | One job / cancel or stop it |
+| GET | `/api/gallery` | bearer | My pictures and videos, newest first |
+| GET, DELETE | `/api/media/{id}` | bearer | One gallery file / delete it |
 | GET | `/openapi.json` | none | The full spec |
 
 Security notes: PINs and passwords are hashed with Argon2id; tokens are random 256-bit

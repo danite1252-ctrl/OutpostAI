@@ -326,7 +326,7 @@ impl EngineManager {
             }
             let cmd = match id {
                 EngineId::Ollama => ollama::command(&slot.dir, &self.models_root),
-                EngineId::Comfyui => comfyui::command(&slot.dir),
+                EngineId::Comfyui => comfyui::command(&slot.dir, &self.models_root),
             };
             match cmd {
                 Ok(c) => {

@@ -1,0 +1,138 @@
+{
+  "id": "wan22_t2v",
+  "name": "Wan 2.2 Text to Video",
+  "lane": "text_to_video",
+  "description": "Short 720p clips (2 to 5 seconds) from a description. Expect several minutes per clip.",
+  "license": "Apache-2.0",
+  "vram_gb": 12,
+  "output": {
+    "node": "58",
+    "kind": "video"
+  },
+  "models": [
+    {
+      "file": "wan2.2_ti2v_5B_fp16.safetensors",
+      "folder": "diffusion_models",
+      "size_gb": 10.0,
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+      "sha256": "456f901338bd9eadbded3828b819109a9b68e8a525ca5cf8d0049a69fcfeca1e",
+      "bytes": 9999658848
+    },
+    {
+      "file": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "folder": "text_encoders",
+      "size_gb": 6.74,
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "sha256": "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68",
+      "bytes": 6735906897
+    },
+    {
+      "file": "wan2.2_vae.safetensors",
+      "folder": "vae",
+      "size_gb": 1.41,
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan2.2_vae.safetensors",
+      "sha256": "e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156",
+      "bytes": 1409400960
+    }
+  ],
+  "inputs": [
+    {
+      "key": "prompt",
+      "label": "Prompt",
+      "kind": "text",
+      "help": "Describe the scene, the motion and the camera.",
+      "default": "",
+      "required": true,
+      "targets": [
+        [
+          "6",
+          "text"
+        ]
+      ]
+    },
+    {
+      "key": "size",
+      "label": "Size",
+      "kind": "size",
+      "default": "1280x704",
+      "options": [
+        "1280x704",
+        "704x1280"
+      ],
+      "targets": [
+        [
+          "55",
+          "width"
+        ],
+        [
+          "55",
+          "height"
+        ]
+      ]
+    },
+    {
+      "key": "length",
+      "label": "Length",
+      "kind": "choice",
+      "default": "5 seconds",
+      "options": [
+        "2 seconds",
+        "3 seconds",
+        "5 seconds"
+      ],
+      "presets": {
+        "2 seconds": [
+          [
+            "55",
+            "length",
+            49
+          ]
+        ],
+        "3 seconds": [
+          [
+            "55",
+            "length",
+            73
+          ]
+        ],
+        "5 seconds": [
+          [
+            "55",
+            "length",
+            121
+          ]
+        ]
+      },
+      "targets": []
+    },
+    {
+      "key": "steps",
+      "label": "Steps",
+      "kind": "integer",
+      "default": 20,
+      "min": 10,
+      "max": 40,
+      "advanced": true,
+      "targets": [
+        [
+          "3",
+          "steps"
+        ]
+      ]
+    },
+    {
+      "key": "seed",
+      "label": "Seed",
+      "kind": "seed",
+      "help": "Leave empty for a new picture each time; reuse a seed to repeat one.",
+      "default": null,
+      "advanced": true,
+      "targets": [
+        [
+          "3",
+          "seed"
+        ]
+      ]
+    }
+  ]
+}

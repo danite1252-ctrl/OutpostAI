@@ -4,6 +4,7 @@
 //! (the desktop app does this when no gateway is already running).
 
 pub mod config;
+pub mod create;
 pub mod error;
 pub mod extract;
 pub mod llm;
@@ -25,6 +26,8 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 pub use config::Config;
+use outpost_engines::assets::AssetStore;
+use outpost_engines::comfy::Comfy;
 use outpost_engines::models::ModelStore;
 use outpost_engines::EngineManager;
 
@@ -44,6 +47,12 @@ pub struct AppState {
     pub models: Arc<ModelStore>,
     /// The address the gateway actually bound, once it is listening.
     pub listening: Arc<OnceLock<SocketAddr>>,
+    /// ComfyUI's API.
+    pub comfy: Arc<Comfy>,
+    /// Model files for workflow packs.
+    pub assets: Arc<AssetStore>,
+    /// The Create job queue (the worker runs in [`serve_state`]).
+    pub queue: Arc<create::Queue>,
 }
 
 impl AppState {
@@ -65,6 +74,7 @@ impl AppState {
             .connect_timeout(Duration::from_secs(5))
             .build()
             .expect("HTTP client");
+        let assets = AssetStore::new(&config.data_dir.join("models"));
         AppState {
             llm,
             engines: EngineManager::new(&config.data_dir),
@@ -74,6 +84,9 @@ impl AppState {
             http,
             setup_lock: Arc::new(Mutex::new(())),
             listening: Arc::new(OnceLock::new()),
+            comfy: Arc::new(Comfy::new()),
+            assets,
+            queue: create::new_queue(),
         }
     }
 
@@ -107,7 +120,7 @@ const DESKTOP_ORIGINS: [&str; 5] = [
 ];
 
 pub fn router(state: AppState) -> Router {
-    use routes::{accounts, auth, chat, engines, health, keys, models, network, openai, setup};
+    use routes::{accounts, auth, chat, create, engines, health, keys, models, network, openai, setup};
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(
@@ -165,6 +178,18 @@ pub fn router(state: AppState) -> Router {
             "/api/settings/network",
             get(network::get_network).put(network::set_network),
         )
+        .route("/api/packs", get(create::list_packs))
+        .route("/api/packs/{id}/install", post(create::install_pack))
+        .route("/api/loras", get(create::list_loras))
+        .route(
+            "/api/jobs",
+            get(create::list_jobs)
+                .post(create::create_job)
+                .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
+        )
+        .route("/api/jobs/{id}", get(create::get_job).delete(create::cancel_job))
+        .route("/api/gallery", get(create::gallery))
+        .route("/api/media/{id}", get(create::get_media).delete(create::delete_media))
         .route("/api/hardware", get(models::hardware))
         .route("/api/models", get(models::overview))
         .route("/api/models/pull", post(models::pull))
@@ -200,6 +225,7 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     }
     let starter = engines.clone();
     tokio::spawn(async move { starter.init().await });
+    tokio::spawn(create::worker(state.clone()));
     let result = axum::serve(
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),

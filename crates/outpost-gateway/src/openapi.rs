@@ -2,7 +2,9 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
 use crate::error::{ErrorBody, ErrorDetail};
-use crate::routes::{accounts, auth, chat, engines, health, keys, models, network, openai, setup, SignInResponse};
+use crate::routes::{
+    accounts, auth, chat, create, engines, health, keys, models, network, openai, setup, SignInResponse,
+};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -54,6 +56,16 @@ use crate::routes::{accounts, auth, chat, engines, health, keys, models, network
         engines::start,
         engines::stop,
         network::get_network,
+        create::list_packs,
+        create::install_pack,
+        create::list_loras,
+        create::create_job,
+        create::list_jobs,
+        create::get_job,
+        create::cancel_job,
+        create::gallery,
+        create::get_media,
+        create::delete_media,
         network::set_network,
     ),
     components(schemas(
@@ -72,6 +84,7 @@ use crate::routes::{accounts, auth, chat, engines, health, keys, models, network
         (name = "models", description = "Hardware, model catalogue and downloads"),
         (name = "chat", description = "Personas, chats with streamed replies, memory"),
         (name = "keys", description = "App keys for Hermes and other apps"),
+        (name = "create", description = "Workflow packs, the GPU job queue and the gallery"),
         (name = "setup", description = "First run"),
         (name = "auth", description = "Signing in and out"),
         (name = "accounts", description = "Managing accounts (owner)"),

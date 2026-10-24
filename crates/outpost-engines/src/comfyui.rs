@@ -8,7 +8,7 @@ use tokio::process::Command;
 
 use crate::manager::{Ctx, Installed};
 use crate::versions::{self, exe, COMFYUI_PORT, COMFYUI_VERSION, PYTHON_VERSION};
-use crate::{archive, download, process};
+use crate::{archive, assets, download, process};
 
 const STEPS: u32 = 6;
 
@@ -91,13 +91,20 @@ pub async fn install(ctx: &Ctx) -> anyhow::Result<Installed> {
     })
 }
 
-/// ComfyUI on 127.0.0.1:8188, no browser tab.
-pub fn command(dir: &Path) -> anyhow::Result<Command> {
+/// ComfyUI on 127.0.0.1:8188, no browser tab, reading models from Outpost's
+/// models folder (`<data>/models/comfyui`) so a reinstall never deletes them.
+pub fn command(dir: &Path, models_root: &Path) -> anyhow::Result<Command> {
     let app = dir.join("app");
     let python = venv_python(&dir.join("venv"));
     if !python.is_file() || !app.join("main.py").is_file() {
         return Err(anyhow!("ComfyUI's files are missing. Reinstall it from Settings."));
     }
+    let models = models_root.join("comfyui");
+    for folder in assets::FOLDERS {
+        std::fs::create_dir_all(models.join(folder))?;
+    }
+    let paths_file = dir.join("outpost_model_paths.yaml");
+    std::fs::write(&paths_file, assets::extra_model_paths_yaml(&models))?;
     let mut cmd = Command::new(python);
     cmd.args([
         "main.py",
@@ -107,6 +114,8 @@ pub fn command(dir: &Path) -> anyhow::Result<Command> {
         &COMFYUI_PORT.to_string(),
         "--disable-auto-launch",
     ])
+    .arg("--extra-model-paths-config")
+    .arg(&paths_file)
     .current_dir(&app)
     .env("PYTHONUNBUFFERED", "1");
     Ok(cmd)
