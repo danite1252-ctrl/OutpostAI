@@ -9,6 +9,7 @@ import Personas from "./Personas";
 import Create from "./Create";
 import Gallery from "./Gallery";
 import { DownloadsButton } from "../components/downloads";
+import { QueueButton } from "../components/queue";
 import type { CreateRequest } from "../components/gallery";
 
 type Section = "chat" | "create" | "gallery" | "train" | "models" | "personas" | "connections" | "settings";
@@ -97,6 +98,11 @@ export default function Shell({
               ComfyUI
             </span>
           </div>
+          <QueueButton
+            token={auth.token}
+            onOpenCreate={() => setSection("create")}
+            onOpenGallery={() => setSection("gallery")}
+          />
           <DownloadsButton token={auth.token} />
           <div className="flex items-center gap-2.5 rounded-xl border border-line bg-surface py-1.5 pr-3 pl-1.5">
             <Avatar name={auth.account.name} color={auth.account.avatar_color} size={32} />

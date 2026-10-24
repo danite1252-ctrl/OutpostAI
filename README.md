@@ -151,6 +151,9 @@ commercial use.
   the shared gallery with "Share with everyone", and take it out again); only the owner also
   gets a tab per account, to see everyone's. From a picture you can repeat it ("Use these settings"), edit it or
   animate it, and image inputs can be picked straight from it.
+- **Queue button** (top right, from any screen): how many of your jobs are waiting or
+  running, a ring that fills as the running one progresses, and a list with step counts,
+  places in line, Stop/Cancel, and jobs that just finished.
 - **Downloads**: the button at the top right lists every download (chat models and Create
   files) with the file it's on, speed and time left.
 - **LoRAs**: put `.safetensors` files in `<data folder>\models\comfyui\loras` and pick them in

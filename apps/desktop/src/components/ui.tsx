@@ -92,6 +92,7 @@ export const icons = {
   gallery: "M7 3h14v14 M3 7h14v14H3z M3 17l4-4 3 3 3-3 4 4",
   download: "M12 4v11 M7 10l5 5 5-5 M5 20h14",
   close: "M6 6l12 12 M18 6L6 18",
+  queue: "M4 6h16 M4 12h16 M4 18h9 M17 16l3 2-3 2z",
 } as const;
 
 export function Icon({ d, size = 20 }: { d: string; size?: number }) {

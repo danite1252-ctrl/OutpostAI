@@ -12,6 +12,7 @@ import { api, ApiError, createApi, type EngineInfo, type Job, type Media, type P
 import { downloadsChanged, formatBytes, formatEta, formatSpeed } from "../components/downloads";
 import { GalleryGrid, GalleryPicker, mediaAsInput, Viewer, type CreateRequest } from "../components/gallery";
 import { dropCached, prepareImage } from "../components/images";
+import { jobsChanged } from "../components/queue";
 import { Button, ErrorNote } from "../components/ui";
 
 const TASKS: { id: Task; label: string; blurb: string }[] = [
@@ -218,6 +219,7 @@ export default function Create({
       }
       const job = await createApi.createJob(token, pack.id, inputs);
       setJobs((list) => [job, ...list]);
+      jobsChanged();
     } catch (err) {
       fail(err);
     } finally {
@@ -262,6 +264,7 @@ export default function Create({
   async function cancel(j: Job) {
     try {
       await createApi.cancelJob(token, j.id);
+      jobsChanged();
       await loadJobs();
     } catch (err) {
       fail(err);
