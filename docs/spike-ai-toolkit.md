@@ -1,9 +1,9 @@
-# Spike: can ai-toolkit train on a 16 GB card?
+# Spike: can ai-toolkit train image LoRAs on a 16 GB card?
 
 The last Phase 1 item. Phase 4 (Training Studio) builds on ai-toolkit, so check now
-that it trains **Z-Image Turbo** (the default base) and **Wan 2.2** on this PC
+that it trains **Z-Image Turbo** (the default base) on this PC
 (RTX 4080 SUPER, 16 GB) before anything is built around it. It's a manual test,
-about 2 to 3 hours mostly waiting. Nothing here changes Outpost.
+about 3 hours, mostly waiting. (Video/Wan training is out of scope: image LoRAs only.) Nothing here changes Outpost.
 
 ## 1. Install (about 15 minutes, a few GB)
 
@@ -41,37 +41,24 @@ Open http://localhost:8675, add the dataset folder, then make a new job:
 
 - Model: **Z-Image Turbo** (it uses the training adapter it suggests).
 - Turn on **Low VRAM** and the quantisation it offers for the transformer.
-- Resolution 1024 (drop to 768 if it runs out of memory), LoRA rank 16,
-  about 2,000 steps, the default learning rate, batch size 1.
-- A sample prompt that uses the trigger word, e.g. "rexdog sitting on a beach".
+- **Trigger Word**: your word, e.g. `rexdog`.
+- **Target > Linear Rank**: 16. **Training > Steps**: 2000. Leave **Learning Rate**
+  as it is; **Batch Size** 1.
+- **Dataset > Resolutions**: tick only 1024 (768 if it runs out of memory).
+- **Sample**: Sample Every 250; replace the prompts with one or two that use the
+  trigger word, e.g. "rexdog sitting on a beach".
 
-In a second PowerShell window, watch memory while it runs:
-
-```powershell
-nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv -l 10
-```
+Watch GPU memory on ai-toolkit's own dashboard (it shows GPU, CPU and RAM live) and
+note the highest GPU memory you see.
 
 **Pass** if it finishes without an out-of-memory error and the later samples clearly
 show the subject.
 
-## 4. Train Wan 2.2 (pass/fail test 2)
-
-Same dataset (images only is fine for a first test):
-
-- Try **Wan 2.2 TI2V 5B** first: Low VRAM on, resolution 512, rank 16, 1,000 steps.
-- If that works, try **Wan 2.2 T2V 14B** with Low VRAM and 4-bit quantisation,
-  resolution 512, for 300 steps only, to see whether it runs at all.
-
-**Pass** if TI2V 5B finishes. The 14B result decides whether Training Studio offers
-14B on 16 GB cards or only on 24 GB+.
-
-## 5. Write down
+## 4. Write down
 
 | Test | Settings changed from the above | Peak VRAM | Seconds per step | Total time | Result |
 | --- | --- | --- | --- | --- | --- |
-| Z-Image Turbo | | | | | |
-| Wan 2.2 TI2V 5B | | | | | |
-| Wan 2.2 T2V 14B | | | | | |
+| Z-Image Turbo | 1024, rank 16, 2000 steps | 15.4 GB | ~4.8 | ~2 h 40 m | |
 
 Send the table (and any error) to Claude: it sets Training Studio's defaults and the
 VRAM rules in the model catalogue.

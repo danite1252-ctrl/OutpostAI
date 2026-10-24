@@ -38,7 +38,10 @@ const FIT: Record<Fit, { label: string; style: string }> = {
 };
 
 const SECTION: Record<Category, { title: string; blurb: string }> = {
-  uncensored: { title: "Qwen unfiltered", blurb: "Abliterated Qwen models: no refusals, with vision and tool use." },
+  uncensored: {
+    title: "Unfiltered",
+    blurb: "Models with refusals removed (abliterated or fine-tuned). Qwen first, plus Gemma 4, GLM, gpt-oss, Granite and Dolphin.",
+  },
   general: { title: "General", blurb: "Mainstream chat models, for comparison or when you want a filtered model." },
   coding: { title: "Coding", blurb: "For the coding agent later on." },
   embedding: { title: "Memory & search", blurb: "Not chat models. One of these powers memory and document search." },

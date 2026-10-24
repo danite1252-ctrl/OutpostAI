@@ -1,7 +1,7 @@
 //! Curated chat and embedding models for Ollama, with badges and a "does it fit"
 //! score for this PC. Sizes are Ollama's listed download sizes (October 2026);
-//! after a download the real size from Ollama is shown instead. Unfiltered Qwen
-//! models are listed first, as the owner prefers them.
+//! after a download the real size from Ollama is shown instead. Unfiltered models
+//! are listed first, Qwen at the top, as the owner prefers them.
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -30,7 +30,7 @@ pub enum Badge {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Category {
-    /// Listed first: the owner prefers unfiltered Qwen models.
+    /// Listed first: unfiltered models (Qwen preferred, plus Gemma, GLM, gpt-oss and more).
     Uncensored,
     General,
     Coding,
@@ -258,6 +258,94 @@ pub const CATALOG: &[Entry] = &[
         description: "Tiny uncensored Qwen for CPU-only machines.",
         page: "https://ollama.com/huihui_ai/qwen3.5-abliterated",
     },
+    // Other unfiltered families (sizes and tags from ollama.com, October 2026).
+    // Ranked below the 9B Qwen so Qwen stays the pick on 16 GB, as the owner prefers.
+    Entry {
+        model: "huihui_ai/gemma-4-abliterated:26b",
+        name: "Gemma 4 26B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 18.0,
+        context_k: 256,
+        badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
+        license: None,
+        rank: 82,
+        description: "Google's Gemma 4 with refusals removed. Strong writer with vision; best on 20 GB+ cards.",
+        page: "https://ollama.com/huihui_ai/gemma-4-abliterated",
+    },
+    Entry {
+        model: "huihui_ai/gemma-4-abliterated:12b",
+        name: "Gemma 4 12B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 7.6,
+        context_k: 128,
+        badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
+        license: None,
+        rank: 68,
+        description: "Mid-size Gemma 4 without refusals. Natural, creative writing; reads images.",
+        page: "https://ollama.com/huihui_ai/gemma-4-abliterated",
+    },
+    Entry {
+        model: "huihui_ai/gemma-4-abliterated:e4b",
+        name: "Gemma 4 E4B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 9.6,
+        context_k: 128,
+        badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
+        license: None,
+        rank: 40,
+        description: "Small, efficient Gemma 4 for laptops and 8 GB cards. Reads images.",
+        page: "https://ollama.com/huihui_ai/gemma-4-abliterated",
+    },
+    Entry {
+        model: "huihui_ai/glm-4.7-flash-abliterated:latest",
+        name: "GLM 4.7 Flash Abliterated",
+        category: Category::Uncensored,
+        size_gb: 19.0,
+        context_k: 198,
+        badges: &[Uncensored, Tools, Thinking, Code, LongContext],
+        license: None,
+        rank: 78,
+        description:
+            "Zhipu's fast 30B-class mixture-of-experts model, no refusals. Good at code and agents; text only.",
+        page: "https://ollama.com/huihui_ai/glm-4.7-flash-abliterated",
+    },
+    Entry {
+        model: "huihui_ai/gpt-oss-abliterated:20b",
+        name: "gpt-oss 20B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 14.0,
+        context_k: 128,
+        badges: &[Uncensored, Tools, Thinking, LongContext],
+        license: Some("Apache-2.0"),
+        rank: 74,
+        description: "OpenAI's open-weight model with refusals removed. Strong reasoning and tool use; text only.",
+        page: "https://ollama.com/huihui_ai/gpt-oss-abliterated",
+    },
+    Entry {
+        model: "huihui_ai/granite4.1-abliterated:8b",
+        name: "Granite 4.1 8B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 5.3,
+        context_k: 128,
+        badges: &[Uncensored, Tools, LongContext],
+        license: Some("Apache-2.0"),
+        rank: 55,
+        description: "IBM Granite 4.1 without refusals. Quick and good with tools; text only.",
+        page: "https://ollama.com/huihui_ai/granite4.1-abliterated",
+    },
+    Entry {
+        model: "dolphin3:8b",
+        name: "Dolphin 3.0 8B",
+        category: Category::Uncensored,
+        size_gb: 4.9,
+        context_k: 128,
+        badges: &[Uncensored, LongContext],
+        license: None,
+        rank: 45,
+        description:
+            "Classic uncensored Llama 3.1 fine-tune by Cognitive Computations. Older, but steerable and light.",
+        page: "https://ollama.com/library/dolphin3",
+    },
     Entry {
         model: "qwen3.6:27b-coding",
         name: "Qwen 3.6 27B Coding",
@@ -429,6 +517,18 @@ mod tests {
         assert_eq!(general[0].fit, Fit::Fits);
         let big = build(&hw(32, 64));
         assert!(big.iter().any(|e| e.recommended && e.model == "ornith-1.5:35b"));
+    }
+
+    #[test]
+    fn unfiltered_has_more_than_qwen_but_qwen_leads() {
+        let entries = build(&hw(16, 64));
+        let unfiltered: Vec<_> = entries.iter().filter(|e| e.category == Category::Uncensored).collect();
+        assert!(unfiltered.iter().any(|e| e.model.contains("gemma")));
+        assert!(unfiltered.iter().any(|e| !e.model.to_lowercase().contains("qwen")));
+        assert!(unfiltered.iter().all(|e| e.badges.contains(&Badge::Uncensored)));
+        // Every chat model here handles Outpost's 64K window (Hermes needs it).
+        assert!(unfiltered.iter().all(|e| e.context_k >= 64));
+        assert!(unfiltered[0].model.contains("qwen"));
     }
 
     #[test]
