@@ -127,6 +127,42 @@ pub const CATALOG: &[Entry] = &[
         page: "https://ollama.com/library/gemma4",
     },
     Entry {
+        model: "gemma4:31b",
+        name: "Gemma 4 31B",
+        category: Category::General,
+        size_gb: 20.0,
+        context_k: 256,
+        badges: &[Vision, Tools, Thinking, LongContext],
+        license: None,
+        rank: 87,
+        description: "The dense Gemma 4. Excellent writing and vision on 24 to 32 GB cards.",
+        page: "https://ollama.com/library/gemma4",
+    },
+    Entry {
+        model: "qwen3.5:35b",
+        name: "Qwen 3.5 35B-A3B",
+        category: Category::General,
+        size_gb: 22.0,
+        context_k: 256,
+        badges: &[Vision, Tools, Thinking, LongContext],
+        license: None,
+        rank: 86,
+        description: "Mixture-of-experts Qwen 3.5: big-model quality, quick replies. For 32 GB cards.",
+        page: "https://ollama.com/library/qwen3.5",
+    },
+    Entry {
+        model: "qwen3.5:2b",
+        name: "Qwen 3.5 2B",
+        category: Category::General,
+        size_gb: 3.1,
+        context_k: 256,
+        badges: &[Vision, Tools, Thinking, LongContext],
+        license: None,
+        rank: 25,
+        description: "Very small and quick. For older laptops and CPU-only machines.",
+        page: "https://ollama.com/library/qwen3.5",
+    },
+    Entry {
         model: "gpt-oss:20b",
         name: "gpt-oss 20B",
         category: Category::General,
@@ -329,9 +365,106 @@ pub const CATALOG: &[Entry] = &[
         context_k: 128,
         badges: &[Uncensored, Tools, LongContext],
         license: Some("Apache-2.0"),
-        rank: 55,
+        rank: 48,
         description: "IBM Granite 4.1 without refusals. Quick and good with tools; text only.",
         page: "https://ollama.com/huihui_ai/granite4.1-abliterated",
+    },
+    // Sizes for every machine, from 8 GB laptops to 48 GB workstations (ollama.com, October 2026).
+    Entry {
+        model: "huihui_ai/qwen3.5-abliterated:0.8b",
+        name: "Qwen 3.5 0.8B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 1.0,
+        context_k: 256,
+        badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
+        license: None,
+        rank: 20,
+        description: "The smallest uncensored Qwen. For old laptops and CPU-only machines; simple tasks only.",
+        page: "https://ollama.com/huihui_ai/qwen3.5-abliterated",
+    },
+    Entry {
+        model: "huihui_ai/Qwen3.6-abliterated:27b",
+        name: "Qwen 3.6 27B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 17.0,
+        context_k: 256,
+        badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
+        license: None,
+        rank: 86,
+        description: "Qwen 3.6 with refusals removed, with better agentic coding. For 24 GB cards.",
+        page: "https://ollama.com/huihui_ai/Qwen3.6-abliterated",
+    },
+    Entry {
+        model: "huihui_ai/Qwen3.6-abliterated:35b",
+        name: "Qwen 3.6 35B-A3B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 24.0,
+        context_k: 256,
+        badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
+        license: None,
+        rank: 89,
+        description: "Mixture-of-experts Qwen 3.6 without refusals. Quick for its size on 32 GB cards.",
+        page: "https://ollama.com/huihui_ai/Qwen3.6-abliterated",
+    },
+    Entry {
+        model: "huihui_ai/gemma-4-abliterated:31b",
+        name: "Gemma 4 31B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 20.0,
+        context_k: 256,
+        badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
+        license: None,
+        rank: 85,
+        description: "Dense Gemma 4 without refusals. Rich writing and vision for 24 to 32 GB cards.",
+        page: "https://ollama.com/huihui_ai/gemma-4-abliterated",
+    },
+    Entry {
+        model: "huihui_ai/gemma-4-abliterated:48b",
+        name: "Gemma 4 48B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 33.0,
+        context_k: 256,
+        badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
+        license: None,
+        rank: 93,
+        description: "The largest Gemma 4, refusals removed. Top quality on 48 GB workstations.",
+        page: "https://ollama.com/huihui_ai/gemma-4-abliterated",
+    },
+    Entry {
+        model: "huihui_ai/granite4.1-abliterated:30b",
+        name: "Granite 4.1 30B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 17.0,
+        context_k: 128,
+        badges: &[Uncensored, Tools, LongContext],
+        license: Some("Apache-2.0"),
+        rank: 72,
+        description: "Large IBM Granite 4.1 without refusals. Dependable with tools; text only.",
+        page: "https://ollama.com/huihui_ai/granite4.1-abliterated",
+    },
+    Entry {
+        model: "huihui_ai/granite4.1-abliterated:3b",
+        name: "Granite 4.1 3B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 2.1,
+        context_k: 128,
+        badges: &[Uncensored, Tools, LongContext],
+        license: Some("Apache-2.0"),
+        rank: 30,
+        description: "Tiny Granite without refusals. Fast on any laptop; text only.",
+        page: "https://ollama.com/huihui_ai/granite4.1-abliterated",
+    },
+    Entry {
+        model: "huihui_ai/llama3.3-abliterated:70b",
+        name: "Llama 3.3 70B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 43.0,
+        context_k: 128,
+        badges: &[Uncensored, LongContext],
+        license: None,
+        rank: 80,
+        description: "Meta's Llama 3.3 70B without refusals. Older but very knowledgeable; needs 48 GB.",
+        page: "https://ollama.com/huihui_ai/llama3.3-abliterated",
     },
     Entry {
         model: "dolphin3:8b",
@@ -459,12 +592,21 @@ pub fn build(hw: &Hardware) -> Vec<CatalogEntry> {
         }
     }
 
+    // Within each category: the recommendation; then everything that fits, best
+    // first down to the smallest; then models too big for the graphics card,
+    // closest to fitting first: "runs slowly" before "too big for this PC".
     let rank = |m: &str| CATALOG.iter().find(|e| e.model == m).map(|e| e.rank).unwrap_or(0);
     entries.sort_by(|a, b| {
+        let within = if a.fit == Fit::Fits {
+            rank(&b.model).cmp(&rank(&a.model))
+        } else {
+            a.size_gb.total_cmp(&b.size_gb)
+        };
         (a.category as u8)
             .cmp(&(b.category as u8))
             .then(b.recommended.cmp(&a.recommended))
             .then((a.fit as u8).cmp(&(b.fit as u8)))
+            .then(within)
             .then(rank(&b.model).cmp(&rank(&a.model)))
     });
     entries
@@ -529,6 +671,67 @@ mod tests {
         // Every chat model here handles Outpost's 64K window (Hermes needs it).
         assert!(unfiltered.iter().all(|e| e.context_k >= 64));
         assert!(unfiltered[0].model.contains("qwen"));
+    }
+
+    #[test]
+    fn order_is_pick_then_fits_big_to_small_then_too_big() {
+        for (vram, ram) in [(8, 16), (16, 64), (24, 64), (48, 128)] {
+            let entries = build(&hw(vram, ram));
+            for cat in [Category::Uncensored, Category::General] {
+                let list: Vec<_> = entries.iter().filter(|e| e.category == cat).collect();
+                assert!(list[0].recommended, "{vram} GB: pick first");
+                let rest = &list[1..];
+                // Fit groups never go backwards.
+                assert!(
+                    rest.windows(2).all(|w| (w[0].fit as u8) <= (w[1].fit as u8)),
+                    "{vram} GB groups"
+                );
+                // Fitting models go best to smallest; bigger ones smallest first.
+                let rank = |m: &str| CATALOG.iter().find(|e| e.model == m).unwrap().rank;
+                for w in rest.windows(2).filter(|w| w[0].fit == w[1].fit) {
+                    if w[0].fit == Fit::Fits {
+                        assert!(
+                            rank(&w[0].model) >= rank(&w[1].model),
+                            "{vram} GB: {} before {}",
+                            w[0].model,
+                            w[1].model
+                        );
+                    } else {
+                        assert!(
+                            w[0].size_gb <= w[1].size_gb,
+                            "{vram} GB: {} before {}",
+                            w[0].model,
+                            w[1].model
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_size_of_machine_gets_a_fitting_pick() {
+        // 8 GB laptop to 48 GB workstation: something unfiltered fits fully on each.
+        for vram in [8, 12, 16, 24, 32, 48] {
+            let entries = build(&hw(vram, 32));
+            let pick = entries
+                .iter()
+                .find(|e| e.category == Category::Uncensored && e.recommended)
+                .unwrap();
+            assert_eq!(pick.fit, Fit::Fits, "{vram} GB pick {}", pick.model);
+            // Qwen is the owner's preference wherever a Qwen is the best that fits.
+            if vram < 48 {
+                assert!(
+                    pick.model.to_lowercase().contains("qwen"),
+                    "{vram} GB pick {}",
+                    pick.model
+                );
+            }
+        }
+        let big = build(&hw(48, 128));
+        assert!(big
+            .iter()
+            .any(|e| e.recommended && e.model == "huihui_ai/gemma-4-abliterated:48b"));
     }
 
     #[test]

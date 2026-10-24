@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
   ApiError,
@@ -31,9 +31,16 @@ const BADGE_STYLE: Partial<Record<Badge, string>> = {
   tools: "bg-ok/15 text-ok",
 };
 
+/** Headings between the groups in each section. */
+const GROUP: Record<Fit, { label: string; style: string }> = {
+  fits: { label: "Fits your PC", style: "text-ok" },
+  partial: { label: "Bigger than your graphics card: runs, but slowly", style: "text-warn" },
+  too_large: { label: "Too big for your machine", style: "text-danger" },
+};
+
 const FIT: Record<Fit, { label: string; style: string }> = {
   fits: { label: "Fits your GPU · fast", style: "bg-ok/15 text-ok" },
-  partial: { label: "Runs, slower (uses system RAM)", style: "bg-amber/15 text-amber" },
+  partial: { label: "Runs, slower (uses system RAM)", style: "bg-warn/15 text-warn" },
   too_large: { label: "Too large for this PC", style: "bg-danger/15 text-danger" },
 };
 
@@ -175,17 +182,27 @@ export default function Models({
               <p className="text-sm text-muted">{SECTION[cat].blurb}</p>
             </div>
             <ul className="flex flex-col gap-3">
-              {entries.map((e) => (
-                <CatalogRow
-                  key={e.model}
-                  entry={e}
-                  installed={installedNames.has(e.model)}
-                  pull={pullFor(e.model)}
-                  canManage={canManage && ollamaUp}
-                  onPull={() => void act("pull", e.model)}
-                  onRemove={() => void act("remove", e.model)}
-                />
-              ))}
+              {entries.map((e, i) => {
+                // The gateway sorts: the pick, what fits, then what doesn't. Label each
+                // change of group so it's clear where "fits this PC" ends.
+                const prev = entries[i - 1];
+                const heading = !e.recommended && (!prev || prev.recommended || prev.fit !== e.fit) ? GROUP[e.fit] : null;
+                return (
+                  <Fragment key={e.model}>
+                    {heading && (
+                      <li className={`mt-2 text-xs font-semibold tracking-wide uppercase ${heading.style}`}>{heading.label}</li>
+                    )}
+                    <CatalogRow
+                      entry={e}
+                      installed={installedNames.has(e.model)}
+                      pull={pullFor(e.model)}
+                      canManage={canManage && ollamaUp}
+                      onPull={() => void act("pull", e.model)}
+                      onRemove={() => void act("remove", e.model)}
+                    />
+                  </Fragment>
+                );
+              })}
             </ul>
           </div>
         );
@@ -256,18 +273,37 @@ function CatalogRow({
   const pulling = pull && !pull.done;
   return (
     <li
-      className={`flex flex-col gap-3 rounded-2xl border bg-surface p-4 ${e.recommended ? "border-ember" : "border-line"}`}
+      className={`flex flex-col gap-3 rounded-2xl border bg-surface p-4 ${
+        e.recommended
+          ? "border-pick"
+          : e.fit === "too_large"
+            ? "border-danger/40 opacity-75"
+            : e.fit === "partial"
+              ? "border-warn/40"
+              : "border-line"
+      }`}
     >
       <div className="flex flex-wrap items-start gap-3">
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-semibold">{e.name}</span>
             {e.recommended && (
-              <span className="rounded-full bg-ember px-2 py-0.5 text-xs font-semibold text-on-ember">Best for this PC</span>
+              <span className="rounded-full bg-pick px-2 py-0.5 text-xs font-semibold text-on-pick">Best for this PC</span>
             )}
           </div>
           <span className="font-mono text-xs text-muted">{e.model}</span>
           <p className="text-sm text-soft">{e.description}</p>
+          {e.fit === "too_large" && !installed && (
+            <p className="text-sm font-medium text-danger" role="note">
+              This is too big for your machine. It needs about {Math.ceil(e.size_gb * 1.15 + 0.6)} GB of graphics and
+              system memory to run.
+            </p>
+          )}
+          {e.fit === "partial" && !installed && (
+            <p className="text-sm text-warn" role="note">
+              Bigger than your graphics card: it will run partly in system memory, several times slower.
+            </p>
+          )}
         </div>
         <div className="flex flex-col items-end gap-2">
           {installed ? (
@@ -282,7 +318,25 @@ function CatalogRow({
           ) : (
             canManage &&
             !pulling &&
-            e.fit !== "too_large" && <Button onClick={onPull}>Download · {e.size_gb} GB</Button>
+            e.fit !== "too_large" && (
+              <Button
+                variant={e.fit === "partial" ? "ghost" : "primary"}
+                onClick={() => {
+                  if (
+                    e.fit === "partial" &&
+                    !window.confirm(
+                      `${e.name} is bigger than your graphics card, so it won't run well on this machine: ` +
+                        `part of it runs in system memory and replies will be several times slower.\n\n` +
+                        `Download ${e.size_gb} GB anyway?`,
+                    )
+                  )
+                    return;
+                  onPull();
+                }}
+              >
+                Download · {e.size_gb} GB
+              </Button>
+            )
           )}
         </div>
       </div>

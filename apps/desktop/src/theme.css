@@ -16,6 +16,10 @@
   --color-on-ember: #1e0c05;
   --color-ok: #7bd88f;
   --color-danger: #ff8a9a;
+  /* Model fit colours: best pick (blue), runs slowly (orange). Green and red are ok/danger. */
+  --color-pick: #6cb4ff;
+  --color-on-pick: #04121f;
+  --color-warn: #ff9a3c;
 
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
