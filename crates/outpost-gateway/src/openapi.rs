@@ -3,7 +3,7 @@ use utoipa::{Modify, OpenApi};
 
 use crate::error::{ErrorBody, ErrorDetail};
 use crate::routes::{
-    accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, setup, SignInResponse,
+    accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, SignInResponse,
 };
 
 #[derive(OpenApi)]
@@ -70,6 +70,12 @@ use crate::routes::{
         create::get_media,
         create::delete_media,
         downloads::list,
+        pairing::create_code,
+        pairing::code_status,
+        pairing::hello,
+        pairing::complete,
+        pairing::list_devices,
+        pairing::revoke_device,
         network::set_network,
     ),
     components(schemas(
@@ -93,6 +99,7 @@ use crate::routes::{
         (name = "auth", description = "Signing in and out"),
         (name = "accounts", description = "Managing accounts (owner)"),
         (name = "openai", description = "OpenAI-compatible endpoints"),
+        (name = "pairing", description = "Pairing phones over the encrypted port, and paired phones"),
     )
 )]
 pub struct ApiDoc;

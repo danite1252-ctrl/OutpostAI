@@ -46,8 +46,14 @@ pub async fn status(State(state): State<AppState>, _auth: Auth) -> Json<EnginesS
         (status = 403, description = "Not allowed", body = ErrorBody),
         (status = 409, description = "Busy, or already running outside Outpost", body = ErrorBody),
     ))]
-pub async fn install(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {
+pub async fn install(
+    State(state): State<AppState>,
+    auth: Auth,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
     auth.require_owner()?;
+    auth.require_fresh_pin(&state, &headers).await?;
     let id = engine_id(&id)?;
     state.engines.install(id).map_err(engine_error)?;
     log(&state, &auth, "engine_install", id).await;

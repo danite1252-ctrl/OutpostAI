@@ -202,7 +202,7 @@ export function ContextPanel({
           Connected apps
         </h3>
         {apps.length === 0 ? (
-          <p className="text-sm text-muted">No app keys yet. Make one in Settings to connect Hermes or another app.</p>
+          <p className="text-sm text-muted">No app keys yet. Make one in Connections to connect Hermes or another app.</p>
         ) : (
           <ul className="flex flex-col gap-2">
             {apps.map((a) => {

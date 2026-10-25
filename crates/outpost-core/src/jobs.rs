@@ -67,7 +67,24 @@ pub async fn queued_count(pool: &SqlitePool) -> CoreResult<i64> {
         .await?)
 }
 
-pub async fn create(pool: &SqlitePool, account_id: &str, pack_id: &str, inputs: &serde_json::Value) -> CoreResult<Job> {
+/// Who goes first on the GPU: someone at the desktop, then phones, then app keys.
+pub fn priority_for(kind: crate::sessions::SessionKind) -> i64 {
+    match kind {
+        crate::sessions::SessionKind::Desktop => 0,
+        crate::sessions::SessionKind::Device => 1,
+        crate::sessions::SessionKind::App => 2,
+    }
+}
+
+/// Queue a job. `priority` (see [`priority_for`]) puts it ahead of waiting jobs with a
+/// higher number; within a priority it's first come, first served.
+pub async fn create(
+    pool: &SqlitePool,
+    account_id: &str,
+    pack_id: &str,
+    inputs: &serde_json::Value,
+    priority: i64,
+) -> CoreResult<Job> {
     let waiting: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE account_id = ? AND status IN ('queued', 'running')")
             .bind(account_id)
@@ -91,13 +108,14 @@ pub async fn create(pool: &SqlitePool, account_id: &str, pack_id: &str, inputs: 
         finished_at: None,
     };
     sqlx::query(
-        "INSERT INTO jobs (id, account_id, pack_id, inputs, status, created_at) VALUES (?, ?, ?, ?, 'queued', ?)",
+        "INSERT INTO jobs (id, account_id, pack_id, inputs, status, created_at, priority) VALUES (?, ?, ?, ?, 'queued', ?, ?)",
     )
     .bind(&job.id)
     .bind(&job.account_id)
     .bind(&job.pack_id)
     .bind(&job.inputs)
     .bind(job.created_at)
+    .bind(priority.clamp(0, 9))
     .execute(pool)
     .await?;
     Ok(job)
@@ -133,14 +151,19 @@ pub async fn list(pool: &SqlitePool, account_id: &str, limit: i64) -> CoreResult
     .await?)
 }
 
-/// How many jobs (anyone's) are ahead of this queued one; 0 = next.
+/// The order queued jobs run in: priority, then first come, first served.
+const RUN_ORDER: &str = "priority, created_at, rowid";
+
+/// How many jobs (anyone's) are ahead of this queued one; 0 = next. The running job
+/// counts as ahead.
 pub async fn position(pool: &SqlitePool, job: &Job) -> CoreResult<i64> {
     Ok(sqlx::query_scalar(
-        "SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')
-         AND (created_at < ? OR (created_at = ? AND rowid < (SELECT rowid FROM jobs WHERE id = ?)))",
+        "WITH me AS (SELECT priority, created_at, rowid AS r FROM jobs WHERE id = ?)
+         SELECT COUNT(*) FROM jobs, me WHERE jobs.status = 'running'
+            OR (jobs.status = 'queued' AND (jobs.priority < me.priority
+                OR (jobs.priority = me.priority AND (jobs.created_at < me.created_at
+                    OR (jobs.created_at = me.created_at AND jobs.rowid < me.r)))))",
     )
-    .bind(job.created_at)
-    .bind(job.created_at)
     .bind(&job.id)
     .fetch_one(pool)
     .await?)
@@ -163,7 +186,7 @@ pub async fn line(pool: &SqlitePool) -> CoreResult<Vec<LineEntry>> {
         "SELECT j.id AS job_id, j.account_id, a.name AS account_name, a.avatar_color, j.pack_id, j.status
          FROM jobs j JOIN accounts a ON a.id = j.account_id
          WHERE j.status IN ('queued', 'running')
-         ORDER BY CASE j.status WHEN 'running' THEN 0 ELSE 1 END, j.created_at, j.rowid",
+         ORDER BY CASE j.status WHEN 'running' THEN 0 ELSE 1 END, j.priority, j.created_at, j.rowid",
     )
     .fetch_all(pool)
     .await?)
@@ -173,7 +196,7 @@ pub async fn line(pool: &SqlitePool) -> CoreResult<Vec<LineEntry>> {
 pub async fn take_next(pool: &SqlitePool) -> CoreResult<Option<Job>> {
     let mut tx = pool.begin().await?;
     let next: Option<Job> = sqlx::query_as(&format!(
-        "SELECT {COLS} FROM jobs WHERE status = 'queued' ORDER BY created_at, rowid LIMIT 1"
+        "SELECT {COLS} FROM jobs WHERE status = 'queued' ORDER BY {RUN_ORDER} LIMIT 1"
     ))
     .fetch_optional(&mut *tx)
     .await?;
@@ -274,14 +297,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn desktop_jobs_go_before_phones_and_apps() {
+        let pool = open_in_memory().await.unwrap();
+        let dan = account(&pool, "Dan").await;
+        let app = create(&pool, &dan, "z_image_turbo", &json!({}), 2).await.unwrap();
+        let phone = create(&pool, &dan, "z_image_turbo", &json!({}), 1).await.unwrap();
+        let desk = create(&pool, &dan, "z_image_turbo", &json!({}), 0).await.unwrap();
+        assert_eq!(position(&pool, &desk).await.unwrap(), 0);
+        assert_eq!(position(&pool, &phone).await.unwrap(), 1);
+        assert_eq!(position(&pool, &app).await.unwrap(), 2);
+        let order: Vec<_> = line(&pool).await.unwrap().into_iter().map(|e| e.job_id).collect();
+        assert_eq!(order, vec![desk.id.clone(), phone.id.clone(), app.id.clone()]);
+        assert_eq!(take_next(&pool).await.unwrap().unwrap().id, desk.id);
+        // The running job counts as ahead of everyone waiting.
+        assert_eq!(position(&pool, &phone).await.unwrap(), 1);
+        assert_eq!(position(&pool, &app).await.unwrap(), 2);
+        assert_eq!(priority_for(crate::sessions::SessionKind::App), 2);
+    }
+
+    #[tokio::test]
     async fn queue_runs_in_order_and_keeps_jobs_private() {
         let pool = open_in_memory().await.unwrap();
         let dan = account(&pool, "Dan").await;
         let eve = account(&pool, "Eve").await;
-        let a = create(&pool, &dan, "z_image_turbo", &json!({"prompt": "one"}))
+        let a = create(&pool, &dan, "z_image_turbo", &json!({"prompt": "one"}), 1)
             .await
             .unwrap();
-        let b = create(&pool, &eve, "z_image_turbo", &json!({"prompt": "two"}))
+        let b = create(&pool, &eve, "z_image_turbo", &json!({"prompt": "two"}), 1)
             .await
             .unwrap();
         assert_eq!(position(&pool, &a).await.unwrap(), 0);
@@ -314,7 +356,7 @@ mod tests {
     async fn running_jobs_fail_after_a_restart() {
         let pool = open_in_memory().await.unwrap();
         let dan = account(&pool, "Dan").await;
-        create(&pool, &dan, "z_image_turbo", &json!({})).await.unwrap();
+        create(&pool, &dan, "z_image_turbo", &json!({}), 1).await.unwrap();
         let job = take_next(&pool).await.unwrap().unwrap();
         assert_eq!(recover(&pool).await.unwrap(), 1);
         let after = get(&pool, &dan, &job.id).await.unwrap();
@@ -327,10 +369,10 @@ mod tests {
         let pool = open_in_memory().await.unwrap();
         let dan = account(&pool, "Dan").await;
         for _ in 0..MAX_QUEUED_PER_ACCOUNT {
-            create(&pool, &dan, "z_image_turbo", &json!({})).await.unwrap();
+            create(&pool, &dan, "z_image_turbo", &json!({}), 1).await.unwrap();
         }
         assert!(matches!(
-            create(&pool, &dan, "z_image_turbo", &json!({})).await,
+            create(&pool, &dan, "z_image_turbo", &json!({}), 1).await,
             Err(CoreError::Conflict(_))
         ));
     }

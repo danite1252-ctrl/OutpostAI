@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, secretProblem, type Account, type EnginesStatus, type Role, type SignInResponse } from "../api";
 import { EnginesPanel } from "../components/engines";
-import { AppKeysPanel } from "../components/keys";
-import { NetworkPanel } from "../components/network";
 import { Avatar, Button, ErrorNote, Field } from "../components/ui";
 
 const ROLES: { value: Role; label: string; hint: string }[] = [
@@ -38,8 +36,9 @@ export default function Settings({
         <EnginesPanel token={auth.token} canManage={isOwner} status={engines} onChanged={onEnginesChanged} />
       </div>
       {isOwner && <AccountsPanel token={auth.token} selfId={auth.account.id} />}
-      <AppKeysPanel auth={auth} />
-      {isOwner && <NetworkPanel token={auth.token} />}
+      <p className="rounded-2xl border border-line bg-surface p-4 text-sm text-muted">
+        App keys, paired phones and network access are under <b className="text-ink">Connections</b> in the side bar.
+      </p>
       <ChangeMySecret token={auth.token} onChanged={onSignedOut} />
       <p className="text-xs text-muted">Outpost {version} · MIT licence · runs entirely on this PC</p>
     </section>

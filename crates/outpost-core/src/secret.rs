@@ -59,7 +59,7 @@ pub fn hash_token(token: &str) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn random_bytes<const N: usize>() -> CoreResult<[u8; N]> {
+pub fn random_bytes<const N: usize>() -> CoreResult<[u8; N]> {
     let mut buf = [0u8; N];
     getrandom::getrandom(&mut buf).map_err(|e| CoreError::Internal(format!("no randomness: {e}")))?;
     Ok(buf)

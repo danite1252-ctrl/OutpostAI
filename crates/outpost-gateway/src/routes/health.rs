@@ -31,7 +31,7 @@ pub async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
     }))
 }
 
-fn machine_name() -> String {
+pub(crate) fn machine_name() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "Outpost".into())

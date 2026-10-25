@@ -53,52 +53,68 @@ pub async fn check_secret(pool: &SqlitePool, account_id: &str, secret: &str, con
         return Err(CoreError::Forbidden("Service accounts sign in with API keys.".into()));
     }
 
-    let t = now();
-    if let Some(until) = row.locked_until {
-        if until > t {
-            return Err(CoreError::Locked { retry_after: until - t });
-        }
-    }
-
     let hash = row
         .secret_hash
         .clone()
         .ok_or_else(|| CoreError::Forbidden("This account has no PIN or password set.".into()))?;
+
+    // Count the attempt before checking it, in one statement, so a burst of guesses
+    // sent at once can't all slip past the lockout: the attempt that reaches the limit
+    // locks the account there and then, and later ones are refused.
+    let t = now();
+    let reserved: Option<i64> = sqlx::query_scalar(
+        "UPDATE accounts SET failed_attempts = failed_attempts + 1,
+             locked_until = CASE WHEN failed_attempts + 1 >= ?1
+                 THEN ?2 + MIN(?3, ?4 * (1 << MIN(failed_attempts + 1 - ?1, 10)))
+                 ELSE locked_until END
+         WHERE id = ?5 AND (locked_until IS NULL OR locked_until <= ?2)
+         RETURNING failed_attempts",
+    )
+    .bind(MAX_ATTEMPTS)
+    .bind(t)
+    .bind(MAX_LOCK_SECS)
+    .bind(BASE_LOCK_SECS)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(attempts) = reserved else {
+        return Err(CoreError::Locked {
+            retry_after: locked_for(pool, account_id, t).await?,
+        });
+    };
+
     let attempt = secret.to_string();
     let ok = tokio::task::spawn_blocking(move || verify_secret(&attempt, &hash))
         .await
         .map_err(|e| CoreError::Internal(e.to_string()))?;
 
     if !ok {
-        let attempts = row.failed_attempts + 1;
-        let locked_until = if attempts >= MAX_ATTEMPTS {
-            let doublings = (attempts - MAX_ATTEMPTS).min(10) as u32;
-            Some(t + (BASE_LOCK_SECS * 2_i64.pow(doublings)).min(MAX_LOCK_SECS))
-        } else {
-            None
-        };
-        sqlx::query("UPDATE accounts SET failed_attempts = ?, locked_until = ? WHERE id = ?")
-            .bind(attempts)
-            .bind(locked_until)
-            .bind(account_id)
-            .execute(pool)
-            .await?;
         audit::log_quiet(pool, Some(account_id), None, "secret_failed", Some(context)).await;
-        return Err(match locked_until {
-            Some(until) => CoreError::Locked { retry_after: until - t },
-            None => CoreError::BadSecret {
+        return Err(if attempts >= MAX_ATTEMPTS {
+            CoreError::Locked {
+                retry_after: locked_for(pool, account_id, t).await?,
+            }
+        } else {
+            CoreError::BadSecret {
                 attempts_left: MAX_ATTEMPTS - attempts,
-            },
+            }
         });
     }
 
-    if row.failed_attempts != 0 || row.locked_until.is_some() {
-        sqlx::query("UPDATE accounts SET failed_attempts = 0, locked_until = NULL WHERE id = ?")
-            .bind(account_id)
-            .execute(pool)
-            .await?;
-    }
+    sqlx::query("UPDATE accounts SET failed_attempts = 0, locked_until = NULL WHERE id = ?")
+        .bind(account_id)
+        .execute(pool)
+        .await?;
     Account::try_from(row)
+}
+
+/// Seconds left on an account's lock (at least 1 while locked).
+async fn locked_for(pool: &SqlitePool, account_id: &str, t: i64) -> CoreResult<i64> {
+    let until: Option<i64> = sqlx::query_scalar("SELECT locked_until FROM accounts WHERE id = ?")
+        .bind(account_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(until.map(|u| (u - t).max(1)).unwrap_or(1))
 }
 
 #[cfg(test)]
@@ -152,6 +168,29 @@ mod tests {
         // Even the right PIN is refused while locked.
         assert!(matches!(
             sign_in(&pool, &dan.id, "4821", SessionKind::Desktop, "").await,
+            Err(CoreError::Locked { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_burst_of_guesses_still_locks() {
+        let (pool, dan) = setup().await;
+        let tries: Vec<_> = (0..20)
+            .map(|_| {
+                let (pool, id) = (pool.clone(), dan.id.clone());
+                tokio::spawn(async move { check_secret(&pool, &id, "0000", "test").await })
+            })
+            .collect();
+        let mut checked = 0;
+        for t in tries {
+            if matches!(t.await.unwrap(), Err(CoreError::BadSecret { .. })) {
+                checked += 1;
+            }
+        }
+        // Only the attempts before the lock were actually checked.
+        assert!(checked < MAX_ATTEMPTS, "{checked} guesses got through");
+        assert!(matches!(
+            check_secret(&pool, &dan.id, "4821", "test").await,
             Err(CoreError::Locked { .. })
         ));
     }

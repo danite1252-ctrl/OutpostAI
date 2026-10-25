@@ -8,6 +8,7 @@ import Chat from "./Chat";
 import Personas from "./Personas";
 import Create from "./Create";
 import Gallery from "./Gallery";
+import Connections from "./Connections";
 import { DownloadsButton } from "../components/downloads";
 import { QueueButton } from "../components/queue";
 import type { CreateRequest } from "../components/gallery";
@@ -25,11 +26,10 @@ const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "settings", label: "Settings", icon: icons.settings },
 ];
 
-type Built = "chat" | "personas" | "models" | "settings" | "create" | "gallery";
+type Built = "chat" | "personas" | "models" | "settings" | "create" | "gallery" | "connections";
 
 const COMING: Record<Exclude<Section, Built>, { phase: number; text: string }> = {
   train: { phase: 4, text: "Training Studio: datasets, vision captions and Z-Image LoRAs." },
-  connections: { phase: 3, text: "Pair your phone over Wi-Fi, Tailscale or Cloudflare." },
 };
 
 export default function Shell({
@@ -161,7 +161,8 @@ export default function Shell({
               onSignedOut={onSignedOutElsewhere}
             />
           )}
-          {(section === "train" || section === "connections") && (
+          {section === "connections" && <Connections auth={auth} />}
+          {section === "train" && (
             <ComingSoon label={NAV.find((n) => n.id === section)!.label} {...COMING[section]} />
           )}
         </main>

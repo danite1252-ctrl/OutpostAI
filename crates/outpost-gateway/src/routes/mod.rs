@@ -9,6 +9,7 @@ pub mod keys;
 pub mod models;
 pub mod network;
 pub mod openai;
+pub mod pairing;
 pub mod setup;
 
 use outpost_core::accounts::Account;

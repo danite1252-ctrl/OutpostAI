@@ -57,8 +57,6 @@ pub(crate) struct AccountRow {
     pub role: String,
     pub avatar_color: String,
     pub secret_hash: Option<String>,
-    pub failed_attempts: i64,
-    pub locked_until: Option<i64>,
     pub created_at: i64,
 }
 
@@ -86,7 +84,7 @@ pub struct NewAccount {
 }
 
 const SELECT_ROW: &str =
-    "SELECT id, name, role, avatar_color, secret_hash, failed_attempts, locked_until, created_at FROM accounts";
+    "SELECT id, name, role, avatar_color, secret_hash, created_at FROM accounts";
 
 pub async fn count(pool: &SqlitePool) -> CoreResult<i64> {
     Ok(sqlx::query_scalar("SELECT COUNT(*) FROM accounts")

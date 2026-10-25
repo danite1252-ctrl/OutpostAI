@@ -94,8 +94,14 @@ fn pack_infos(
 #[utoipa::path(post, path = "/api/packs/{id}/install", tag = "create", security(("bearer" = [])),
     params(("id" = String, Path, description = "Pack id")),
     responses((status = 202, description = "Downloading"), (status = 403, description = "Not allowed", body = ErrorBody), (status = 409, description = "Already downloading or no space", body = ErrorBody)))]
-pub async fn install_pack(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {
+pub async fn install_pack(
+    State(state): State<AppState>,
+    auth: Auth,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
     auth.require_owner()?;
+    auth.require_fresh_pin(&state, &headers).await?;
     let pack = pack_or_404(&id)?;
     state
         .assets
@@ -230,7 +236,8 @@ pub async fn create_job(
         attachments::remove_files(&saved).await;
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid", e.to_string()));
     }
-    let job = match jobs::create(&state.pool, &auth.account.id, &pack.id, &Value::Object(inputs)).await {
+    let priority = jobs::priority_for(auth.session.kind);
+    let job = match jobs::create(&state.pool, &auth.account.id, &pack.id, &Value::Object(inputs), priority).await {
         Ok(job) => job,
         Err(e) => {
             attachments::remove_files(&saved).await;

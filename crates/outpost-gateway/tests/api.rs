@@ -347,6 +347,12 @@ async fn openapi_lists_every_route() {
         "/api/gallery/shared",
         "/api/media/{id}/share",
         "/api/queue",
+        "/api/pairing",
+        "/api/pairing/{id}",
+        "/api/pair/hello",
+        "/api/pair/complete",
+        "/api/devices",
+        "/api/devices/{id}",
     ] {
         assert!(paths.contains_key(p), "missing {p} in OpenAPI spec");
     }
@@ -1009,5 +1015,141 @@ async fn create_lists_packs_and_checks_jobs() {
     let (status, _) = call(&app, "POST", "/api/media/nope/share", Some(sam_token), Some(json!({"shared": true}))).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = call(&app, "GET", "/api/gallery/shared", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+async fn call_with(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    token: Option<&str>,
+    headers: &[(&str, &str)],
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let mut req = Request::builder().method(method).uri(uri);
+    if let Some(t) = token {
+        req = req.header(header::AUTHORIZATION, format!("Bearer {t}"));
+    }
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let req = match body {
+        Some(b) => req
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(b.to_string())),
+        None => req.body(Body::empty()),
+    }
+    .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into()))
+    };
+    (status, value)
+}
+
+#[tokio::test]
+async fn a_phone_pairs_over_the_secure_port_only() {
+    let pool = outpost_core::db::open_in_memory().await.unwrap();
+    let mut config = Config::local_default();
+    config.data_dir = temp_data_dir();
+    config.ollama_url = "http://127.0.0.1:9".into();
+    let state = AppState::with_pool(pool, config);
+    let local = router(state.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 50000))));
+
+    // Network access off: no encrypted port, so no pairing yet.
+    let (owner, _) = setup_owner(&local).await;
+    let (status, body) = call(&local, "POST", "/api/pairing", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let _ = state.tls.set(outpost_gateway::tls::TlsInfo {
+        port: 7421,
+        fingerprint: "ab".repeat(32),
+    });
+    let phone_plain = router(state.clone()).layer(MockConnectInfo(SocketAddr::from(([192, 168, 1, 77], 50000))));
+    let phone = router(state.clone())
+        .layer(axum::Extension(outpost_gateway::tls::Secure))
+        .layer(MockConnectInfo(SocketAddr::from(([192, 168, 1, 77], 50000))));
+
+    let (status, pairing) = call(&local, "POST", "/api/pairing", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::CREATED, "{pairing}");
+    let code = pairing["code"].as_str().unwrap().to_string();
+    assert_eq!(pairing["words"].as_array().unwrap().len(), 3);
+    assert!(pairing["qr_svg"].as_str().unwrap().contains("<svg"));
+    assert!(pairing["link"].as_str().unwrap().starts_with("outpost://pair?v=1&"));
+    assert!(pairing["link"].as_str().unwrap().contains(&format!("code={code}")));
+
+    // Plain HTTP from the network is refused; the secure port takes it.
+    let (status, _) = call(&phone_plain, "POST", "/api/pair/hello", None, Some(json!({"code": code}))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = call(&phone, "POST", "/api/pair/hello", None, Some(json!({"code": "000001"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, hello) = call(&phone, "POST", "/api/pair/hello", None, Some(json!({"code": code}))).await;
+    assert_eq!(status, StatusCode::OK, "{hello}");
+    let dan = hello["accounts"][0]["id"].as_str().unwrap().to_string();
+
+    let complete = |secret: &str| json!({"code": code, "account_id": dan, "secret": secret, "device_name": "Dan's Pixel"});
+    let (status, _) = call(&phone, "POST", "/api/pair/complete", None, Some(complete("0000"))).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, paired) = call(&phone, "POST", "/api/pair/complete", None, Some(complete("4821"))).await;
+    assert_eq!(status, StatusCode::OK, "{paired}");
+    let device = paired["token"].as_str().unwrap().to_string();
+    assert_eq!(paired["session"]["kind"], "device");
+
+    // The code is spent; the PC sees which phone used it.
+    let (status, _) = call(&phone, "POST", "/api/pair/complete", None, Some(complete("4821"))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let id = pairing["id"].as_str().unwrap();
+    let (_, st) = call(&local, "GET", &format!("/api/pairing/{id}"), Some(&owner), None).await;
+    assert_eq!(st["used"], true);
+    assert_eq!(st["device"], "Dan's Pixel");
+
+    // The phone token works on the secure port only.
+    let (status, _) = call(&phone, "GET", "/api/me", Some(&device), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(&phone_plain, "GET", "/api/me", Some(&device), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // A phone can't make pairing codes.
+    let (status, _) = call(&phone, "POST", "/api/pairing", Some(&device), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Risky actions from a phone ask for the PIN again.
+    let key = json!({"label": "From phone"});
+    let (status, body) = call(&phone, "POST", "/api/keys", Some(&device), Some(key.clone())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"]["code"], "pin_required");
+    let (status, _) = call_with(&phone, "POST", "/api/keys", Some(&device), &[("x-outpost-pin", "0000")], Some(key.clone())).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, body) = call_with(&phone, "POST", "/api/keys", Some(&device), &[("x-outpost-pin", "4821")], Some(key)).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    // An app key can't make more keys or manage accounts (it may travel over plain HTTP).
+    let app_key = body["token"].as_str().unwrap().to_string();
+    let (status, _) = call(&local, "POST", "/api/keys", Some(&app_key), Some(json!({"label": "x"}))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = call(
+        &local,
+        "POST",
+        "/api/accounts",
+        Some(&app_key),
+        Some(json!({"name": "Mallory", "secret": "2468", "role": "owner"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Paired phones are listed and can be unpaired.
+    let (_, mine) = call(&phone, "GET", "/api/devices", Some(&device), None).await;
+    assert_eq!(mine.as_array().unwrap().len(), 1);
+    assert_eq!(mine[0]["current"], true);
+    assert_eq!(mine[0]["label"], "Dan's Pixel");
+    let (status, all) = call(&local, "GET", "/api/devices?all=true", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(all[0]["account_name"], "Dan");
+    let sid = mine[0]["id"].as_str().unwrap();
+    let (status, _) = call(&local, "DELETE", &format!("/api/devices/{sid}"), Some(&owner), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = call(&phone, "GET", "/api/me", Some(&device), None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

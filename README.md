@@ -161,6 +161,33 @@ commercial use.
   the form (Characters, or a style LoRA in Z-Image Turbo and Qwen-Image). Start the prompt
   with the LoRA's trigger word.
 
+## Phones and connections (phase 3a)
+
+**Connections** in the side bar holds paired phones, app keys and network access.
+
+- **Encrypted port.** With "Allow other devices on my network" on, Outpost also serves
+  **port 7421 over TLS**, with a certificate it makes itself (`<data folder>\tls`). Phones
+  must use it; their tokens are refused over plain HTTP. Hermes and other app keys keep
+  using port 7420 as before.
+- **Pairing.** "Pair a phone" shows a one-time 6-digit code (10 minutes, five wrong guesses
+  and it's dead), a QR code and three check words made from the certificate. The phone pins
+  the certificate (from the QR, or after the words match), then picks an account and enters
+  its PIN, and stays signed in.
+- **Found on the network.** Outpost announces itself over mDNS as `_outpost._tcp` (name,
+  version, ports, hardware tier; nothing about accounts).
+- **Phones confirm risky actions** (deleting models, making app keys, changing accounts) by
+  sending the PIN again in an `X-Outpost-Pin` header.
+- **Queue order.** Jobs from the desktop go first, then phones, then app keys.
+- **App keys can't manage Outpost.** Making app keys, changing accounts, deleting models
+  and installing engines or workflows need the desktop app or a phone (with its PIN); an
+  app key gets 403, since it may travel over plain HTTP.
+- **Wrong PINs** are counted before they're checked, so a burst of guesses still locks the
+  account after five; a wrong PIN during pairing also counts against the code.
+- **Caution:** Outpost trusts requests from 127.0.0.1 as "on this PC". Don't put a proxy or
+  port forward (SSH tunnel, reverse proxy) in front of port 7420 on the Outpost PC; it would
+  make remote requests look local. Phase 3c's Tailscale and Cloudflare support is designed
+  around this.
+
 ## Training spike
 
 Before Training Studio (phase 4) is built, `docs/spike-ai-toolkit.md` checks that
@@ -208,6 +235,11 @@ ai-toolkit trains Z-Image Turbo and Wan 2.2 on a 16 GB card. Its scripts live in
 | GET | `/api/gallery/shared` | bearer | The shared gallery, most recently shared first, with who shared each |
 | POST | `/api/media/{id}/share` | bearer | `{"shared": true}` to share one of yours with everyone, `false` to stop (the owner can unshare anyone's) |
 | GET | `/api/downloads` | bearer | Every download, running and finished: file n of m, bytes, speed, time left |
+| POST | `/api/pairing` | bearer, desktop app | A pairing code, QR (SVG), check words and the certificate fingerprint |
+| GET | `/api/pairing/{id}` | bearer, desktop app | Has that code been used, and by which phone |
+| POST | `/api/pair/hello` | none, encrypted port | Phone step 1: check the code, list accounts |
+| POST | `/api/pair/complete` | none, encrypted port | Phone step 2: code + account + PIN → device token |
+| GET, DELETE | `/api/devices[/{id}]` | bearer | My paired phones (`?all=true` everyone's, owner) / unpair |
 | GET | `/openapi.json` | none | The full spec |
 
 Security notes: PINs and passwords are hashed with Argon2id; tokens are random 256-bit

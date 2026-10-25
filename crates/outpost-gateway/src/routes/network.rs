@@ -27,6 +27,11 @@ pub struct NetworkStatus {
     pub lan_address: Option<String>,
     /// Base URL for OpenAI-compatible apps on other devices (when access is on).
     pub base_url: Option<String>,
+    /// The encrypted port phones pair with, when it is running.
+    pub secure_port: Option<u16>,
+    /// SHA-256 of Outpost's certificate, and its three check words.
+    pub fingerprint: Option<String>,
+    pub words: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -58,6 +63,13 @@ async fn status(state: &AppState) -> ApiResult<NetworkStatus> {
             (true, Some(ip)) => Some(format!("http://{ip}:{port}/v1")),
             _ => None,
         },
+        secure_port: state.tls.get().map(|t| t.port),
+        fingerprint: state.tls.get().map(|t| t.fingerprint.clone()),
+        words: state
+            .tls
+            .get()
+            .map(|t| outpost_core::pairing::words(&t.fingerprint).iter().map(|w| w.to_string()).collect())
+            .unwrap_or_default(),
     })
 }
 

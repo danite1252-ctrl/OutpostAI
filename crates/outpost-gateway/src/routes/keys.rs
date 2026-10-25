@@ -61,8 +61,10 @@ pub struct NewKeyRequest {
 pub async fn create(
     State(state): State<AppState>,
     auth: Auth,
+    headers: axum::http::HeaderMap,
     Json(req): Json<NewKeyRequest>,
 ) -> ApiResult<(StatusCode, Json<SignInResponse>)> {
+    auth.require_fresh_pin(&state, &headers).await?;
     let account_id = target(&auth, req.account_id)?;
     let account = accounts::get(&state.pool, &account_id).await?;
     let label = req.label.trim();

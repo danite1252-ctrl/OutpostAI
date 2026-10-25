@@ -13,6 +13,7 @@ pub mod error;
 pub mod jobs;
 pub mod media;
 pub mod memory;
+pub mod pairing;
 pub mod personas;
 pub mod secret;
 pub mod sessions;

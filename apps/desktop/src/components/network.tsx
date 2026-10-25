@@ -20,7 +20,7 @@ export function NetworkPanel({ token }: { token: string }) {
     if (
       turnOn &&
       !window.confirm(
-        "Other devices on your network will be able to reach Outpost with an app key. PIN sign-in stays on this PC. " +
+        "Other devices on your network will be able to reach Outpost with an app key or a paired phone. PIN sign-in stays on this PC. " +
           "Only do this on a network you trust (home Wi-Fi, not public Wi-Fi). Continue?",
       )
     )
@@ -43,8 +43,9 @@ export function NetworkPanel({ token }: { token: string }) {
       <div>
         <h2 className="text-lg font-semibold">Network</h2>
         <p className="text-sm text-muted">
-          Lets apps on other machines, like Hermes on another PC, connect with an app key. Signing in with a PIN, the
-          account list and first-run setup always stay on this PC. Ollama and ComfyUI are never exposed.
+          Lets apps on other machines, like Hermes on another PC, connect with an app key (port 7420), and paired phones
+          connect over the encrypted port (7421). Signing in with a PIN, the account list and first-run setup stay on
+          this PC. Ollama and ComfyUI are never exposed.
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-line bg-surface p-5">
@@ -65,7 +66,8 @@ export function NetworkPanel({ token }: { token: string }) {
       {status?.restart_required && (
         <p className="rounded-2xl border border-ember bg-surface p-4 text-sm" role="status">
           Saved. Close and reopen Outpost to {status.lan_access ? "start" : "stop"} listening on the network.
-          {status.lan_access && " Windows may ask whether to allow Outpost through the firewall: choose Private networks."}
+          {status.lan_access &&
+            " Windows may ask whether to allow Outpost through the firewall (for both ports): choose Private networks."}
         </p>
       )}
       <ErrorNote>{error}</ErrorNote>

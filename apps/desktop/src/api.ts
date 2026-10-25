@@ -229,6 +229,36 @@ export interface NetworkStatus {
   lan_address: string | null;
   /** Base URL for apps on other devices, when network access is running. */
   base_url: string | null;
+  /** The encrypted port phones pair with, when it is running. */
+  secure_port: number | null;
+  fingerprint: string | null;
+  /** Three words from the certificate; a phone shows the same ones. */
+  words: string[];
+}
+
+export interface PairingView {
+  id: string;
+  code: string;
+  expires_at: number;
+  fingerprint: string;
+  words: string[];
+  port: number;
+  hosts: string[];
+  link: string;
+  qr_svg: string;
+  name: string;
+}
+
+export interface PairingStatus {
+  used: boolean;
+  expired: boolean;
+  device: string | null;
+  account_name: string | null;
+}
+
+export interface DeviceView extends Session {
+  account_name: string;
+  current: boolean;
 }
 
 export class ApiError extends Error {
@@ -333,6 +363,11 @@ export const api = {
   network: (token: string) => request<NetworkStatus>("GET", "/api/settings/network", { token }),
   setNetwork: (token: string, lanAccess: boolean) =>
     request<NetworkStatus>("PUT", "/api/settings/network", { token, body: { lan_access: lanAccess } }),
+  createPairing: (token: string) => request<PairingView>("POST", "/api/pairing", { token }),
+  pairingStatus: (token: string, id: string) =>
+    request<PairingStatus>("GET", `/api/pairing/${encodeURIComponent(id)}`, { token }),
+  devices: (token: string, all = false) => request<DeviceView[]>("GET", `/api/devices${all ? "?all=true" : ""}`, { token }),
+  revokeDevice: (token: string, id: string) => request<void>("DELETE", `/api/devices/${encodeURIComponent(id)}`, { token }),
   engines: (token: string) => request<EnginesStatus>("GET", "/api/engines", { token }),
   engineAction: (token: string, id: EngineId, action: "install" | "start" | "stop") =>
     request<void>("POST", `/api/engines/${id}/${action}`, { token }),

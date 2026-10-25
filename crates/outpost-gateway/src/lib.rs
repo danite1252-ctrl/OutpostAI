@@ -5,12 +5,14 @@
 
 pub mod config;
 pub mod create;
+pub mod discovery;
 pub mod error;
 pub mod extract;
 pub mod llm;
 pub mod memory;
 pub mod openapi;
 pub mod routes;
+pub mod tls;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, OnceLock};
@@ -53,6 +55,8 @@ pub struct AppState {
     pub assets: Arc<AssetStore>,
     /// The Create job queue (the worker runs in [`serve_state`]).
     pub queue: Arc<create::Queue>,
+    /// The encrypted port for phones, once it is running (network access on).
+    pub tls: Arc<OnceLock<tls::TlsInfo>>,
 }
 
 impl AppState {
@@ -87,6 +91,7 @@ impl AppState {
             comfy: Arc::new(Comfy::new()),
             assets,
             queue: create::new_queue(),
+            tls: Arc::new(OnceLock::new()),
         }
     }
 
@@ -120,14 +125,18 @@ const DESKTOP_ORIGINS: [&str; 5] = [
 ];
 
 pub fn router(state: AppState) -> Router {
-    use routes::{accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, setup};
+    use routes::{accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup};
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(
             DESKTOP_ORIGINS.into_iter().map(HeaderValue::from_static),
         ))
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::PATCH])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::HeaderName::from_static("x-outpost-pin"),
+        ]);
 
     Router::new()
         .route("/api/health", get(health::health))
@@ -194,6 +203,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/media/{id}/share", post(create::share_media))
         .route("/api/media/{id}", get(create::get_media).delete(create::delete_media))
         .route("/api/downloads", get(downloads::list))
+        .route("/api/pairing", post(pairing::create_code))
+        .route("/api/pairing/{id}", get(pairing::code_status))
+        .route("/api/pair/hello", post(pairing::hello))
+        .route("/api/pair/complete", post(pairing::complete))
+        .route("/api/devices", get(pairing::list_devices))
+        .route("/api/devices/{id}", delete(pairing::revoke_device))
         .route("/api/hardware", get(models::hardware))
         .route("/api/models", get(models::overview))
         .route("/api/models/pull", post(models::pull))
@@ -230,6 +245,19 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     let starter = engines.clone();
     tokio::spawn(async move { starter.init().await });
     tokio::spawn(create::worker(state.clone()));
+    // With network access on, phones get the encrypted port next door, and the
+    // Outpost announces itself on the network.
+    let secure = if bind.ip().is_loopback() {
+        None
+    } else {
+        match start_secure_port(&state).await {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                tracing::warn!(error = %e, "couldn't start the encrypted port for phones");
+                None
+            }
+        }
+    };
     let result = axum::serve(
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),
@@ -238,9 +266,56 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
         let _ = tokio::signal::ctrl_c().await;
     })
     .await;
+    // Stop the encrypted port (and the network announcement) with the main one.
+    if let Some(handle) = secure {
+        handle.abort();
+    }
     engines.shutdown();
     result?;
     Ok(())
+}
+
+/// The port phones use: the API port plus one (7421 by default).
+pub fn secure_port(api_port: u16) -> u16 {
+    api_port.wrapping_add(1)
+}
+
+async fn start_secure_port(state: &AppState) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+    let bind = state.config.bind;
+    let identity = tls::load_or_create(&state.config.data_dir)?;
+    let config = tls::server_config(&identity)?;
+    let addr = SocketAddr::new(bind.ip(), secure_port(bind.port()));
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or(addr.port());
+    let _ = state.tls.set(tls::TlsInfo {
+        port,
+        fingerprint: identity.fingerprint.clone(),
+    });
+    tracing::info!(%addr, fingerprint = %identity.fingerprint, "encrypted port for phones listening");
+    let app = router(state.clone());
+
+    // Announce it; a failure here only means phones must type the address.
+    let hw = routes::models::measure(state).await;
+    let tier = format!("{:?}", hw.tier).to_lowercase();
+    let daemon = routes::network::lan_ip().and_then(|ip| {
+        let name = routes::health::machine_name();
+        discovery::advertise(&name, ip, port, bind.port(), &tier)
+            .map_err(|e| tracing::warn!(error = %e, "couldn't announce Outpost on the network"))
+            .ok()
+    });
+    // One task owns both, so aborting it closes the port and ends the announcement.
+    Ok(tokio::spawn(async move {
+        struct Announce(Option<mdns_sd::ServiceDaemon>);
+        impl Drop for Announce {
+            fn drop(&mut self) {
+                if let Some(d) = self.0.take() {
+                    let _ = d.shutdown();
+                }
+            }
+        }
+        let _announce = Announce(daemon);
+        tls::serve(listener, config, app).await;
+    }))
 }
 
 /// Is an Outpost gateway already answering at `bind`? A gateway listening on every

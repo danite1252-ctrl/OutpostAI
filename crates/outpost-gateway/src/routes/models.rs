@@ -201,8 +201,14 @@ pub async fn pull(State(state): State<AppState>, auth: Auth, Json(req): Json<Mod
         (status = 403, description = "Not allowed", body = ErrorBody),
         (status = 503, description = "Ollama isn't running", body = ErrorBody),
     ))]
-pub async fn remove(State(state): State<AppState>, auth: Auth, Json(req): Json<ModelRequest>) -> ApiResult<StatusCode> {
+pub async fn remove(
+    State(state): State<AppState>,
+    auth: Auth,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<ModelRequest>,
+) -> ApiResult<StatusCode> {
     auth.require_owner()?;
+    auth.require_fresh_pin(&state, &headers).await?;
     state.models.remove(&req.model).await.map_err(model_error)?;
     outpost_core::audit::log_quiet(
         &state.pool,
