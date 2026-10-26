@@ -91,11 +91,29 @@ Copy-Item "$($setup.FullName).sig" (Join-Path $out "$setupName.sig") -Force
 $apkName = "Outpost-$Version.apk"
 if (-not $SkipPhone) {
     Step "Phone app"
+    # Android Studio's SDK, and a Java 17 or 21 for Gradle (newer ones fail), like the test runner.
+    if (-not $env:ANDROID_HOME) { $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA "Android\Sdk" }
+    if (-not (Test-Path $env:ANDROID_HOME)) { throw "The Android SDK wasn't found at $env:ANDROID_HOME (install Android Studio), or add -SkipPhone." }
+    $jdks = @()
+    foreach ($base in @("C:\Program Files\Microsoft", "C:\Program Files\Eclipse Adoptium", "C:\Program Files\Java", "C:\Program Files\Zulu")) {
+        if (Test-Path $base) { $jdks += Get-ChildItem $base -Directory | ForEach-Object { $_.FullName } }
+    }
+    $jdks += "C:\Program Files\Android\Android Studio\jbr"
+    if ($env:JAVA_HOME) { $jdks = @($env:JAVA_HOME) + $jdks }
+    $jdk = $jdks | Where-Object {
+        $rel = Join-Path $_ "release"
+        (Test-Path $rel) -and (Select-String -Path $rel -Pattern '^JAVA_VERSION="(17|21)' -Quiet)
+    } | Select-Object -First 1
+    if (-not $jdk) { throw "No Java 17 or 21 found for the phone build (winget install Microsoft.OpenJDK.17), or add -SkipPhone." }
+    $env:JAVA_HOME = $jdk
     $mobile = Join-Path $root "apps\mobile"
     Set-Location $mobile
     $env:CI = "true"
     Run @("npm", "install", "--no-audit", "--no-fund")
     Run @("npx", "expo", "prebuild", "--platform", "android", "--no-install")
+    # Tell Gradle where the SDK is, whatever the environment says.
+    $sdkDir = ($env:ANDROID_HOME -replace "\\", "/")
+    [IO.File]::WriteAllText((Join-Path $mobile "android\local.properties"), "sdk.dir=$sdkDir`n")
     $env:OUTPOST_KEYSTORE = $keystore
     $env:OUTPOST_KEYSTORE_PASSWORD = $phonePassword
     Set-Location (Join-Path $mobile "android")
