@@ -28,7 +28,11 @@ $out = Join-Path $root "target\release-out\$tag"
 
 function Step($text) { Write-Host ""; Write-Host "== $text" -ForegroundColor Cyan }
 function Run($what) {
-    & $what[0] $what[1..($what.Length - 1)]
+    $exe = $what[0]
+    # npm.ps1 / npx.ps1 misread their arguments when called this way; use the .cmd versions.
+    if ($exe -eq "npm" -or $exe -eq "npx") { $exe = "$exe.cmd" }
+    $rest = @($what | Select-Object -Skip 1)
+    & $exe @rest
     if ($LASTEXITCODE -ne 0) { throw "Failed: $($what -join ' ')" }
 }
 function Plain($secure) {
