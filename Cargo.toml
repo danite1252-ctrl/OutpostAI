@@ -11,7 +11,7 @@ members = [
 default-members = ["crates/outpost-core", "crates/outpost-engines", "crates/outpost-gateway"]
 
 [workspace.package]
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 license = "MIT"
 rust-version = "1.80"
