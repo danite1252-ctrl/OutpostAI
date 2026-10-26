@@ -34,6 +34,10 @@ class PhoneVoice(
   /** Which recognizer to make next: the on-device one until it says it can't. */
   private var onDeviceWorks = true
   @Volatile private var player: MediaPlayer? = null
+  /** A reply is audible right now (not paused, not between pieces). */
+  @Volatile private var sounding = false
+  /** Paused because someone may be talking over it; resumed if it was only noise. */
+  private var held = false
   private var conversation: Conversation? = null
   /** Streams muted to silence the recognizer's start/stop beeps, to unmute afterwards. */
   private val beepsMuted = mutableListOf<Int>()
@@ -192,8 +196,9 @@ class PhoneVoice(
       context(),
       bargeIn,
       emit,
-      isPlaying = { player != null },
-      interrupt = { main.post { stopPlayingNow(true) } }
+      isPlaying = { sounding },
+      // Only pause: if it turns out to be noise, the reply carries on from where it was.
+      interrupt = { main.post { holdNow() } }
     )
     try {
       c.start()
@@ -370,9 +375,7 @@ class PhoneVoice(
     playing = file
     p.setAudioAttributes(
       AudioAttributes.Builder()
-        // In a hands-free conversation the reply goes through the call path, so echo
-        // cancelling can take it back out of the microphone.
-        .setUsage(if (conversation != null) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_ASSISTANT)
+        .setUsage(AudioAttributes.USAGE_ASSISTANT)
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
         .build()
     )
@@ -385,6 +388,8 @@ class PhoneVoice(
       p.setDataSource(file.absolutePath)
       p.setOnPreparedListener {
         it.start()
+        sounding = true
+        held = false
         startMeter(it)
       }
       p.prepareAsync()
@@ -419,6 +424,8 @@ class PhoneVoice(
   private fun finished(p: MediaPlayer, error: String?) {
     if (player !== p) return
     player = null
+    sounding = false
+    held = false
     stopMeter()
     try {
       p.release()
@@ -431,9 +438,37 @@ class PhoneVoice(
 
   fun stopPlaying() = main.post { stopPlayingNow(true) }
 
+  /** Pause the reply (someone may be talking over it). */
+  private fun holdNow() {
+    val p = player ?: return
+    try {
+      if (p.isPlaying) {
+        p.pause()
+        sounding = false
+        held = true
+      }
+    } catch (_: Exception) {
+    }
+  }
+
+  /** Carry on with a held reply: it was only noise. */
+  fun resumePlaying() = main.post {
+    val p = player
+    if (p != null && held) {
+      try {
+        p.start()
+        sounding = true
+      } catch (_: Exception) {
+      }
+    }
+    held = false
+  }
+
   private fun stopPlayingNow(announce: Boolean) {
     val p = player ?: return
     player = null
+    sounding = false
+    held = false
     stopMeter()
     try {
       p.stop()

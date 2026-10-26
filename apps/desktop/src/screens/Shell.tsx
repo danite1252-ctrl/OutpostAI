@@ -45,6 +45,8 @@ export default function Shell({
   const { status: engines, refresh: refreshEngines } = useEngines(auth.token, onSignedOutElsewhere);
   const ollamaUp = engineReady(engines, "ollama");
   const comfyUp = engineReady(engines, "comfyui");
+  // Whisper (hearing) and Kokoro (speaking) run together in Outpost's voice service.
+  const voiceUp = engineReady(engines, "voice");
 
   return (
     <div className="flex h-full bg-night">
@@ -93,6 +95,14 @@ export default function Shell({
             <span className="flex items-center gap-2">
               <StatusDot on={comfyUp} />
               ComfyUI
+            </span>
+            <span className="flex items-center gap-2" title="Speech recognition (in the voice service)">
+              <StatusDot on={voiceUp} />
+              Whisper
+            </span>
+            <span className="flex items-center gap-2" title="Speaking replies (in the voice service)">
+              <StatusDot on={voiceUp} />
+              Kokoro
             </span>
           </div>
           <QueueButton

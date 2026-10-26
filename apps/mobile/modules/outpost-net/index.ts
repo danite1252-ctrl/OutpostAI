@@ -42,8 +42,8 @@ type Events = {
 /** Hands-free listening (always-on microphone with echo cancelling). */
 export type ConverseEvent =
   | { type: "ready"; echoCancelling: boolean }
-  | { type: "level"; level: number }
-  /** Someone started talking; `interrupted` when that stopped a reply. */
+  | { type: "level"; level: number; db?: number; roomDb?: number; voiceLike?: boolean; inSpeech?: boolean }
+  /** Someone started talking; `interrupted` when that paused a reply (resume it if it was noise). */
   | { type: "start"; interrupted: boolean }
   /** One thing said, as a base64 16 kHz WAV. */
   | { type: "utterance"; audio: string }
@@ -88,6 +88,8 @@ declare class OutpostNetModule extends NativeModule<Events> {
   /** Play a file:// clip (deleted afterwards); onPlayback when it ends. */
   play(uri: string): void;
   stopPlaying(): void;
+  /** Carry on with a reply that talking-over paused (it was only noise). */
+  resumePlaying(): void;
   /** Open the microphone for a hands-free conversation; with bargeIn, talking stops a reply. */
   converse(bargeIn: boolean): void;
   converseMuted(muted: boolean): void;

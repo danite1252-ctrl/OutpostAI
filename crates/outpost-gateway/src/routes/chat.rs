@@ -271,6 +271,7 @@ pub async fn send_message(
     // "/draw ..." (or "draw <a character> ...") makes a picture instead of a reply.
     let my_characters = outpost_core::training::characters(&state.pool, Some(account_id.as_str())).await?;
     if let Some(prompt) = draw_request(&content, &my_characters) {
+        let prompt = prompt.as_str();
         if !images.is_empty() {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
@@ -490,22 +491,111 @@ pub async fn delete_message(
 
 // ---------------------------------------------------------------- drawing from chat
 
-/// The words to draw, when a message asks for a picture: `/draw <words>`, or
-/// "draw ..." / "make a picture of ..." naming one of my characters.
-pub fn draw_request<'a>(content: &'a str, characters: &[outpost_core::training::Character]) -> Option<&'a str> {
-    let lower = content.to_lowercase();
-    if lower == "/draw" || lower.starts_with("/draw ") {
-        return Some(content.get(5..).unwrap_or("").trim());
+/// Whether a message asks for a picture, and if so what to draw.
+///
+/// - `/draw ...` (or "slash draw ..." when spoken) always draws.
+/// - "draw me ...", "draw a ...", "draw a picture of ...", "make a picture of ...",
+///   "picture of ..." draw anything.
+/// - "draw ..." alone draws when it names one of your characters ("draw Kat at the beach"),
+///   so "draw conclusions" stays a chat message.
+///
+/// Speech is allowed for: a polite lead-in ("can you", "please", "hey Kat,") is skipped, a
+/// full stop at the end is dropped, and a character's name heard as a sound-alike word
+/// ("Cat" for "Kat") is put back.
+pub fn draw_request(content: &str, characters: &[outpost_core::training::Character]) -> Option<String> {
+    let mut text = content.trim().trim_end_matches(['.', '!', '?']).trim().to_string();
+    // Spoken lead-ins, possibly several ("okay, can you please ...").
+    const LEADS: [&str; 14] = [
+        "okay", "ok", "hey", "hi", "please", "can you", "could you", "would you", "will you", "i want you to",
+        "i'd like you to", "go ahead and", "now", "and",
+    ];
+    loop {
+        let lower = text.to_lowercase();
+        let Some(lead) = LEADS.iter().find(|l| {
+            lower.starts_with(*l) && lower[l.len()..].starts_with(|c: char| c == ' ' || c == ',')
+        }) else {
+            break;
+        };
+        text = text.get(lead.len()..).unwrap_or("").trim_start_matches([' ', ',']).to_string();
     }
-    for lead in ["draw me ", "draw ", "make a picture of ", "make me a picture of ", "picture of "] {
+    let lower = text.to_lowercase();
+    for slash in ["/draw", "slash draw", "slash-draw"] {
+        if lower == slash || lower.starts_with(&format!("{slash} ")) {
+            return Some(with_names(text.get(slash.len()..).unwrap_or("").trim(), characters));
+        }
+    }
+    for lead in [
+        "draw me a picture of ",
+        "draw a picture of ",
+        "draw me ",
+        "make me a picture of ",
+        "make a picture of ",
+        "picture of ",
+        "draw a ",
+        "draw an ",
+    ] {
         if lower.starts_with(lead) {
-            let Some(rest) = content.get(lead.len()..).map(str::trim) else { continue };
-            if outpost_core::training::mentioned(rest, characters).is_some() {
-                return Some(rest);
+            // "draw a dog" keeps its "a"; "draw me a dog" and "picture of a dog" don't need to.
+            let keep = if lead == "draw a " || lead == "draw an " { "draw ".len() } else { lead.len() };
+            let rest = text.get(keep..).unwrap_or("").trim();
+            if !rest.is_empty() {
+                return Some(with_names(rest, characters));
             }
         }
     }
+    if lower.starts_with("draw ") {
+        let rest = with_names(text.get("draw ".len()..).unwrap_or("").trim(), characters);
+        if outpost_core::training::mentioned(&rest, characters).is_some() {
+            return Some(rest);
+        }
+    }
     None
+}
+
+/// Put back character names that speech recognition wrote as a sound-alike word
+/// ("Cat" for "Kat", "Kaht"…): compares how the words sound, roughly.
+fn with_names(text: &str, characters: &[outpost_core::training::Character]) -> String {
+    fn sound(word: &str) -> String {
+        let w = word.to_lowercase();
+        let w = w.replace("ph", "f").replace("ck", "k").replace("qu", "kw").replace("ah", "a");
+        let mut out = String::new();
+        for ch in w.chars().filter(|c| c.is_alphanumeric()) {
+            let ch = match ch {
+                'c' | 'q' => 'k',
+                'z' => 's',
+                'y' => 'i',
+                other => other,
+            };
+            // Doubled letters sound like one ("Katt").
+            if out.ends_with(ch) {
+                continue;
+            }
+            out.push(ch);
+        }
+        out
+    }
+    if outpost_core::training::mentioned(text, characters).is_some() {
+        return text.to_string();
+    }
+    let names: Vec<(String, &str)> = characters
+        .iter()
+        .filter(|c| c.name.chars().count() >= 2 && !c.name.contains(' '))
+        .map(|c| (sound(&c.name), c.name.as_str()))
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    for word in text.split(' ') {
+        let core = word.trim_matches(|c: char| !c.is_alphanumeric());
+        // "a cat" is any cat; "Cat at the beach" (a name, no article) is the character.
+        let article = out
+            .last()
+            .is_some_and(|w| ["a", "an", "the", "my", "your", "some", "this", "that"].contains(&w.to_lowercase().as_str()));
+        let replaced = names
+            .iter()
+            .find(|(key, _)| !article && !core.is_empty() && sound(core) == *key)
+            .map(|(_, name)| word.replace(core, name));
+        out.push(replaced.unwrap_or_else(|| word.to_string()));
+    }
+    out.join(" ")
 }
 
 /// Most pictures one chat message may ask for.
@@ -733,7 +823,43 @@ async fn draw(
 
 #[cfg(test)]
 mod draw_tests {
-    use super::plan_drawings;
+    use super::{draw_request, plan_drawings};
+    use outpost_core::training::Character;
+
+    fn kat() -> Vec<Character> {
+        vec![Character {
+            id: "c1".into(),
+            account_id: "a1".into(),
+            name: "Kat".into(),
+            trigger_word: "zk4t".into(),
+            lora_file: "kat.safetensors".into(),
+            training_id: None,
+            step: None,
+            created_at: 0,
+            subject: Some("woman".into()),
+            style: None,
+        }]
+    }
+
+    #[test]
+    fn spoken_draw_requests_are_understood() {
+        let c = kat();
+        let d = |t: &str| draw_request(t, &c);
+        assert_eq!(d("/draw a lighthouse").as_deref(), Some("a lighthouse"));
+        assert_eq!(d("Slash draw a lighthouse.").as_deref(), Some("a lighthouse"));
+        // Whisper writes the name as it sounds.
+        assert_eq!(d("Draw Cat at the beach.").as_deref(), Some("Kat at the beach"));
+        assert_eq!(d("Can you please draw Kat at the beach?").as_deref(), Some("Kat at the beach"));
+        assert_eq!(d("Okay, draw me a dog in the snow").as_deref(), Some("a dog in the snow"));
+        assert_eq!(d("Draw a picture of a fox").as_deref(), Some("a fox"));
+        // An article means any cat, not the character.
+        assert_eq!(d("Draw a cat at the beach").as_deref(), Some("a cat at the beach"));
+        assert_eq!(d("draw zk4t smiling").as_deref(), Some("zk4t smiling"));
+        // Ordinary chat stays chat.
+        assert_eq!(d("draw conclusions from this"), None);
+        assert_eq!(d("How do I draw better?"), None);
+        assert_eq!(d("Hello, can you hear me?"), None);
+    }
 
     #[test]
     fn one_message_can_ask_for_several_pictures() {

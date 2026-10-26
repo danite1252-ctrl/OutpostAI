@@ -6,7 +6,7 @@ chat or pictures for the graphics card.
 
   GET  /health            {"ok": true, ...}
   GET  /voices            {"voices": ["af_heart", ...]}
-  POST /stt?language=xx   body: audio in any common format -> {"text", "language", "duration"}
+  POST /stt?language=xx&hotwords=Kat,zk4t   body: audio in any common format -> {"text", "language", "duration"}
   POST /tts               {"text", "voice", "speed"} -> audio/wav
 
 `python server.py --prefetch` downloads the speech-recognition model and exits.
@@ -161,7 +161,11 @@ class Handler(BaseHTTPRequestHandler):
                 if samples.size < 1600:  # under 0.1 s
                     self.send_json(200, {"text": "", "language": language or "", "duration": samples.size / 16000})
                     return
-                segments, info = stt_model().transcribe(samples, language=language, vad_filter=True, beam_size=1)
+                # Names Whisper wouldn't guess (characters, personas), so "Kat" isn't written "Cat".
+                hotwords = ((query.get("hotwords") or [None])[0] or "").strip()[:400] or None
+                segments, info = stt_model().transcribe(
+                    samples, language=language, vad_filter=True, beam_size=1, hotwords=hotwords
+                )
                 text = " ".join(s.text.strip() for s in segments).strip()
                 self.send_json(200, {"text": text, "language": info.language, "duration": info.duration})
             elif url.path == "/tts":

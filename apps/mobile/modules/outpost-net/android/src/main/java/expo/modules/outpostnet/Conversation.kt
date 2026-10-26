@@ -7,12 +7,15 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.util.Base64
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.abs
+import kotlin.math.log10
 import kotlin.math.sqrt
 
 /**
@@ -41,6 +44,7 @@ class Conversation(
   private var record: AudioRecord? = null
   private var echo: AcousticEchoCanceler? = null
   private var noise: NoiseSuppressor? = null
+  private var gain: AutomaticGainControl? = null
   private var savedMode = AudioManager.MODE_NORMAL
   @Suppress("DEPRECATION") private var savedSpeaker = false
 
@@ -48,16 +52,14 @@ class Conversation(
   fun start() {
     val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
     if (min <= 0) throw IllegalStateException("This phone's microphone can't record at 16 kHz.")
-    // Call mode: echo cancelling knows what's playing and takes it back out of the microphone.
+    // The speech-recognition microphone (what Android's own recognizer uses): full level.
+    // Call mode was tried first, but some phones (Samsung) record it near-silent at arm's length.
+    // Echo cancelling is added as an effect where the phone has it; on top of that the reply's
+    // own sound raises the bar for talking over it, and the PC checks the words aren't the reply.
     savedMode = audio.mode
-    try {
-      audio.mode = AudioManager.MODE_IN_COMMUNICATION
-      route()
-    } catch (_: Exception) {
-    }
     val rec = try {
       @Suppress("MissingPermission")
-      AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, RATE))
+      AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, RATE))
     } catch (e: SecurityException) {
       restoreAudio()
       throw IllegalStateException("Outpost isn't allowed to use the microphone. Allow it in the phone's settings.")
@@ -69,6 +71,8 @@ class Conversation(
     }
     if (AcousticEchoCanceler.isAvailable()) echo = AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true }
     if (NoiseSuppressor.isAvailable()) noise = NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true }
+    // No automatic gain: it lifts the room noise in every pause, so a pause never sounds like one.
+    // Quiet recordings are turned up in wav() instead.
     rec.startRecording()
     record = rec
     running = true
@@ -90,6 +94,8 @@ class Conversation(
     echo = null
     noise?.release()
     noise = null
+    gain?.release()
+    gain = null
     restoreAudio()
   }
 
@@ -127,26 +133,65 @@ class Conversation(
     val frame = ShortArray(FRAME)
     val preRoll = ArrayDeque<ShortArray>()
     val said = ArrayList<ShortArray>()
-    var floor = 300.0
+    var floor = 60.0
     var inSpeech = false
     var loudRun = 0
     var spoken = 0
     var silent = 0
     var tick = 0
+    /** Your loudest recent speech in this utterance, so a pause is judged against your voice. */
+    var peak = 0.0
+    /** The room's typical level (a TV, a fan), not just its quietest moments. */
+    var noise = 60.0
+    /** The last 0.8 s while talking: true for each quiet 20 ms. */
+    val quietWindow = BooleanArray(END_FRAMES)
+    var quietAt = 0
+    /** How loud the reply sounds in the microphone while it plays. */
+    var echoLevel = 0.0
     while (running) {
       val n = rec.read(frame, 0, FRAME)
       if (n <= 0) continue
       var sum = 0.0
-      for (i in 0 until n) sum += frame[i].toDouble() * frame[i]
+      var crossings = 0
+      for (i in 0 until n) {
+        sum += frame[i].toDouble() * frame[i]
+        if (i > 0 && (frame[i] >= 0) != (frame[i - 1] >= 0)) crossings++
+      }
       val rms = sqrt(sum / n)
+      // Voices cross zero at a moderate rate; hiss, clatter and fans much faster, hum much slower.
+      val zcr = crossings.toDouble() / n
+      val voiceLike = zcr in 0.01..0.32
       val playing = isPlaying()
       // The room's background level, learnt while nobody is talking.
-      if (!inSpeech && !playing) floor = if (rms < floor) floor * 0.9 + rms * 0.1 else floor * 0.997 + rms * 0.003
-      val base = maxOf(floor * 3.0, 450.0)
+      if (!inSpeech && !playing) {
+        floor = if (rms < floor) floor * 0.9 + rms * 0.1 else floor * 0.997 + rms * 0.003
+        noise = noise * 0.97 + rms * 0.03
+      }
+      // Judged against the room, not a fixed loudness: well above its quietest moments AND
+      // its usual level, so steady background (a TV, a fan) doesn't count as you talking.
+      val base = maxOf(floor * 3.0, noise * 2.2, 90.0)
       // While a reply plays a little of it gets past echo cancelling: need clearer speech to interrupt.
-      val threshold = if (playing) base * 2.2 else base
-      val loud = rms > threshold
-      if (++tick % 5 == 0) emit("onConverse", mapOf("type" to "level", "level" to (rms / (threshold * 3)).coerceIn(0.0, 1.0)))
+      if (playing && !inSpeech) echoLevel = echoLevel * 0.95 + rms * 0.05
+      else if (!playing) echoLevel *= 0.98
+      // Talking over a reply must be clearly louder than the reply sounds in the microphone.
+      val threshold = if (playing) maxOf(base * 2.2, echoLevel * 3.0) else base
+      val loud = rms > threshold && voiceLike
+      if (++tick % 5 == 0) {
+        // On a decibel scale above the room's background, so quiet and loud phones look alike.
+        val above = 20 * log10(maxOf(rms, 1.0) / maxOf(floor, 1.0))
+        emit(
+          "onConverse",
+          mapOf(
+            "type" to "level",
+            "level" to ((above - 4) / 26).coerceIn(0.0, 1.0),
+            // For the check line on the hands-free screen.
+            "db" to 20 * log10(maxOf(rms, 1.0) / 32768),
+            "roomDb" to 20 * log10(maxOf(floor, 1.0) / 32768),
+            "voiceLike" to voiceLike,
+            "inSpeech" to inSpeech
+          )
+        )
+      }
       if (muted || (playing && !bargeIn)) {
         inSpeech = false
         said.clear()
@@ -158,7 +203,8 @@ class Conversation(
       if (!inSpeech) {
         preRoll.addLast(copy)
         while (preRoll.size > PRE_ROLL) preRoll.removeFirst()
-        loudRun = if (loud) loudRun + 1 else 0
+        // Talking over a reply needs steady speech: most of the last ~0.4 s, not one bang.
+        loudRun = if (loud) loudRun + 1 else if (playing) maxOf(0, loudRun - 2) else 0
         if (loudRun >= (if (playing) BARGE_IN_FRAMES else START_FRAMES)) {
           inSpeech = true
           said.clear()
@@ -166,18 +212,30 @@ class Conversation(
           preRoll.clear()
           spoken = loudRun
           silent = 0
+          peak = rms
+          quietWindow.fill(false)
+          quietAt = 0
           if (playing) interrupt()
           emit("onConverse", mapOf("type" to "start", "interrupted" to playing))
         }
       } else {
         said.add(copy)
-        if (loud) {
+        // Still talking: above the room AND within 12 dB of your own recent loudest.
+        // Background noise sits well below your voice, so it counts as a pause even when
+        // it's loud enough to be "above the room" (otherwise it would never end).
+        val talkingNow = loud && rms > peak * 0.25
+        if (talkingNow) {
           spoken++
-          silent = 0
+          peak = maxOf(peak * 0.997, rms)
         } else {
-          silent++
+          peak *= 0.997
         }
-        if (silent >= END_FRAMES || said.size >= MAX_FRAMES) {
+        quietWindow[quietAt] = !talkingNow
+        quietAt = (quietAt + 1) % END_FRAMES
+        // A pause: nearly all (85%) of the last 0.8 s was quiet, so a noise blip doesn't hold it open.
+        val quiet = quietWindow.count { it }
+        silent = if (said.size >= END_FRAMES) quiet else 0
+        if (silent >= END_FRAMES * 85 / 100 || said.size >= MAX_FRAMES) {
           inSpeech = false
           loudRun = 0
           if (spoken >= MIN_SPEECH_FRAMES) {
@@ -193,8 +251,12 @@ class Conversation(
 
   private fun wav(frames: List<ShortArray>): String {
     val samples = frames.sumOf { it.size }
+    // Bring quiet recordings up to a good level for Whisper (peak at about 90%, at most 12x).
+    var peak = 1
+    for (f in frames) for (v in f) peak = maxOf(peak, abs(v.toInt()))
+    val boost = (29500.0 / peak).coerceIn(1.0, 12.0)
     val data = ByteBuffer.allocate(samples * 2).order(ByteOrder.LITTLE_ENDIAN)
-    for (f in frames) for (v in f) data.putShort(v)
+    for (f in frames) for (v in f) data.putShort((v * boost).toInt().coerceIn(-32768, 32767).toShort())
     val out = ByteArrayOutputStream(44 + samples * 2)
     val h = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
     h.put("RIFF".toByteArray()).putInt(36 + samples * 2).put("WAVE".toByteArray())
@@ -209,11 +271,11 @@ class Conversation(
     const val RATE = 16000
     /** 20 ms. */
     const val FRAME = 320
-    const val PRE_ROLL = 15 // 300 ms
+    const val PRE_ROLL = 30 // 600 ms: keeps the first word, even after a pause for talking over
     const val START_FRAMES = 4 // 80 ms of speech starts listening
-    const val BARGE_IN_FRAMES = 12 // 240 ms to talk over a reply
+    const val BARGE_IN_FRAMES = 18 // ~360 ms of speech to pause a reply
     const val END_FRAMES = 40 // 800 ms of quiet ends it
     const val MIN_SPEECH_FRAMES = 15 // under 300 ms of speech is a cough or a bump
-    const val MAX_FRAMES = 1500 // 30 s
+    const val MAX_FRAMES = 750 // 15 s
   }
 }

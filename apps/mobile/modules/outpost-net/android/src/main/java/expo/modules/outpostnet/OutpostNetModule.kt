@@ -160,6 +160,7 @@ class OutpostNetModule : Module() {
     Function("cancelRecording") { voice.cancelRecording(); Unit }
     Function("play") { uri: String -> voice.play(uri); Unit }
     Function("stopPlaying") { voice.stopPlaying(); Unit }
+    Function("resumePlaying") { voice.resumePlaying(); Unit }
     Function("converse") { bargeIn: Boolean -> voice.converse(bargeIn); Unit }
     Function("converseMuted") { muted: Boolean -> voice.converseMuted(muted); Unit }
     Function("stopConversation") { voice.stopConversation(); Unit }

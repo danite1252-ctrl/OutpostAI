@@ -174,8 +174,11 @@ export class Outpost {
   }
 
   /** What the PC's Whisper heard in a recording (base64). */
-  transcribe(audio: string, mime = "audio/mp4", language?: string) {
-    return this.json<{ text: string; language: string }>("POST", "/api/voice/transcribe", { audio: `data:${mime};base64,${audio}`, language });
+  async transcribe(audio: string, mime = "audio/mp4", language?: string): Promise<{ text: string; language: string }> {
+    // Whisper on the PC's processor can take a while on a long recording.
+    const r = await this.send("POST", "/api/voice/transcribe", { audio: `data:${mime};base64,${audio}`, language }, { timeoutMs: 120000 });
+    if (r.status < 200 || r.status >= 300) throw parseError(r);
+    return JSON.parse(r.body) as { text: string; language: string };
   }
 
   /** A Server-Sent Events reply. Returns a function that stops following it. */

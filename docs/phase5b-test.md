@@ -33,9 +33,13 @@ In a chat with that persona:
    the box (not sent yet). Send it.
 2. **Pass:** the reply is read aloud by itself (because of *Read replies aloud*). The
    **play** button on any earlier reply reads that one; pressing it again stops it.
-3. Press **Hands-free**. Say something, then pause. **Pass:** after about a second it sends,
-   the persona answers out loud, then it listens again. **Interrupt** cuts the reply short;
-   **Pause** stops listening; **End** (or Esc) closes it. The turns are in the chat afterwards.
+3. Press **Hands-free**. Say something, then pause. **Pass:** about a second after you stop
+   it sends, the persona answers out loud (the wave turns its colour), then it listens again.
+   Each thing you say is sent **once**.
+4. **Talk over it:** start speaking while it's answering. **Pass:** the reply pauses straight
+   away and your words are answered. A cough, a clap or a door only pauses it for a moment;
+   it then carries on from where it was. **Pause** stops listening; **End** (or Esc) closes it.
+5. The bar at the top shows **Whisper** and **Kokoro** with green dots while voice is running.
 
 ## 4. Phone: install the new app
 
@@ -67,10 +71,12 @@ open with the phone's echo cancelling, Outpost notices when you start and stop t
 - About a second after you stop it shows *thinking*, then reads the answer out loud, then
   it's ready again by itself.
 - Hold a conversation of at least **four turns** without touching the screen.
-- **Talk over it:** start speaking while it's answering. The reply stops within about a
-  quarter of a second and what you said is answered (the first words aren't lost).
-- The persona doesn't interrupt itself: its own voice from the speaker doesn't cut the
-  reply short. (If it does on your phone, turn **Talk over replies** off and tell me.)
+- **Talk over it:** start speaking while it's answering. The reply pauses within about
+  half a second and what you said is answered (the first words aren't lost).
+- **Noise never cuts it off:** a cough, a clap, a door or a fan only
+  pauses the reply for a moment, then it carries on from where it was.
+- The persona doesn't interrupt itself: its own voice from the speaker doesn't stop the
+  reply. (If it does on your phone, turn **Talk over replies** off and tell me.)
 - **Pause** / **Resume** work; **End** or the back button closes it. The conversation is
   in the chat afterwards.
 - `/draw` works by voice too: say "draw Kat at the beach".

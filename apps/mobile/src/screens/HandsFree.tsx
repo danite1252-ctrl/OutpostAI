@@ -14,6 +14,24 @@ let talkOver = true;
 /** Whisper's usual guesses for a breath or background noise. */
 const NOT_SPEECH = /^\s*(you|thank you for watching|thanks for watching|\.+|…)[.!]?\s*$/i;
 
+/** Real words, not noise Whisper turned into a word or two of nothing. */
+function isSpeech(text: string) {
+  const t = text.trim();
+  return t.replace(/[^A-Za-z0-9\u00C0-\uFFFF]/g, "").length >= 2 && !NOT_SPEECH.test(t);
+}
+
+/** The reply's own words, heard back through the microphone (not the user talking over it). */
+function isEcho(heard: string, reply: string) {
+  const words = (t: string) => t.toLowerCase().match(/[a-z0-9\u00C0-\uFFFF']{2,}/g) ?? [];
+  const h = words(heard);
+  if (h.length === 0) return false;
+  const r = new Set(words(reply));
+  return h.filter((w) => r.has(w)).length / h.length >= 0.6;
+}
+
+/** Something said: a recording to work out, or words already worked out. */
+type Said = { audio: string } | { text: string };
+
 /**
  * A spoken conversation, like a call: the microphone stays open (with the phone's echo
  * cancelling), it notices when you start and stop talking (no beeps), your PC's Whisper
@@ -43,9 +61,16 @@ export default function HandsFree({
   const [voiceLevel, setVoiceLevel] = useState(0);
   /** Just finished hearing something: shows "Got it" for a moment. */
   const [gotIt, setGotIt] = useState(false);
+  /** What the microphone hears, for the check line at the bottom. */
+  const [meter, setMeter] = useState<{ db: number; room: number; voice: boolean; inSpeech: boolean } | null>(null);
+  const [lastStep, setLastStep] = useState("");
   const live = useRef(true);
   const phaseRef = useRef<Phase>("starting");
-  const queue = useRef<string[]>([]);
+  const queue = useRef<Said[]>([]);
+  /** A reply is paused because someone may be talking over it. */
+  const held = useRef(false);
+  /** The reply being read aloud, to tell its echo from you talking over it. */
+  const speaking = useRef("");
   const busy = useRef(false);
   const stopStream = useRef<(() => void) | null>(null);
 
@@ -106,22 +131,27 @@ export default function HandsFree({
     busy.current = true;
     try {
       while (live.current && queue.current.length) {
-        const audio = queue.current.shift()!;
+        const toText = async (item: Said) => ("text" in item ? item.text : (await api.transcribe(item.audio, "audio/wav")).text.trim());
         go("hearing");
         let text = "";
         try {
-          text = (await api.transcribe(audio, "audio/wav")).text.trim();
+          text = await toText(queue.current.shift()!);
         } catch (e) {
           setError(e instanceof Error ? e.message : "Your PC couldn't work out what you said.");
+          setLastStep("Sending what you said to your PC failed.");
           continue;
         }
         if (!live.current) return;
-        if (!text || NOT_SPEECH.test(text)) continue;
+        if (!isSpeech(text)) {
+          setLastStep(text.trim() ? `Your PC heard “${text.trim()}”: not words, so it was ignored.` : "Your PC heard no words in that.");
+          continue;
+        }
+        setLastStep("");
         // Said more while this was being worked out: send it all together.
         while (queue.current.length && phaseRef.current !== "paused") {
           try {
-            const more = (await api.transcribe(queue.current.shift()!, "audio/wav")).text.trim();
-            if (more && !NOT_SPEECH.test(more)) text = `${text} ${more}`;
+            const more = await toText(queue.current.shift()!);
+            if (isSpeech(more)) text = `${text} ${more}`;
           } catch {
             // Keep what we have.
           }
@@ -133,10 +163,19 @@ export default function HandsFree({
         const said = await ask(text);
         onTurn();
         if (!live.current) return;
-        // You spoke again while it was thinking: answer that instead of reading this out.
-        if (queue.current.length || !said.trim()) continue;
+        // You spoke again while it was thinking: answer that instead of reading this out
+        // (if it was really you, not noise).
+        if (!said.trim()) continue;
+        if (queue.current.length) {
+          const pending = await Promise.all(
+            queue.current.map((item) => ("text" in item ? item.text : api.transcribe(item.audio, "audio/wav").then((r) => r.text.trim(), () => ""))),
+          );
+          queue.current = pending.filter(isSpeech).map((text) => ({ text }));
+          if (queue.current.length) continue;
+        }
         go("speaking");
         try {
+          speaking.current = said;
           await say(api, said, persona?.id ?? null, "hands-free");
         } catch (e) {
           setError(e instanceof Error ? e.message : "The reply couldn't be read aloud.");
@@ -153,18 +192,49 @@ export default function HandsFree({
     const sub = OutpostNet.addListener("onConverse", (e: ConverseEvent) => {
       if (!live.current) return;
       if (e.type === "ready") go("listening");
-      else if (e.type === "level") setLevel(e.level);
+      else if (e.type === "level") {
+        setLevel(e.level);
+        if (e.db != null) setMeter({ db: e.db, room: e.roomDb ?? -90, voice: !!e.voiceLike, inSpeech: !!e.inSpeech });
+      }
       else if (e.type === "start") {
         setTalking(true);
-        // The phone already stopped the reply; let the reading-aloud know.
-        if (e.interrupted) stopSaying();
-      } else if (e.type === "discard") setTalking(false);
-      else if (e.type === "utterance") {
+        // The phone paused the reply; it carries on unless this turns out to be you talking.
+        if (e.interrupted) held.current = true;
+      } else if (e.type === "discard") {
         setTalking(false);
+        // Just a bump or a cough: carry on.
+        if (held.current) {
+          held.current = false;
+          OutpostNet.resumePlaying();
+        }
+      } else if (e.type === "utterance") {
+        setTalking(false);
+        if (phaseRef.current === "paused") return;
+        if (held.current || phaseRef.current === "speaking") {
+          // Talking over the reply: stop it only for real words, so noise never cuts it off.
+          const wasHeld = held.current;
+          held.current = false;
+          api.transcribe(e.audio, "audio/wav").then(
+            (r) => {
+              if (!live.current) return;
+              if (isSpeech(r.text) && !isEcho(r.text, speaking.current)) {
+                setGotIt(true);
+                setTimeout(() => setGotIt(false), 700);
+                queue.current.push({ text: r.text.trim() });
+                stopSaying(); // The reading-aloud ends and the turn loop picks this up.
+                void work();
+              } else if (wasHeld) OutpostNet.resumePlaying();
+            },
+            () => {
+              if (wasHeld) OutpostNet.resumePlaying();
+            },
+          );
+          return;
+        }
         setGotIt(true);
         setTimeout(() => setGotIt(false), 700);
-        if (phaseRef.current === "paused") return;
-        queue.current.push(e.audio);
+        setLastStep(`Heard ${(((e.audio.length * 3) / 4 - 44) / 32000).toFixed(1)} s, sending it to your PC…`);
+        queue.current.push({ audio: e.audio });
         void work();
       } else if (e.type === "error") {
         setError(e.message);
@@ -267,7 +337,6 @@ export default function HandsFree({
 
         <View style={{ gap: 14, alignItems: "center" }}>
           <View style={[s.row, { justifyContent: "center" }]}>
-            {phase === "speaking" && <Button kind="ghost" title="Interrupt" onPress={() => stopSaying()} />}
             {phase === "paused" ? (
               <Button
                 kind="ghost"
@@ -291,6 +360,7 @@ export default function HandsFree({
                   go("paused");
                   OutpostNet.converseMuted(true);
                   queue.current = [];
+                  held.current = false;
                   stopSaying();
                 }}
               />
@@ -301,6 +371,12 @@ export default function HandsFree({
           <Text style={{ color: C.muted, fontSize: 12, textAlign: "center" }}>
             Just talk, then pause.{over ? " Talk while it answers to cut in." : ""} Your PC works out what you said.
           </Text>
+          {meter ? (
+            <Text style={{ color: C.muted, fontSize: 11, textAlign: "center", fontVariant: ["tabular-nums"] }}>
+              Mic {Math.round(meter.db)} dB · room {Math.round(meter.room)} dB · {meter.inSpeech ? "hearing you" : meter.voice ? "voice-like" : "quiet"}
+              {lastStep ? `\n${lastStep}` : ""}
+            </Text>
+          ) : null}
         </View>
       </View>
     </Modal>

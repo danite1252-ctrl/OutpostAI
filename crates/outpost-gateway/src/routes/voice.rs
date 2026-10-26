@@ -180,17 +180,21 @@ fn clean_language(l: Option<&str>) -> Option<String> {
 }
 
 /// Send audio to the voice service.
-pub async fn transcribe_bytes(state: &AppState, audio: Vec<u8>, language: Option<String>) -> ApiResult<Transcript> {
+pub async fn transcribe_bytes(state: &AppState, audio: Vec<u8>, language: Option<String>, hints: &str) -> ApiResult<Transcript> {
     if audio.is_empty() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid", "The recording is empty."));
     }
-    let mut url = voice_url("/stt");
+    let mut query: Vec<(&str, String)> = Vec::new();
     if let Some(l) = language {
-        url.push_str(&format!("?language={l}"));
+        query.push(("language", l));
+    }
+    if !hints.is_empty() {
+        query.push(("hotwords", hints.to_string()));
     }
     let resp = state
         .llm
-        .post(url)
+        .post(voice_url("/stt"))
+        .query(&query)
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .timeout(Duration::from_secs(300))
         .body(audio)
@@ -215,9 +219,28 @@ pub async fn transcribe_bytes(state: &AppState, audio: Vec<u8>, language: Option
 #[utoipa::path(post, path = "/api/voice/transcribe", tag = "voice", security(("bearer" = [])),
     request_body = TranscribeRequest,
     responses((status = 200, description = "What was said", body = Transcript), (status = 503, description = "Voice isn't running", body = ErrorBody)))]
-pub async fn transcribe(State(state): State<AppState>, _auth: Auth, Json(req): Json<TranscribeRequest>) -> ApiResult<Json<Transcript>> {
+pub async fn transcribe(State(state): State<AppState>, auth: Auth, Json(req): Json<TranscribeRequest>) -> ApiResult<Json<Transcript>> {
     let audio = decode_audio(&req.audio)?;
-    Ok(Json(transcribe_bytes(&state, audio, clean_language(req.language.as_deref())).await?))
+    let hints = name_hints(&state, &auth.account.id).await;
+    Ok(Json(transcribe_bytes(&state, audio, clean_language(req.language.as_deref()), &hints).await?))
+}
+
+/// Your characters' and personas' names, for Whisper to listen for ("Kat, zk4t, Ada").
+async fn name_hints(state: &AppState, account_id: &str) -> String {
+    let mut names: Vec<String> = Vec::new();
+    if let Ok(chars) = outpost_core::training::characters(&state.pool, Some(account_id)).await {
+        for c in chars {
+            names.push(c.name);
+        }
+    }
+    if let Ok(ps) = personas::list(&state.pool, account_id).await {
+        for p in ps {
+            names.push(p.name);
+        }
+    }
+    names.retain(|n| !n.trim().is_empty());
+    names.dedup();
+    names.join(", ").chars().take(400).collect()
 }
 
 /// Text as it should be read aloud: no code, Markdown marks, links or picture cards.
@@ -375,7 +398,7 @@ pub async fn openai_transcriptions(
         }
     }
     let audio = audio.ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "invalid", "Send the recording as \"file\"."))?;
-    let t = transcribe_bytes(&state, audio, clean_language(language.as_deref())).await?;
+    let t = transcribe_bytes(&state, audio, clean_language(language.as_deref()), "").await?;
     Ok(Json(json!({ "text": t.text, "language": t.language, "duration": t.duration })))
 }
 

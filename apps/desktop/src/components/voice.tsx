@@ -44,6 +44,13 @@ class Recorder {
   }
 }
 
+/** Real words, not noise Whisper turned into a word or two of nothing. */
+const NOT_SPEECH = /^\s*(you|thank you for watching|thanks for watching|\.+|…)[.!]?\s*$/i;
+function isSpeech(text: string) {
+  const t = text.trim();
+  return t.replace(/[^A-Za-z0-9\u00C0-\uFFFF]/g, "").length >= 2 && !NOT_SPEECH.test(t);
+}
+
 /** Plays one thing at a time; starting another stops the last. */
 const speaker = {
   audio: null as HTMLAudioElement | null,
@@ -60,7 +67,27 @@ const speaker = {
     for (const v of buf) sum += v * v;
     return Math.min(1, Math.sqrt(sum / buf.length) * 4);
   },
+  /** Paused because someone may be talking over it. */
+  holding: false,
+  /** Something is audible right now. */
+  get sounding(): boolean {
+    return !!this.audio && !this.audio.paused;
+  },
+  /** Pause without finishing; `resume` carries on. */
+  hold() {
+    if (this.audio && !this.audio.paused) {
+      this.holding = true;
+      this.audio.pause();
+    }
+  },
+  resume() {
+    if (this.audio && this.holding) {
+      this.holding = false;
+      void this.audio.play().catch(() => undefined);
+    }
+  },
   stop() {
+    this.holding = false;
     this.audio?.pause();
     if (this.url) URL.revokeObjectURL(this.url);
     this.audio = null;
@@ -91,7 +118,9 @@ const speaker = {
         resolve();
       };
       audio.onended = done;
-      audio.onpause = done;
+      audio.onpause = () => {
+        if (!this.holding) done();
+      };
       audio.onerror = done;
       void audio.play().catch(done);
     });
@@ -212,11 +241,187 @@ export function PlayButton({ token, text, persona, onError }: { token: string; t
   );
 }
 
+
 type Phase = "starting" | "listening" | "hearing" | "thinking" | "speaking" | "paused";
 
+/** A 16 kHz mono WAV, as a data URL for the voice service. */
+function wavDataUrl(frames: Int16Array[]): string {
+  const samples = frames.reduce((n, f) => n + f.length, 0);
+  const buf = new ArrayBuffer(44 + samples * 2);
+  const v = new DataView(buf);
+  const text = (at: number, t: string) => [...t].forEach((c, i) => v.setUint8(at + i, c.charCodeAt(0)));
+  text(0, "RIFF");
+  v.setUint32(4, 36 + samples * 2, true);
+  text(8, "WAVE");
+  text(12, "fmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, 16000, true);
+  v.setUint32(28, 32000, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  text(36, "data");
+  v.setUint32(40, samples * 2, true);
+  let at = 44;
+  for (const f of frames) for (const x of f) {
+    v.setInt16(at, x, true);
+    at += 2;
+  }
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return `data:audio/wav;base64,${btoa(bin)}`;
+}
+
+interface EarEvents {
+  level: (level: number) => void;
+  /** Someone started talking; `held` when that paused a reply. */
+  start: (held: boolean) => void;
+  /** One thing said. */
+  utterance: (wav: string) => void;
+  /** Only a cough or a bump. */
+  discard: () => void;
+}
+
 /**
- * Hands-free: a call with the persona. It listens, notices when you stop talking,
- * sends what you said, speaks the reply, and listens again.
+ * Hands-free listening, like a call: the microphone stays open (with echo cancelling) and
+ * this notices when you start and stop talking, even while a reply plays. Talking over a
+ * reply pauses it; the reply only stops for good once Whisper confirms real words.
+ * The same rules as the phone's Conversation.kt.
+ */
+class Ear {
+  muted = false;
+  private ctx: AudioContext;
+  private node: ScriptProcessorNode;
+  private pending: number[] = [];
+  private carry = 0;
+  private acc = 0;
+  private accN = 0;
+  private floor = 0.01;
+  private inSpeech = false;
+  private loudRun = 0;
+  private spoken = 0;
+  private silent = 0;
+  private tick = 0;
+  private preRoll: Int16Array[] = [];
+  private said: Int16Array[] = [];
+
+  constructor(stream: MediaStream, private on: EarEvents, private talkOver: () => boolean) {
+    this.ctx = new AudioContext();
+    const src = this.ctx.createMediaStreamSource(stream);
+    this.node = this.ctx.createScriptProcessor(2048, 1, 1);
+    const ratio = this.ctx.sampleRate / 16000;
+    this.node.onaudioprocess = (e) => {
+      // Down to 16 kHz by averaging, then 20 ms frames.
+      const input = e.inputBuffer.getChannelData(0);
+      for (let i = 0; i < input.length; i++) {
+        this.acc += input[i];
+        this.accN++;
+        this.carry++;
+        if (this.carry >= ratio) {
+          this.carry -= ratio;
+          this.pending.push(this.acc / this.accN);
+          this.acc = 0;
+          this.accN = 0;
+        }
+      }
+      while (this.pending.length >= 320) this.frame(this.pending.splice(0, 320));
+    };
+    const silence = this.ctx.createGain();
+    silence.gain.value = 0;
+    src.connect(this.node);
+    this.node.connect(silence);
+    silence.connect(this.ctx.destination);
+    void this.ctx.resume();
+  }
+
+  close() {
+    this.node.onaudioprocess = null;
+    this.node.disconnect();
+    void this.ctx.close().catch(() => undefined);
+  }
+
+  private frame(samples: number[]) {
+    let sum = 0;
+    let crossings = 0;
+    const pcm = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+      const x = samples[i];
+      sum += x * x;
+      if (i > 0 && x >= 0 !== samples[i - 1] >= 0) crossings++;
+      pcm[i] = Math.max(-32768, Math.min(32767, Math.round(x * 32767)));
+    }
+    const rms = Math.sqrt(sum / samples.length);
+    // Voices cross zero at a moderate rate; hiss, clatter and fans much faster, hum much slower.
+    const zcr = crossings / samples.length;
+    const voiceLike = zcr >= 0.01 && zcr <= 0.32;
+    const playing = speaker.sounding;
+    if (!this.inSpeech && !playing) this.floor = rms < this.floor ? this.floor * 0.9 + rms * 0.1 : this.floor * 0.997 + rms * 0.003;
+    const base = Math.max(this.floor * 3, 0.014);
+    // While a reply plays a little of it gets past echo cancelling: need clearer speech.
+    const threshold = playing ? base * 2.2 : base;
+    const loud = rms > threshold && voiceLike;
+    if (++this.tick % 5 === 0) this.on.level(Math.min(1, rms / (threshold * 3)));
+    if (this.muted || (playing && !this.talkOver())) {
+      this.inSpeech = false;
+      this.said = [];
+      this.preRoll = [];
+      this.loudRun = 0;
+      return;
+    }
+    if (!this.inSpeech) {
+      this.preRoll.push(pcm);
+      if (this.preRoll.length > 30) this.preRoll.shift();
+      // Talking over a reply needs steady speech: most of the last ~0.4 s, not one bang.
+      this.loudRun = loud ? this.loudRun + 1 : playing ? Math.max(0, this.loudRun - 2) : 0;
+      if (this.loudRun >= (playing ? 18 : 4)) {
+        this.inSpeech = true;
+        this.said = this.preRoll; // Keep the start of the first word.
+        this.preRoll = [];
+        this.spoken = this.loudRun;
+        this.silent = 0;
+        if (playing) speaker.hold();
+        this.on.start(playing);
+      }
+      return;
+    }
+    this.said.push(pcm);
+    if (loud) {
+      this.spoken++;
+      this.silent = 0;
+    } else this.silent++;
+    // 0.8 s of quiet ends it (30 s at most); under 0.3 s of speech is a cough or a bump.
+    if (this.silent >= 40 || this.said.length >= 1500) {
+      this.inSpeech = false;
+      this.loudRun = 0;
+      const said = this.said;
+      this.said = [];
+      if (this.spoken >= 15) this.on.utterance(wavDataUrl(said));
+      else this.on.discard();
+    }
+  }
+}
+
+/** Remembered while Outpost is open: whether talking over a reply stops it. */
+let talkOverReplies = true;
+
+/** The reply's own words, heard back through the microphone (not the user talking over it). */
+function isEcho(heard: string, reply: string) {
+  const words = (t: string) => t.toLowerCase().match(/[a-z0-9\u00C0-\uFFFF']{2,}/g) ?? [];
+  const h = words(heard);
+  if (h.length === 0) return false;
+  const r = new Set(words(reply));
+  return h.filter((w) => r.has(w)).length / h.length >= 0.6;
+}
+
+/** Something said: a recording to work out, or words already worked out. */
+type Said = { audio: string } | { text: string };
+
+/**
+ * Hands-free: a call with the persona. The microphone stays open, it notices when you
+ * stop talking, sends what you said, speaks the reply, and you can talk over the reply
+ * to cut in (noise only pauses it for a moment).
  */
 export function HandsFree({
   token,
@@ -237,30 +442,37 @@ export function HandsFree({
   const [heard, setHeard] = useState("");
   const [reply, setReply] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const levelRef = useRef(0);
-  const setLevel = (v: number) => {
-    levelRef.current = v;
-  };
   const [talking, setTalking] = useState(false);
   const [gotIt, setGotIt] = useState(false);
-  const live = useRef(true);
+  const [over, setOver] = useState(talkOverReplies);
+  const overRef = useRef(talkOverReplies);
+  const levelRef = useRef(0);
   const phaseRef = useRef<Phase>("starting");
-  const stream = useRef<MediaStream | null>(null);
-  const ctx = useRef<AudioContext | null>(null);
-  const analyser = useRef<AnalyserNode | null>(null);
-  const recorder = useRef<Recorder | null>(null);
+  /**
+   * Which run of the conversation is current. React (in development) starts effects twice;
+   * an older run sees the number change and stops, so only one is ever listening.
+   */
+  const run = useRef(0);
+  const ear = useRef<Ear | null>(null);
+  const queue = useRef<Said[]>([]);
+  const busy = useRef(false);
+  const held = useRef(false);
+  /** The reply being read aloud, to tell its echo from you talking over it. */
+  const speaking = useRef("");
 
   const go = useCallback((p: Phase) => {
     phaseRef.current = p;
     setPhase(p);
   }, []);
 
+  const flashGotIt = useCallback(() => {
+    setGotIt(true);
+    window.setTimeout(() => setGotIt(false), 700);
+  }, []);
+
   const end = useCallback(() => {
-    live.current = false;
-    recorder.current?.cancel();
+    run.current++;
     stopSpeaking();
-    stream.current?.getTracks().forEach((t) => t.stop());
-    void ctx.current?.close().catch(() => undefined);
     onClose();
   }, [onClose]);
 
@@ -270,137 +482,156 @@ export function HandsFree({
     return () => window.removeEventListener("keydown", onKey);
   }, [end]);
 
-  // Loudness 0..1 from the analyser.
-  const loudness = useCallback(() => {
-    const a = analyser.current;
-    if (!a) return 0;
-    const buf = new Float32Array(a.fftSize);
-    a.getFloatTimeDomainData(buf);
-    let sum = 0;
-    for (const v of buf) sum += v * v;
-    return Math.sqrt(sum / buf.length);
-  }, []);
+  const toText = useCallback(async (item: Said) => ("text" in item ? item.text : (await voiceApi.transcribe(token, item.audio)).text.trim()), [token]);
 
-  /** Record one thing said: starts on speech, ends after a pause. Empty if nothing. */
-  const listenOnce = useCallback(async (): Promise<string> => {
-    const s = stream.current!;
-    // Learn the room's background level first.
-    let floor = 0;
-    for (let i = 0; i < 10; i++) {
-      floor = Math.max(floor, loudness());
-      await new Promise((r) => setTimeout(r, 30));
-    }
-    const threshold = Math.max(0.02, floor * 2.5);
-    const rec = new Recorder(s);
-    recorder.current = rec;
-    const started = Date.now();
-    let spoke = 0;
-    let quietSince = 0;
-    for (;;) {
-      if (!live.current || phaseRef.current === "paused") {
-        rec.cancel();
-        return "";
-      }
-      const l = loudness();
-      setLevel(Math.min(1, l / (threshold * 4)));
-      const now = Date.now();
-      if (l > threshold) {
-        if (!spoke) {
-          spoke = now;
-          setTalking(true);
+  /** Work through what was said, one turn at a time. */
+  const work = useCallback(
+    async (me: number) => {
+      if (busy.current) return;
+      busy.current = true;
+      const alive = () => run.current === me;
+      try {
+        while (alive() && queue.current.length) {
+          go("hearing");
+          let text = "";
+          try {
+            text = await toText(queue.current.shift()!);
+          } catch (err) {
+            setError(message(err));
+            continue;
+          }
+          // Background noise that Whisper turned into nothing (or "you", "Thank you for watching"): ignore it.
+          if (!alive() || !isSpeech(text)) continue;
+          // Said more while this was being worked out: send it all together.
+          while (queue.current.length && phaseRef.current !== "paused") {
+            const more = await toText(queue.current.shift()!).catch(() => "");
+            if (isSpeech(more)) text = `${text} ${more}`;
+          }
+          setHeard(text);
+          setReply("");
+          setError(null);
+          go("thinking");
+          let said = "";
+          try {
+            const id = await chatId();
+            await streamMessage(token, id, text, [], {
+              token: (t) => {
+                said += t;
+                setReply(said);
+              },
+              done: ({ message: m, error: e }) => {
+                said = m.content;
+                if (e) setError(e);
+              },
+              error: (m) => setError(m),
+            });
+          } catch (err) {
+            setError(message(err));
+          }
+          onTurn();
+          if (!alive() || !said.trim()) continue;
+          // You spoke again while it was thinking: answer that instead (if it was really you).
+          if (queue.current.length) {
+            const pending = await Promise.all(queue.current.map((item) => toText(item).catch(() => "")));
+            queue.current = pending.filter(isSpeech).map((t) => ({ text: t }));
+            if (queue.current.length) continue;
+          }
+          go("speaking");
+          try {
+            speaking.current = said;
+            await sayAloud(token, said, persona);
+          } catch (err) {
+            setError(message(err));
+          }
         }
-        quietSince = 0;
-      } else if (spoke && !quietSince) {
-        quietSince = now;
+      } finally {
+        busy.current = false;
+        if (alive() && phaseRef.current !== "paused") go("listening");
       }
-      // Done: talked for a moment, then quiet for 1.2 s; or 30 s of talking.
-      if (spoke && quietSince && now - quietSince > 1200 && quietSince - spoke > 300) break;
-      if (spoke && now - spoke > 30000) break;
-      // Nothing said for 20 s: start a fresh recording so it stays small.
-      if (!spoke && now - started > 20000) {
-        rec.cancel();
-        return listenOnce();
-      }
-      await new Promise((r) => setTimeout(r, 60));
-    }
-    setLevel(0);
-    setTalking(false);
-    setGotIt(true);
-    window.setTimeout(() => setGotIt(false), 700);
-    recorder.current = null;
-    return rec.stop();
-  }, [loudness]);
+    },
+    [chatId, go, onTurn, persona, toText, token],
+  );
 
-  const loop = useCallback(async () => {
-    while (live.current) {
-      if (phaseRef.current === "paused") {
-        await new Promise((r) => setTimeout(r, 200));
-        continue;
-      }
-      go("listening");
-      const audio = await listenOnce();
-      if (!live.current || !audio) continue;
-      go("hearing");
-      let text = "";
-      try {
-        text = (await voiceApi.transcribe(token, audio)).text;
-      } catch (err) {
-        setError(message(err));
-        continue;
-      }
-      if (!text) continue;
-      setHeard(text);
-      setReply("");
-      setError(null);
-      go("thinking");
-      let said = "";
-      try {
-        const id = await chatId();
-        await streamMessage(token, id, text, [], {
-          token: (t) => {
-            said += t;
-            setReply(said);
-          },
-          done: ({ message: m, error: e }) => {
-            said = m.content;
-            if (e) setError(e);
-          },
-          error: (m) => setError(m),
-        });
-      } catch (err) {
-        setError(message(err));
-      }
-      onTurn();
-      if (!live.current || !said.trim()) continue;
-      go("speaking");
-      try {
-        await sayAloud(token, said, persona);
-      } catch (err) {
-        setError(message(err));
-      }
-    }
-  }, [go, listenOnce, token, chatId, onTurn, persona]);
+  // The turn loop as of this render (the microphone's callbacks were made on the first).
+  const workRef = useRef(work);
+  workRef.current = work;
 
   useEffect(() => {
-    live.current = true;
+    const me = ++run.current;
+    const alive = () => run.current === me;
+    let stream: MediaStream | null = null;
+    let mine: Ear | null = null;
     (async () => {
       try {
-        const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-        stream.current = s;
-        const c = new AudioContext();
-        ctx.current = c;
-        const a = c.createAnalyser();
-        a.fftSize = 1024;
-        c.createMediaStreamSource(s).connect(a);
-        analyser.current = a;
-        await loop();
+        const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+        stream = s;
+        if (!alive()) {
+          s.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        mine = new Ear(
+          s,
+          {
+            level: (l) => {
+              levelRef.current = l;
+            },
+            start: (wasPlaying) => {
+              if (!alive()) return;
+              setTalking(true);
+              if (wasPlaying) held.current = true;
+            },
+            discard: () => {
+              setTalking(false);
+              // Just a bump or a cough: carry on.
+              if (held.current) {
+                held.current = false;
+                speaker.resume();
+              }
+            },
+            utterance: (wav) => {
+              if (!alive()) return;
+              setTalking(false);
+              if (phaseRef.current === "paused") return;
+              if (held.current || phaseRef.current === "speaking") {
+                // Talking over the reply: stop it only for real words, so noise never cuts it off.
+                const wasHeld = held.current;
+                held.current = false;
+                voiceApi.transcribe(token, wav).then(
+                  (r) => {
+                    if (!alive()) return;
+                    if (isSpeech(r.text) && !isEcho(r.text, speaking.current)) {
+                      flashGotIt();
+                      queue.current.push({ text: r.text.trim() });
+                      stopSpeaking(); // The reading-aloud ends and the turn loop picks this up.
+                      void workRef.current(me);
+                    } else if (wasHeld) speaker.resume();
+                  },
+                  () => {
+                    if (wasHeld) speaker.resume();
+                  },
+                );
+                return;
+              }
+              flashGotIt();
+              queue.current.push({ audio: wav });
+              void workRef.current(me);
+            },
+          },
+          () => overRef.current,
+        );
+        ear.current = mine;
+        go("listening");
       } catch (err) {
+        if (!alive()) return;
         setError(message(err));
         go("paused");
       }
     })();
     return () => {
-      live.current = false;
+      if (run.current === me) run.current++;
+      (mine as Ear | null)?.close();
+      (stream as MediaStream | null)?.getTracks().forEach((t) => t.stop());
+      stopSpeaking();
     };
     // Start once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -446,7 +677,7 @@ export function HandsFree({
           mode={mode}
           // The persona speaks in its own colour; you're white.
           color={mode === "speaking" ? (persona?.avatar_color ?? "#FFB547") : "#ffffff"}
-          level={() => (phaseRef.current === "speaking" ? speaker.level() : levelRef.current)}
+          level={() => (mode === "speaking" ? speaker.level() : levelRef.current)}
           height={160}
         />
         <p className={`text-lg font-medium ${phase === "paused" ? "text-muted" : ""}`} aria-live="polite">
@@ -462,17 +693,29 @@ export function HandsFree({
       </div>
       <div className="flex flex-col items-center gap-3">
         <div className="flex flex-wrap justify-center gap-3">
-          {phase === "speaking" && (
-            <Button variant="ghost" onClick={() => stopSpeaking()}>
-              Interrupt
-            </Button>
-          )}
           {phase === "paused" ? (
-            <Button variant="ghost" onClick={() => go("listening")} disabled={!stream.current}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (ear.current) ear.current.muted = false;
+                setError(null);
+                go("listening");
+              }}
+              disabled={!ear.current}
+            >
               Resume
             </Button>
           ) : (
-            <Button variant="ghost" onClick={() => go("paused")}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (ear.current) ear.current.muted = true;
+                queue.current = [];
+                held.current = false;
+                stopSpeaking();
+                go("paused");
+              }}
+            >
               Pause
             </Button>
           )}
@@ -480,6 +723,18 @@ export function HandsFree({
             End
           </Button>
         </div>
+        <label className="flex items-center gap-2 text-sm text-soft">
+          <input
+            type="checkbox"
+            checked={over}
+            onChange={(e) => {
+              talkOverReplies = e.target.checked;
+              overRef.current = e.target.checked;
+              setOver(e.target.checked);
+            }}
+          />
+          Talk over replies to cut in
+        </label>
         <p className="text-xs text-muted">Just talk, then pause: it sends after a moment of quiet. Esc ends.</p>
       </div>
     </div>
