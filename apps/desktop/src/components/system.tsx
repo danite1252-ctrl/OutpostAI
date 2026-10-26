@@ -325,3 +325,47 @@ export function DiagnosticsPanel({ token }: { token: string }) {
     </div>
   );
 }
+
+/** Settings › This window: keep Outpost running in the system tray when the window closes. */
+export function WindowPanel() {
+  const [tray, setTray] = useState<boolean | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<boolean>("get_close_to_tray"))
+      .then(setTray, () => setTray(null));
+  }, []);
+
+  async function toggle(on: boolean) {
+    setError(null);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("set_close_to_tray", { on });
+      setTray(on);
+    } catch (e) {
+      setError(message(e));
+    }
+  }
+
+  // Only in the desktop app (not a browser).
+  if (tray === null) return null;
+  return (
+    <div className="flex flex-col gap-4">
+      <h2 className="text-lg font-semibold">This window</h2>
+      <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5">
+        <label className="flex items-start gap-3 text-sm">
+          <input type="checkbox" className="mt-1" checked={tray} onChange={(e) => void toggle(e.target.checked)} />
+          <span>
+            Keep Outpost running in the system tray when I close the window
+            <span className="block text-xs text-muted">
+              Phones, apps, Hermes and the picture queue keep working while the window is closed. Click the Outpost icon by
+              the clock to open it again, or right-click it and choose Quit Outpost to stop everything.
+            </span>
+          </span>
+        </label>
+        <ErrorNote>{error}</ErrorNote>
+      </div>
+    </div>
+  );
+}

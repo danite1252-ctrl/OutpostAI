@@ -54,6 +54,10 @@ which is very slow. Voice runs on the processor either way.
    **Who's using Outpost?** screen and signs in with their own PIN; their chats, memories
    and pictures are their own.
 
+**Closing the window** keeps Outpost running in the system tray (by the clock), so phones,
+apps and the picture queue keep working. Click the tray icon to open it again; right-click
+it and choose **Quit Outpost** to stop everything. Turn this off in **Settings › This window**.
+
 The bar at the top shows what's running: the gateway (Outpost itself), Ollama, ComfyUI,
 Whisper and Kokoro.
 

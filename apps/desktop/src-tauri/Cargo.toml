@@ -16,7 +16,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 outpost-engines.workspace = true
 outpost-gateway.workspace = true
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
+# Opening Outpost while it's in the tray shows the running one instead of starting another.
+tauri-plugin-single-instance = "2"
 # Installing a newer release after you press Update (the download's signature is checked).
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
