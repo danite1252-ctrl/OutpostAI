@@ -1,10 +1,13 @@
 package expo.modules.outpostnet
 
+import android.Manifest
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.util.Base64
+import expo.modules.interfaces.permissions.PermissionsResponseListener
+import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -94,6 +97,8 @@ class OutpostNetModule : Module() {
   private val context: Context
     get() = appContext.reactContext ?: throw IllegalStateException("No Android context.")
 
+  private val voice by lazy { PhoneVoice({ context }) { name, body -> sendEvent(name, body) } }
+
   private fun client(fingerprint: String): OkHttpClient =
     clients.getOrPut(fingerprint.lowercase()) {
       val trust = PinnedTrust(fingerprint)
@@ -126,7 +131,38 @@ class OutpostNetModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("OutpostNet")
 
-    Events("onChunk", "onEnd", "onError", "onService", "onServiceLost")
+    Events("onChunk", "onEnd", "onError", "onService", "onServiceLost", "onSpeech", "onRecording", "onPlayback", "onConverse")
+
+    // ------------------------------------------------------------ voice (see PhoneVoice)
+
+    Function("voiceSupport") { voice.support() }
+
+    /** Ask for the microphone; resolves true when allowed. */
+    AsyncFunction("askMicrophone") { promise: Promise ->
+      val permissions = appContext.permissions
+      if (permissions == null) {
+        promise.resolve(false)
+      } else {
+        permissions.askForPermissions(
+          PermissionsResponseListener { result ->
+            promise.resolve(result[Manifest.permission.RECORD_AUDIO]?.status == PermissionsStatus.GRANTED)
+          },
+          Manifest.permission.RECORD_AUDIO
+        )
+      }
+    }
+
+    Function("listen") { language: String?, partial: Boolean -> voice.listen(language, partial); Unit }
+    Function("stopListening") { voice.stopListening(); Unit }
+    Function("cancelListening") { voice.cancelListening(); Unit }
+    Function("record") { autoStop: Boolean -> voice.record(autoStop); Unit }
+    Function("stopRecording") { voice.stopRecording(); Unit }
+    Function("cancelRecording") { voice.cancelRecording(); Unit }
+    Function("play") { uri: String -> voice.play(uri); Unit }
+    Function("stopPlaying") { voice.stopPlaying(); Unit }
+    Function("converse") { bargeIn: Boolean -> voice.converse(bargeIn); Unit }
+    Function("converseMuted") { muted: Boolean -> voice.converseMuted(muted); Unit }
+    Function("stopConversation") { voice.stopConversation(); Unit }
 
     /** The SHA-256 of the certificate an address presents, before anything is trusted. */
     AsyncFunction("fingerprint") { host: String, port: Int, promise: Promise ->
@@ -295,6 +331,7 @@ class OutpostNetModule : Module() {
 
     OnDestroy {
       stopDiscovery()
+      voice.destroy()
       for (call in streams.values) call.cancel()
     }
   }

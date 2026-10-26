@@ -137,7 +137,7 @@ const DESKTOP_ORIGINS: [&str; 5] = [
 pub fn router(state: AppState) -> Router {
     use routes::{
         accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, training,
-        webhooks,
+        voice, webhooks,
     };
 
     let cors = CorsLayer::new()
@@ -254,6 +254,17 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/characters/{id}",
             patch(training::rename_character).delete(training::delete_character),
+        )
+        .route("/api/voice", get(voice::status))
+        .route(
+            "/api/voice/transcribe",
+            post(voice::transcribe).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
+        )
+        .route("/api/voice/speak", post(voice::speak))
+        .route("/v1/audio/speech", post(voice::openai_speech))
+        .route(
+            "/v1/audio/transcriptions",
+            post(voice::openai_transcriptions).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
         )
         .route("/mcp", post(mcp::handle).get(mcp::no_stream))
         .route("/api/integrations", get(mcp::integrations))

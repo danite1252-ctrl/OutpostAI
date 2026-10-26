@@ -3,7 +3,7 @@ use utoipa::{Modify, OpenApi};
 
 use crate::error::{ErrorBody, ErrorDetail};
 use crate::routes::{
-    accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, training, webhooks,
+    accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, training, voice, webhooks,
     SignInResponse,
 };
 
@@ -81,6 +81,11 @@ use crate::routes::{
         network::connection,
         network::set_network,
         crate::mcp::handle,
+        voice::status,
+        voice::transcribe,
+        voice::speak,
+        voice::openai_speech,
+        voice::openai_transcriptions,
         crate::mcp::integrations,
         webhooks::list,
         webhooks::create,
@@ -131,6 +136,7 @@ use crate::routes::{
         (name = "auth", description = "Signing in and out"),
         (name = "accounts", description = "Managing accounts (owner)"),
         (name = "openai", description = "OpenAI-compatible endpoints"),
+        (name = "voice", description = "Speech to text and text to speech, on this PC"),
         (name = "webhooks", description = "Signed POSTs to your own URLs when pictures, trainings or characters are done"),
         (name = "mcp", description = "Outpost as an MCP server: tools for chat, pictures, characters and memory"),
         (name = "training", description = "Training Studio: datasets, captions, LoRA trainings and characters"),

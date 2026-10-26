@@ -12,6 +12,7 @@ pub mod openai;
 pub mod pairing;
 pub mod setup;
 pub mod training;
+pub mod voice;
 pub mod webhooks;
 
 use outpost_core::accounts::Account;

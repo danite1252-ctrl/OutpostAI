@@ -15,9 +15,7 @@
         "android.permission.ACCESS_WIFI_STATE",
         "android.permission.CHANGE_WIFI_MULTICAST_STATE",
         "android.permission.CAMERA",
-        "android.permission.USE_BIOMETRIC"
-      ],
-      "blockedPermissions": [
+        "android.permission.USE_BIOMETRIC",
         "android.permission.RECORD_AUDIO"
       ]
     },
@@ -26,7 +24,8 @@
         "expo-camera",
         {
           "cameraPermission": "Outpost uses the camera to scan the pairing code on your PC.",
-          "recordAudioAndroid": false
+          "recordAudioAndroid": true,
+          "microphonePermission": "Outpost uses the microphone when you talk to a persona."
         }
       ],
       [

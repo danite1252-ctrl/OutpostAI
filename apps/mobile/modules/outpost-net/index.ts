@@ -33,7 +33,36 @@ type Events = {
   onError(e: { id: string; message: string }): void;
   onService(e: FoundService): void;
   onServiceLost(e: { name: string }): void;
+  onSpeech(e: SpeechEvent): void;
+  onRecording(e: RecordingEvent): void;
+  onPlayback(e: { type: "end" | "stopped" | "error" | "level"; message?: string; level?: number }): void;
+  onConverse(e: ConverseEvent): void;
 };
+
+/** Hands-free listening (always-on microphone with echo cancelling). */
+export type ConverseEvent =
+  | { type: "ready"; echoCancelling: boolean }
+  | { type: "level"; level: number }
+  /** Someone started talking; `interrupted` when that stopped a reply. */
+  | { type: "start"; interrupted: boolean }
+  /** One thing said, as a base64 16 kHz WAV. */
+  | { type: "utterance"; audio: string }
+  /** It was only a cough or a bump. */
+  | { type: "discard" }
+  | { type: "error"; message: string };
+
+/** The phone's speech recognizer. `final` with empty text means nothing was heard. */
+export type SpeechEvent =
+  | { type: "ready" | "speaking" }
+  | { type: "level"; level: number }
+  | { type: "partial" | "final"; text: string }
+  | { type: "error"; code: number; message: string };
+
+/** A clip recorded for the PC's Whisper; `done` carries it as base64 M4A ("" if nothing was said). */
+export type RecordingEvent =
+  | { type: "level"; level: number }
+  | { type: "done"; audio: string }
+  | { type: "error"; message: string };
 
 declare class OutpostNetModule extends NativeModule<Events> {
   /** The certificate fingerprint an address presents, before anything is trusted. */
@@ -45,6 +74,24 @@ declare class OutpostNetModule extends NativeModule<Events> {
   stream(id: string, options: RequestOptions): void;
   cancel(id: string): void;
   startDiscovery(): void;
+  /** Whether the phone has a speech recognizer, and whether it works without the internet. */
+  voiceSupport(): { recognizer: boolean; onDevice: boolean };
+  askMicrophone(): Promise<boolean>;
+  /** Listen with the phone's recognizer: onSpeech events, ending with `final` or `error`. */
+  listen(language: string | null, partial: boolean): void;
+  stopListening(): void;
+  cancelListening(): void;
+  /** Record for Whisper; with autoStop it ends itself after a pause. Ends with onRecording `done`. */
+  record(autoStop: boolean): void;
+  stopRecording(): void;
+  cancelRecording(): void;
+  /** Play a file:// clip (deleted afterwards); onPlayback when it ends. */
+  play(uri: string): void;
+  stopPlaying(): void;
+  /** Open the microphone for a hands-free conversation; with bargeIn, talking stops a reply. */
+  converse(bargeIn: boolean): void;
+  converseMuted(muted: boolean): void;
+  stopConversation(): void;
   stopDiscovery(): void;
 }
 

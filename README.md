@@ -277,6 +277,22 @@ The earlier spike (`docs/spike-ai-toolkit.md`, `scripts/spike/`) checked ai-tool
 
 `docs/phase5a-test.md` is the live test.
 
+## Voice (phase 5b)
+
+- **Voice engine** (Settings › Engines › Voice): Whisper "small" to hear and Kokoro to
+  speak, in their own Python environment, on the CPU so the graphics card stays free.
+- **Personas** get a voice (54 Kokoro voices) and an optional *Read replies aloud*.
+- **Desktop chat:** microphone button (words land in the box), play button on replies,
+  and **Hands-free**: listens, sends after a pause, speaks the answer, listens again.
+- **Phone chat:** **Mic** uses Android's own speech recognizer (on the phone where it can,
+  so only text goes to the PC); **▶ Listen** on replies. **Talk** is hands-free like a
+  call: an open microphone with echo cancelling, no beeps, talk over a reply to cut in;
+  the PC's Whisper hears and Kokoro speaks.
+- **API:** `POST /api/voice/transcribe`, `POST /api/voice/speak` (WAV), and the
+  OpenAI-style `POST /v1/audio/transcriptions` and `POST /v1/audio/speech`.
+
+`docs/phase5b-test.md` is the live test.
+
 ## API
 
 | Method | Path | Auth | What |

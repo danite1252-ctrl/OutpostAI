@@ -30,7 +30,7 @@ export default function EngineSetup({ auth, onDone }: { auth: SignInResponse; on
           <h1 className="text-3xl font-semibold tracking-tight">Set up your engines</h1>
           <p className="max-w-2xl text-muted">
             Outpost installs these into its own folder and runs them for you. Downloads come from the official Ollama,
-            uv, Python, PyTorch and ComfyUI releases; after that everything runs on this PC.
+            uv, Python, PyTorch, ComfyUI, faster-whisper and Kokoro releases; after that everything runs on this PC.
           </p>
         </div>
 
@@ -38,7 +38,7 @@ export default function EngineSetup({ auth, onDone }: { auth: SignInResponse; on
 
         <div className="flex flex-wrap items-center gap-3">
           {toInstall.length > 0 && !startedAll && (
-            <Button onClick={() => void installAll()}>Install {toInstall.length === 2 ? "both" : "it"}</Button>
+            <Button onClick={() => void installAll()}>Install {toInstall.length > 1 ? `all ${toInstall.length}` : "it"}</Button>
           )}
           <Button variant={toInstall.length > 0 && !startedAll ? "ghost" : "primary"} onClick={onDone}>
             {anyBusy ? "Continue, keep installing in the background" : "Continue to Outpost"}

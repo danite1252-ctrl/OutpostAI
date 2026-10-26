@@ -8,15 +8,17 @@ use crate::gpu::Gpu;
 pub enum EngineId {
     Ollama,
     Comfyui,
+    Voice,
 }
 
 impl EngineId {
-    pub const ALL: [EngineId; 2] = [EngineId::Ollama, EngineId::Comfyui];
+    pub const ALL: [EngineId; 3] = [EngineId::Ollama, EngineId::Comfyui, EngineId::Voice];
 
     pub fn as_str(self) -> &'static str {
         match self {
             EngineId::Ollama => "ollama",
             EngineId::Comfyui => "comfyui",
+            EngineId::Voice => "voice",
         }
     }
 
@@ -24,6 +26,7 @@ impl EngineId {
         match self {
             EngineId::Ollama => "Ollama",
             EngineId::Comfyui => "ComfyUI",
+            EngineId::Voice => "Voice",
         }
     }
 
@@ -31,6 +34,7 @@ impl EngineId {
         match self {
             EngineId::Ollama => crate::versions::OLLAMA_PORT,
             EngineId::Comfyui => crate::versions::COMFYUI_PORT,
+            EngineId::Voice => crate::versions::VOICE_PORT,
         }
     }
 
@@ -43,6 +47,7 @@ impl EngineId {
         match self {
             EngineId::Ollama => format!("{}/api/version", self.base_url()),
             EngineId::Comfyui => format!("{}/system_stats", self.base_url()),
+            EngineId::Voice => format!("{}/health", self.base_url()),
         }
     }
 }

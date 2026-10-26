@@ -44,6 +44,7 @@ const STATE_LABEL: Record<EngineState, string> = {
 const PURPOSE: Record<EngineId, string> = {
   ollama: "Runs chat and vision models.",
   comfyui: "Runs image and video workflows (Qwen-Image, Wan 2.2).",
+  voice: "Hears you and speaks replies (Whisper and Kokoro), on the CPU.",
 };
 
 export function GpuLine({ status }: { status: EnginesStatus | null }) {

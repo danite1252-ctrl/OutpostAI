@@ -24,6 +24,10 @@ pub struct Persona {
     pub think: bool,
     /// Include the account's memories in the prompt.
     pub use_memory: bool,
+    /// Speaking voice (Kokoro name, e.g. `af_heart`); `None` = Outpost's default.
+    pub voice: Option<String>,
+    /// Read replies aloud in chat.
+    pub speak_replies: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -38,6 +42,9 @@ pub struct PersonaInput {
     pub temperature: Option<f64>,
     pub think: Option<bool>,
     pub use_memory: Option<bool>,
+    /// Speaking voice; send an empty string for the default.
+    pub voice: Option<String>,
+    pub speak_replies: Option<bool>,
     pub avatar_color: Option<String>,
     /// The id apps use, as in `persona:<slug>`. Normally made from the name; set it to
     /// rename the id (apps using the old one then need updating).
@@ -88,6 +95,8 @@ struct Row {
     temperature: Option<f64>,
     think: bool,
     use_memory: bool,
+    voice: Option<String>,
+    speak_replies: bool,
     created_at: i64,
     updated_at: i64,
 }
@@ -105,13 +114,15 @@ impl From<Row> for Persona {
             temperature: r.temperature,
             think: r.think,
             use_memory: r.use_memory,
+            voice: r.voice,
+            speak_replies: r.speak_replies,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
     }
 }
 
-const SELECT: &str = "SELECT id, account_id, slug, name, avatar_color, system_prompt, model, temperature, think, use_memory, created_at, updated_at FROM personas";
+const SELECT: &str = "SELECT id, account_id, slug, name, avatar_color, system_prompt, model, temperature, think, use_memory, voice, speak_replies, created_at, updated_at FROM personas";
 
 const COLORS: [&str; 6] = ["#FFB547", "#FF6A3D", "#9CB4FF", "#7BD88F", "#C9B8FF", "#6FD3FF"];
 
@@ -166,6 +177,12 @@ fn check(input: &PersonaInput) -> CoreResult<()> {
     }
     if input.temperature.is_some_and(|t| !(0.0..=2.0).contains(&t)) {
         return Err(CoreError::Invalid("Temperature must be between 0 and 2.".into()));
+    }
+    if let Some(v) = &input.voice {
+        let ok = v.is_empty() || (v.len() <= 40 && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+        if !ok {
+            return Err(CoreError::Invalid("That isn't a voice name.".into()));
+        }
     }
     if let Some(c) = &input.avatar_color {
         let ok = c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|h| h.is_ascii_hexdigit());
@@ -256,12 +273,14 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: PersonaInput) ->
         temperature: input.temperature,
         think: input.think.unwrap_or(false),
         use_memory: input.use_memory.unwrap_or(true),
+        voice: input.voice.filter(|v| !v.is_empty()),
+        speak_replies: input.speak_replies.unwrap_or(false),
         created_at: t,
         updated_at: t,
     };
     sqlx::query(
-        "INSERT INTO personas (id, account_id, slug, name, avatar_color, system_prompt, model, temperature, think, use_memory, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO personas (id, account_id, slug, name, avatar_color, system_prompt, model, temperature, think, use_memory, voice, speak_replies, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&persona.id)
     .bind(&persona.account_id)
@@ -273,6 +292,8 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: PersonaInput) ->
     .bind(persona.temperature)
     .bind(persona.think)
     .bind(persona.use_memory)
+    .bind(&persona.voice)
+    .bind(persona.speak_replies)
     .bind(t)
     .bind(t)
     .execute(pool)
@@ -328,12 +349,18 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Person
     if let Some(m) = input.use_memory {
         p.use_memory = m;
     }
+    if let Some(v) = input.voice {
+        p.voice = Some(v).filter(|v| !v.is_empty());
+    }
+    if let Some(s) = input.speak_replies {
+        p.speak_replies = s;
+    }
     if let Some(c) = input.avatar_color {
         p.avatar_color = c;
     }
     p.updated_at = now();
     sqlx::query(
-        "UPDATE personas SET name = ?, slug = ?, system_prompt = ?, model = ?, temperature = ?, think = ?, use_memory = ?, avatar_color = ?, updated_at = ?
+        "UPDATE personas SET name = ?, slug = ?, system_prompt = ?, model = ?, temperature = ?, think = ?, use_memory = ?, avatar_color = ?, voice = ?, speak_replies = ?, updated_at = ?
          WHERE id = ? AND account_id = ?",
     )
     .bind(&p.name)
@@ -344,6 +371,8 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Person
     .bind(p.think)
     .bind(p.use_memory)
     .bind(&p.avatar_color)
+    .bind(&p.voice)
+    .bind(p.speak_replies)
     .bind(p.updated_at)
     .bind(id)
     .bind(account_id)

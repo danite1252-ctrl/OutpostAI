@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, ApiError, type InstalledModel, type Memory, type MemorySettings, type Persona } from "../api";
+import { api, ApiError, voiceApi, type InstalledModel, type Memory, type MemorySettings, type Persona, type VoiceStatus } from "../api";
 import { Avatar, Button, ErrorNote, Field } from "../components/ui";
 
 export default function Personas({ token }: { token: string }) {
@@ -107,7 +107,34 @@ function PersonaEditor({
   const [useTemp, setUseTemp] = useState(persona.temperature !== null);
   const [think, setThink] = useState(persona.think);
   const [useMemory, setUseMemory] = useState(persona.use_memory);
+  const [voice, setVoice] = useState(persona.voice ?? "");
+  const [speakReplies, setSpeakReplies] = useState(persona.speak_replies);
+  const [voices, setVoices] = useState<VoiceStatus | null>(null);
+  const [trying, setTrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    voiceApi.status(token).then(setVoices, () => undefined);
+  }, [token]);
+
+  async function tryVoice() {
+    setTrying(true);
+    setError(null);
+    try {
+      const blob = await voiceApi.speak(token, `Hi, I'm ${name || "your persona"}. This is how I sound.`, {
+        voice: voice || voices?.default_voice,
+      });
+      await new Promise<void>((resolve) => {
+        const a = new Audio(URL.createObjectURL(blob));
+        a.onended = () => resolve();
+        a.onerror = () => resolve();
+        void a.play().catch(() => resolve());
+      });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't play the voice.");
+    } finally {
+      setTrying(false);
+    }
+  }
   const [saved, setSaved] = useState(false);
 
   const thinkingModel = models.find((m) => m.model === model)?.badges.includes("thinking") ?? true;
@@ -124,6 +151,8 @@ function PersonaEditor({
         ...(useTemp ? { temperature } : {}),
         think,
         use_memory: useMemory,
+        voice,
+        speak_replies: speakReplies,
       });
       onSaved(p);
       setSlug(p.slug);
@@ -241,6 +270,48 @@ function PersonaEditor({
             className="size-4 accent-ember"
           />
           Use memory (what you asked it to remember, plus facts learned from chats)
+        </label>
+      </div>
+      <div className="flex flex-col gap-3 rounded-2xl border border-line p-4 text-sm">
+        <span className="font-medium">Voice</span>
+        {voices && !voices.ready ? (
+          <span className="text-muted">
+            Voice isn't running. Install it in Settings › Engines to give personas a voice and talk to them.
+          </span>
+        ) : (
+          <div className="flex flex-wrap items-center gap-3">
+            <select
+              aria-label="Speaking voice"
+              value={voice}
+              onChange={(e) => setVoice(e.target.value)}
+              className="min-h-11 rounded-xl border border-line bg-deep px-3 text-ink"
+            >
+              <option value="">Default ({voices?.voices.find((v) => v.id === voices.default_voice)?.name ?? "Heart"})</option>
+              {[...new Set((voices?.voices ?? []).map((v) => v.language))].map((lang) => (
+                <optgroup key={lang} label={lang}>
+                  {(voices?.voices ?? [])
+                    .filter((v) => v.language === lang)
+                    .map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name} ({v.gender})
+                      </option>
+                    ))}
+                </optgroup>
+              ))}
+            </select>
+            <Button variant="ghost" disabled={trying || !voices?.ready} onClick={() => void tryVoice()}>
+              {trying ? "Playing…" : "Hear it"}
+            </Button>
+          </div>
+        )}
+        <label className="flex items-center gap-3">
+          <input
+            type="checkbox"
+            checked={speakReplies}
+            onChange={(e) => setSpeakReplies(e.target.checked)}
+            className="size-4 accent-ember"
+          />
+          Read replies aloud in chat
         </label>
       </div>
       <ErrorNote>{error}</ErrorNote>

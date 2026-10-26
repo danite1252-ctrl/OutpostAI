@@ -15,6 +15,20 @@ pub const OLLAMA_PORT: u16 = 11434;
 pub const OLLAMA_CONTEXT_LENGTH: u32 = 65_536;
 pub const COMFYUI_PORT: u16 = 8188;
 
+/// The voice service (speech to text and text to speech), Outpost's own script.
+pub const VOICE_PORT: u16 = 8190;
+/// Its version: bump with any change to `voice/server.py` or the packages below.
+pub const VOICE_VERSION: &str = "1.0.0";
+/// Python for the voice service (kokoro-onnx supports 3.10 to 3.13).
+pub const VOICE_PYTHON: &str = "3.12";
+/// Speech recognition (MIT) and speech (MIT, on ONNX Runtime).
+pub const VOICE_PACKAGES: [&str; 2] = ["faster-whisper==1.2.1", "kokoro-onnx==0.6.1"];
+/// Kokoro's model and voices (54), from the kokoro-onnx project's model release.
+pub const KOKORO_MODEL_URL: &str =
+    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/kokoro-v1.0.onnx";
+pub const KOKORO_VOICES_URL: &str =
+    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/voices-v1.0.bin";
+
 /// PyTorch wheels for NVIDIA cards (ComfyUI: 20 series and newer need cu130+).
 pub const TORCH_INDEX_NVIDIA: &str = "https://download.pytorch.org/whl/cu130";
 /// CPU-only wheels when no supported GPU is found. Works, but very slow.

@@ -146,6 +146,38 @@ export class Outpost {
     }
   }
 
+  /** Say `text` in a persona's voice on the PC; resolves with a WAV file on the phone. */
+  async speech(text: string, personaId: string | null, name: string): Promise<string> {
+    let last: unknown;
+    for (const host of this.conn.hosts) {
+      try {
+        return await OutpostNet.download(
+          {
+            url: this.base(host) + "/api/voice/speak",
+            method: "POST",
+            headers: { ...this.headers({ Accept: "audio/wav" }), "Content-Type": "application/json" },
+            body: JSON.stringify({ text, persona_id: personaId }),
+            fingerprint: this.conn.fingerprint,
+          },
+          name,
+        );
+      } catch (e) {
+        last = e;
+        // Outpost answered (just not with a voice): no point trying the other addresses.
+        if (e instanceof Error && /said no/.test(e.message)) break;
+      }
+    }
+    const msg = last instanceof Error ? last.message : "";
+    if (/said no/.test(msg)) throw new ApiError(0, "voice", "Your PC couldn't speak that. Is voice set up in Outpost on the PC (Settings → Engines)?");
+    this.setOnline(false);
+    throw new ApiError(0, "offline", "Can't reach your Outpost to speak the reply.");
+  }
+
+  /** What the PC's Whisper heard in a recording (base64). */
+  transcribe(audio: string, mime = "audio/mp4", language?: string) {
+    return this.json<{ text: string; language: string }>("POST", "/api/voice/transcribe", { audio: `data:${mime};base64,${audio}`, language });
+  }
+
   /** A Server-Sent Events reply. Returns a function that stops following it. */
   stream(path: string, body: unknown, on: StreamHandlers): () => void {
     const id = `s${++streamIds}-${Date.now()}`;
@@ -231,6 +263,10 @@ export interface Persona {
   name: string;
   avatar_color: string;
   model: string | null;
+  /** Speaking voice on the PC (Kokoro); null = Outpost's default. */
+  voice?: string | null;
+  /** Read replies aloud. */
+  speak_replies?: boolean;
 }
 
 export interface Chat {

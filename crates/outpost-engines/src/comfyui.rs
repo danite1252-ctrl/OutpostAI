@@ -16,6 +16,7 @@ pub async fn install(ctx: &Ctx) -> anyhow::Result<Installed> {
     let dir = ctx.slot.dir.clone();
     let log = &ctx.slot.log;
 
+    ctx.step(1, STEPS, "Downloading uv (Python manager)");
     let uv = ensure_uv(ctx).await?;
 
     ctx.step(2, STEPS, "Installing Python");
@@ -121,7 +122,7 @@ pub fn command(dir: &Path, models_root: &Path) -> anyhow::Result<Command> {
     Ok(cmd)
 }
 
-fn venv_python(venv: &Path) -> PathBuf {
+pub(crate) fn venv_python(venv: &Path) -> PathBuf {
     if cfg!(windows) {
         venv.join("Scripts").join("python.exe")
     } else {
@@ -130,7 +131,7 @@ fn venv_python(venv: &Path) -> PathBuf {
 }
 
 /// uv with every cache and Python install kept inside Outpost's engines folder.
-fn uv_cmd(uv: &Path, ctx: &Ctx, args: &[&str]) -> Command {
+pub(crate) fn uv_cmd(uv: &Path, ctx: &Ctx, args: &[&str]) -> Command {
     let uv_root = ctx.engines_root.join("uv");
     let mut cmd = Command::new(uv);
     cmd.args(args)
@@ -144,8 +145,10 @@ fn uv_cmd(uv: &Path, ctx: &Ctx, args: &[&str]) -> Command {
 }
 
 /// Download uv once into `<engines>/uv/bin`. Shared by everything that needs Python.
-async fn ensure_uv(ctx: &Ctx) -> anyhow::Result<PathBuf> {
-    ctx.step(1, STEPS, "Downloading uv (Python manager)");
+pub(crate) async fn ensure_uv(ctx: &Ctx) -> anyhow::Result<PathBuf> {
+    // ComfyUI and the voice service may install at the same time; fetch uv once.
+    static UV_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let _one_at_a_time = UV_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
     let uv_root = ctx.engines_root.join("uv");
     let bin = uv_root.join("bin").join(exe("uv"));
     if bin.is_file() {

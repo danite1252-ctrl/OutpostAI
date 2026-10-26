@@ -15,6 +15,7 @@ import { AttachmentImage, prepareImage, type PendingImage } from "../components/
 import { Markdown } from "../components/markdown";
 import { JobCard } from "../components/jobcard";
 import { jobsChanged } from "../components/queue";
+import { HandsFree, MicButton, PlayButton, sayAloud } from "../components/voice";
 import { ContextPanel } from "../components/context";
 import { GalleryPicker, mediaAsInput } from "../components/gallery";
 import { Avatar, Button, ErrorNote } from "../components/ui";
@@ -52,6 +53,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
   const [error, setError] = useState<string | null>(null);
   const [showContext, setShowContext] = useState(loadShowContext);
   const [fromGallery, setFromGallery] = useState(false);
+  const [handsFree, setHandsFree] = useState(false);
   const filePicker = useRef<HTMLInputElement | null>(null);
   const abort = useRef<AbortController | null>(null);
   const bottom = useRef<HTMLDivElement | null>(null);
@@ -209,6 +211,10 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
           token: (t) => setDraft((d) => (d ? { ...d, content: d.content + t } : d)),
           done: ({ message, error }) => {
             if (JOB_CARD.test(message.content)) jobsChanged();
+            // Personas set to read replies aloud do so, in their own voice.
+            if (!error && persona?.speak_replies && message.content.trim()) {
+              void sayAloud(token, message.content, persona).catch(() => undefined);
+            }
             if (here()) setMessages((m) => (m.some((x) => x.id === message.id) ? m : [...m, message]));
             if (error) setError(error);
           },
@@ -334,11 +340,20 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
             {draft?.model || persona?.model || "default model"}
             {persona?.think ? " · thinking on" : ""}
           </span>
+          <button
+            type="button"
+            onClick={() => setHandsFree(true)}
+            disabled={!!draft}
+            title="Talk with the persona, hands-free"
+            className="ml-auto flex min-h-9 items-center rounded-lg border border-line px-3 text-sm hover:bg-raised disabled:opacity-50"
+          >
+            Hands-free
+          </button>
           {!showContext && (
             <button
               type="button"
               onClick={() => toggleContext(true)}
-              className="ml-auto hidden min-h-9 items-center rounded-lg border border-line px-3 text-sm hover:bg-raised lg:flex"
+              className="hidden min-h-9 items-center rounded-lg border border-line px-3 text-sm hover:bg-raised lg:flex"
             >
               Context
             </button>
@@ -358,6 +373,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
                 token={token}
                 message={m}
                 persona={persona}
+                onVoiceError={(e) => setError(e)}
                 onDelete={streamingId === activeId ? undefined : () => void removeMessage(m)}
               />
             ))}
@@ -423,6 +439,12 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
                   e.target.value = "";
                 }}
               />
+              <MicButton
+                token={token}
+                disabled={!!draft}
+                onText={(t) => setInput((cur) => (cur.trim() ? `${cur.trimEnd()} ${t}` : t))}
+                onError={(m) => setError(m)}
+              />
               <Button
                 variant="ghost"
                 disabled={!!draft || images.length >= MAX_IMAGES}
@@ -454,6 +476,26 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
         </div>
       </section>
 
+      {handsFree && (
+        <HandsFree
+          token={token}
+          persona={persona}
+          chatId={async () => {
+            if (activeRef.current) return activeRef.current;
+            const chat = await api.createChat(token, personas[0]?.id);
+            setChats((c) => [chat, ...c]);
+            setActiveId(chat.id);
+            activeRef.current = chat.id;
+            return chat.id;
+          }}
+          onTurn={() => {
+            const id = activeRef.current;
+            if (id) api.chat(token, id).then((r) => setMessages(r.messages), () => undefined);
+            void loadLists();
+          }}
+          onClose={() => setHandsFree(false)}
+        />
+      )}
       {fromGallery && (
         <GalleryPicker
           token={token}
@@ -506,6 +548,7 @@ function Bubble({
   persona,
   live = false,
   onDelete,
+  onVoiceError,
 }: {
   token: string;
   message: Pick<Message, "role" | "content" | "thinking" | "attachments">;
@@ -513,6 +556,7 @@ function Bubble({
   live?: boolean;
   /** Saved messages can be deleted. */
   onDelete?: () => void;
+  onVoiceError?: (message: string) => void;
 }) {
   const { role, content, thinking, attachments } = message;
   if (role === "user") {
@@ -549,9 +593,10 @@ function Bubble({
               ))}
             </div>
           )}
-          {onDelete && (
-            <div className="mt-1">
-              <DeleteButton onClick={onDelete} label="Delete this reply" />
+          {(onDelete || onVoiceError) && (
+            <div className="mt-1 flex gap-1">
+              {onVoiceError && content.trim() && <PlayButton token={token} text={content} persona={persona} onError={onVoiceError} />}
+              {onDelete && <DeleteButton onClick={onDelete} label="Delete this reply" />}
             </div>
           )}
           {live && <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-ember align-middle" />}

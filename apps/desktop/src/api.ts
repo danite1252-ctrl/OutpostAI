@@ -49,7 +49,7 @@ export interface ModelEntry {
   owned_by: string;
 }
 
-export type EngineId = "ollama" | "comfyui";
+export type EngineId = "ollama" | "comfyui" | "voice";
 export type EngineState =
   | "not_installed"
   | "installing"
@@ -155,6 +155,10 @@ export interface Persona {
   temperature: number | null;
   think: boolean;
   use_memory: boolean;
+  /** Speaking voice (e.g. af_heart); null = Outpost's default. */
+  voice: string | null;
+  /** Read replies aloud in chat. */
+  speak_replies: boolean;
   created_at: number;
   updated_at: number;
 }
@@ -169,6 +173,9 @@ export type PersonaInput = Partial<{
   avatar_color: string;
   /** Change the API id (persona:<slug>). Normally made from the name. */
   slug: string;
+  /** Speaking voice; "" for the default. */
+  voice: string;
+  speak_replies: boolean;
 }>;
 
 export interface Chat {
@@ -871,3 +878,46 @@ export interface OpenApiDoc {
     >
   >;
 }
+
+// ---------------------------------------------------------------- Voice
+
+export interface VoiceInfo {
+  id: string;
+  name: string;
+  language: string;
+  gender: string;
+}
+
+export interface VoiceStatus {
+  state: EngineState;
+  ready: boolean;
+  voices: VoiceInfo[];
+  default_voice: string;
+}
+
+export const voiceApi = {
+  status: (token: string) => request<VoiceStatus>("GET", "/api/voice", { token }),
+  transcribe: (token: string, audio: string, language?: string) =>
+    request<{ text: string; language: string; duration: number }>("POST", "/api/voice/transcribe", {
+      token,
+      body: { audio, language: language ?? null },
+    }),
+  /** Speak text; the reply is WAV audio. */
+  speak: async (token: string, text: string, opts: { voice?: string; personaId?: string } = {}): Promise<Blob> => {
+    let res: Response;
+    try {
+      res = await fetch(`${GATEWAY}/api/voice/speak`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ text, voice: opts.voice ?? null, persona_id: opts.personaId ?? null }),
+      });
+    } catch {
+      throw new ApiError(0, "offline", "Can't reach the Outpost service.");
+    }
+    if (!res.ok) {
+      const e = (await res.json().catch(() => null))?.error ?? {};
+      throw new ApiError(res.status, e.code ?? "unknown", e.message ?? "Couldn't speak that.");
+    }
+    return res.blob();
+  },
+};

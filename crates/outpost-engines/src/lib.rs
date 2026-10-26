@@ -10,6 +10,7 @@ pub mod assets;
 pub mod catalog;
 pub mod comfy;
 mod comfyui;
+mod voice;
 mod download;
 pub mod gpu;
 pub mod hardware;

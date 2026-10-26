@@ -15,7 +15,7 @@ fn engine_id(raw: &str) -> Result<EngineId, ApiError> {
         ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid",
-            format!("Unknown engine \"{raw}\". Use \"ollama\" or \"comfyui\"."),
+            format!("Unknown engine \"{raw}\". Use \"ollama\", \"comfyui\" or \"voice\"."),
         )
     })
 }
@@ -40,7 +40,7 @@ pub async fn status(State(state): State<AppState>, _auth: Auth) -> Json<EnginesS
 /// Download and set up an engine (owner only). Runs in the background; follow it
 /// with `GET /api/engines`. Reinstalls if it is already installed; models are kept.
 #[utoipa::path(post, path = "/api/engines/{id}/install", tag = "engines", security(("bearer" = [])),
-    params(("id" = EngineId, Path, description = "`ollama` or `comfyui`")),
+    params(("id" = EngineId, Path, description = "`ollama`, `comfyui` or `voice`")),
     responses(
         (status = 202, description = "Install started"),
         (status = 403, description = "Not allowed", body = ErrorBody),
@@ -62,7 +62,7 @@ pub async fn install(
 
 /// Start an installed engine (owner only).
 #[utoipa::path(post, path = "/api/engines/{id}/start", tag = "engines", security(("bearer" = [])),
-    params(("id" = EngineId, Path, description = "`ollama` or `comfyui`")),
+    params(("id" = EngineId, Path, description = "`ollama`, `comfyui` or `voice`")),
     responses(
         (status = 202, description = "Starting"),
         (status = 400, description = "Not installed", body = ErrorBody),
@@ -79,7 +79,7 @@ pub async fn start(State(state): State<AppState>, auth: Auth, Path(id): Path<Str
 
 /// Stop an engine Outpost started (owner only).
 #[utoipa::path(post, path = "/api/engines/{id}/stop", tag = "engines", security(("bearer" = [])),
-    params(("id" = EngineId, Path, description = "`ollama` or `comfyui`")),
+    params(("id" = EngineId, Path, description = "`ollama`, `comfyui` or `voice`")),
     responses(
         (status = 204, description = "Stopped"),
         (status = 403, description = "Not allowed", body = ErrorBody),

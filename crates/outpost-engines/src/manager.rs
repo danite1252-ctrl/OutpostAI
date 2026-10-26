@@ -10,7 +10,7 @@ use tokio::sync::OnceCell;
 use crate::gpu::{self, Gpu};
 use crate::process::{self, Log};
 use crate::types::{EngineId, EngineInfo, EngineState, EnginesStatus, Progress};
-use crate::{comfyui, ollama, versions};
+use crate::{comfyui, ollama, versions, voice};
 
 #[derive(Debug)]
 pub enum EngineError {
@@ -232,12 +232,14 @@ impl EngineManager {
                 pinned_version: match id {
                     EngineId::Ollama => versions::OLLAMA_VERSION,
                     EngineId::Comfyui => versions::COMFYUI_VERSION,
+                    EngineId::Voice => versions::VOICE_VERSION,
                 }
                 .to_string(),
                 url: id.base_url(),
                 size_hint: match id {
                     EngineId::Ollama => "about 2 GB download",
                     EngineId::Comfyui => "about 4 GB download (Python + PyTorch), 7 GB on disk",
+                    EngineId::Voice => "about 1 GB download (speech recognition and 54 voices), runs on the CPU",
                 }
                 .to_string(),
                 progress: st.progress.clone(),
@@ -282,6 +284,7 @@ impl EngineManager {
             let result = match id {
                 EngineId::Ollama => ollama::install(&ctx).await,
                 EngineId::Comfyui => comfyui::install(&ctx).await,
+                EngineId::Voice => voice::install(&ctx, &me.models_root).await,
             };
             match result {
                 Ok(installed) => {
@@ -327,6 +330,7 @@ impl EngineManager {
             let cmd = match id {
                 EngineId::Ollama => ollama::command(&slot.dir, &self.models_root),
                 EngineId::Comfyui => comfyui::command(&slot.dir, &self.models_root),
+                EngineId::Voice => voice::command(&slot.dir, &self.models_root),
             };
             match cmd {
                 Ok(c) => {
@@ -365,6 +369,7 @@ impl EngineManager {
         let start_limit = match id {
             EngineId::Ollama => Duration::from_secs(60),
             EngineId::Comfyui => Duration::from_secs(600),
+            EngineId::Voice => Duration::from_secs(120),
         };
         let started = tokio::time::Instant::now();
         loop {

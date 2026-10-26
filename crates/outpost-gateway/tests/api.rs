@@ -282,9 +282,10 @@ async fn models_need_auth_and_answer_without_ollama() {
     let (status, body) = call(&app, "GET", "/api/engines", Some(&token), None).await;
     assert_eq!(status, StatusCode::OK);
     let engines = body["engines"].as_array().unwrap();
-    assert_eq!(engines.len(), 2);
+    assert_eq!(engines.len(), 3);
     assert_eq!(engines[0]["id"], "ollama");
     assert_eq!(engines[1]["id"], "comfyui");
+    assert_eq!(engines[2]["id"], "voice");
     for e in engines {
         // Nothing is installed in a fresh data folder; a copy already running on
         // this machine shows up as `external`.
@@ -356,6 +357,11 @@ async fn openapi_lists_every_route() {
         "/api/devices/{id}",
         "/api/connection",
         "/mcp",
+        "/api/voice",
+        "/api/voice/transcribe",
+        "/api/voice/speak",
+        "/v1/audio/speech",
+        "/v1/audio/transcriptions",
         "/api/integrations",
         "/api/webhooks",
         "/api/webhooks/{id}",
@@ -1385,4 +1391,31 @@ async fn webhooks_are_set_up_by_people_and_signed() {
 
     let (status, _) = call(&app, "DELETE", &format!("/api/webhooks/{id}"), t, None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn voice_explains_when_it_isnt_running() {
+    let app = app().await;
+    let (token, _) = setup_owner(&app).await;
+    let t = Some(token.as_str());
+    let (status, v) = call(&app, "GET", "/api/voice", t, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["default_voice"], "af_heart");
+    let (status, _) = call(&app, "POST", "/api/voice/transcribe", t, Some(json!({"audio": "not base64!"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = call(&app, "POST", "/api/voice/speak", t, Some(json!({"text": "```\ncode\n```"}))).await;
+    // "(code)" is something to say, so it reaches the (absent) voice service, unless
+    // one happens to run on this machine.
+    assert!(status == StatusCode::SERVICE_UNAVAILABLE || status == StatusCode::OK, "{status}");
+    let (status, _) = call(&app, "POST", "/api/voice/speak", t, Some(json!({"text": "  "}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Personas keep a voice and the read-aloud switch.
+    let (_, personas) = call(&app, "GET", "/api/personas", t, None).await;
+    let id = personas[0]["id"].as_str().unwrap().to_string();
+    let (status, p) = call(&app, "PATCH", &format!("/api/personas/{id}"), t, Some(json!({"voice": "bm_george", "speak_replies": true}))).await;
+    assert_eq!(status, StatusCode::OK, "{p}");
+    assert_eq!((p["voice"].as_str(), p["speak_replies"].as_bool()), (Some("bm_george"), Some(true)));
+    let (status, _) = call(&app, "PATCH", &format!("/api/personas/{id}"), t, Some(json!({"voice": "../../x"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

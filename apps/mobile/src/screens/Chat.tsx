@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, BackHandler, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { AuthedImage } from "../images";
 import { GalleryPicker } from "./Create";
+import HandsFree from "./HandsFree";
+import { hear, onSaying, say, stopSaying, type Listening } from "../voice";
 import type { Chat as ChatT, Message, Outpost, Persona } from "../outpost";
 import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
 
@@ -116,6 +118,44 @@ function Conversation({
   const [attach, setAttach] = useState(false);
   const [fromGallery, setFromGallery] = useState(false);
   const scroller = useRef<ScrollView | null>(null);
+  const [mic, setMic] = useState<Listening | null>(null);
+  const [handsFree, setHandsFree] = useState(false);
+  const [saying, setSaying] = useState<string | null>(null);
+  useEffect(() => onSaying(setSaying), []);
+  // Leaving the chat stops anything being read aloud or listened to.
+  useEffect(
+    () => () => {
+      stopSaying();
+    },
+    [],
+  );
+
+  function readAloud(key: string, text: string) {
+    if (saying === key) return stopSaying();
+    say(api, text, persona?.id ?? null, key).catch((e) => setError(e instanceof Error ? e.message : "The reply couldn't be read aloud."));
+  }
+
+  /** Talk instead of typing: the words land in the box, to check before sending. */
+  function toggleMic() {
+    if (mic) return mic.stop();
+    stopSaying();
+    setError(null);
+    const before = input.trim();
+    const join = (t: string) => (before ? `${before} ${t}` : t);
+    const l = hear(api, { partial: (t) => setInput(join(t)) });
+    setMic(l);
+    l.done.then(
+      (t) => {
+        setMic(null);
+        setInput(t ? join(t) : before);
+      },
+      (e) => {
+        setMic(null);
+        setInput(before);
+        setError(e instanceof Error ? e.message : "The microphone stopped.");
+      },
+    );
+  }
 
   // Long-press a message to delete it (yours take their reply, and what was learned).
   const removeMessage = (m: Message) =>
@@ -182,9 +222,12 @@ function Conversation({
     setImages([]);
     setError(null);
     setDraft({ content: "", thinking: "" });
+    stopSaying();
+    let reply: Message | null = null;
     stop.current = api.stream(`/api/chats/${chat.id}/messages`, { content: text, images: sending }, {
       event: (name, data) => {
         const d = data as { text?: string; message?: unknown; user_message?: Message };
+        if (name === "done" && d.message && typeof d.message === "object") reply = d.message as Message;
         if (name === "start" && d.user_message) setMessages((m) => [...m, d.user_message!]);
         else if (name === "token") setDraft((x) => (x ? { ...x, content: x.content + (d.text ?? "") } : x));
         else if (name === "thinking") setDraft((x) => (x ? { ...x, thinking: x.thinking + (d.text ?? "") } : x));
@@ -194,6 +237,8 @@ function Conversation({
         setDraft(null);
         stop.current = null;
         void reload();
+        const r = reply as Message | null;
+        if (persona?.speak_replies && r?.content) readAloud(r.id, r.content);
       },
       error: (e) => {
         setDraft(null);
@@ -216,6 +261,19 @@ function Conversation({
         <Text numberOfLines={1} style={{ color: C.ink, fontSize: 16, flex: 1 }}>
           {chat.title}
         </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Talk hands-free"
+          disabled={!!draft}
+          onPress={() => {
+            mic?.cancel();
+            stopSaying();
+            setHandsFree(true);
+          }}
+          style={[s.chip, { minHeight: 40, opacity: draft ? 0.45 : 1 }]}
+        >
+          <Text style={{ color: C.ink }}>Talk</Text>
+        </Pressable>
       </View>
       <ScrollView ref={scroller} contentContainerStyle={[s.pad, { paddingBottom: 24 }]} onContentSizeChange={() => scroller.current?.scrollToEnd({ animated: false })}>
         {messages.length === 0 && !draft && <P muted>{persona ? `Say hello to ${persona.name}.` : "Start the chat."}</P>}
@@ -230,6 +288,8 @@ function Conversation({
               thinking={m.thinking}
               attachments={m.attachments.map((a) => a.id)}
               onDelete={draft ? undefined : () => removeMessage(m)}
+              speaking={saying === m.id}
+              onSpeak={m.role === "assistant" ? () => readAloud(m.id, m.content) : undefined}
             />
           ))}
         {draft && <Bubble api={api} role="assistant" content={draft.content || "…"} thinking={draft.thinking || null} attachments={[]} />}
@@ -261,10 +321,19 @@ function Conversation({
           <Pressable accessibilityRole="button" accessibilityLabel="Attach a picture" onPress={() => setAttach((a) => !a)} style={[s.chip, { minHeight: 48 }]}>
             <Text style={{ color: C.ink, fontSize: 18 }}>＋</Text>
           </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={mic ? "Stop listening" : "Talk instead of typing"}
+            disabled={!!draft}
+            onPress={toggleMic}
+            style={[s.chip, { minHeight: 48, backgroundColor: mic ? C.ember : "transparent", opacity: draft ? 0.45 : 1 }]}
+          >
+            <Text style={{ color: mic ? C.onEmber : C.ink, fontSize: 16 }}>{mic ? "■" : "Mic"}</Text>
+          </Pressable>
           <TextInput
             value={input}
             onChangeText={setInput}
-            placeholder={persona ? `Message ${persona.name}, or /draw…` : "Message, or /draw…"}
+            placeholder={mic ? "Listening…" : persona ? `Message ${persona.name}, or /draw…` : "Message, or /draw…"}
             placeholderTextColor={C.muted}
             multiline
             style={[s.input, { flex: 1, maxHeight: 120, paddingTop: 12 }]}
@@ -276,6 +345,18 @@ function Conversation({
           )}
         </View>
       </View>
+      {handsFree && (
+        <HandsFree
+          api={api}
+          chatId={chat.id}
+          persona={persona}
+          onTurn={() => void reload()}
+          onClose={() => {
+            setHandsFree(false);
+            void reload();
+          }}
+        />
+      )}
       {fromGallery && (
         <GalleryPicker
           api={api}
@@ -300,6 +381,8 @@ function Bubble({
   thinking,
   attachments,
   onDelete,
+  speaking,
+  onSpeak,
 }: {
   api: Outpost;
   role: Message["role"];
@@ -307,6 +390,8 @@ function Bubble({
   thinking: string | null;
   attachments: string[];
   onDelete?: () => void;
+  speaking?: boolean;
+  onSpeak?: () => void;
 }) {
   const [showThinking, setShowThinking] = useState(false);
   const user = role === "user";
@@ -348,6 +433,17 @@ function Bubble({
       {jobIds.map((id) => (
         <JobCard key={id} api={api} jobId={id} />
       ))}
+      {onSpeak && text ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={speaking ? "Stop reading aloud" : "Read aloud"}
+          onPress={onSpeak}
+          hitSlop={8}
+          style={{ alignSelf: "flex-start", paddingVertical: 4 }}
+        >
+          <Text style={{ color: speaking ? C.ember : C.muted, fontSize: 13 }}>{speaking ? "■ Stop" : "▶ Listen"}</Text>
+        </Pressable>
+      ) : null}
     </Pressable>
   );
 }

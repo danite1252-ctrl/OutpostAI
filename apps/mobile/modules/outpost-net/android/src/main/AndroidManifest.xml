@@ -2,4 +2,12 @@
   <!-- Finding Outposts on the Wi-Fi (mDNS) needs multicast. -->
   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
   <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+  <!-- Talking to a persona: asked for the first time the microphone is used. -->
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <!-- Android 11+ only shows apps the speech recognizer if they say they look for it. -->
+  <queries>
+    <intent>
+      <action android:name="android.speech.RecognitionService" />
+    </intent>
+  </queries>
 </manifest>
