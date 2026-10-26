@@ -1,6 +1,7 @@
 /**
- * Updating the phone app from inside it. The PC checks GitHub Releases each day; when it
- * knows of a newer phone app, this downloads it in the background and installs it:
+ * Updating the phone app from inside it. When the app opens it asks GitHub Releases itself
+ * (unless update checks are switched off on the PC), falling back to what the PC last found.
+ * A newer phone app is downloaded in the background and installed:
  * straight away when you press Restart, or (once Android allows updates without a prompt)
  * by itself the next time you leave the app.
  */
@@ -37,6 +38,25 @@ export type UpdateState =
   | { phase: "error"; version: string; message: string };
 
 const SIX_HOURS = 6 * 60 * 60 * 1000;
+/** Ask GitHub at most this often (opening the app again soon after uses the last answer). */
+const GITHUB_EVERY = 20 * 60 * 1000;
+let lastGithub: { at: number; mobile: Mobile | null } | null = null;
+
+/** The newest phone app: straight from the release on GitHub, or what the PC last found. */
+async function newestMobile(api: Outpost): Promise<Mobile | null> {
+  const u = await api.get<{ enabled: boolean; repo: string; mobile: Mobile | null }>("/api/updates");
+  // Switched off on the PC: the phone doesn't go looking either.
+  if (!u.enabled) return null;
+  if (lastGithub && Date.now() - lastGithub.at < GITHUB_EVERY) return lastGithub.mobile ?? u.mobile;
+  try {
+    const text = await OutpostNet.fetchText(`https://github.com/${u.repo}/releases/latest/download/latest.json`);
+    const m = (JSON.parse(text) as { mobile?: Mobile }).mobile ?? null;
+    lastGithub = { at: Date.now(), mobile: m && typeof m.url === "string" && m.url.startsWith("https://") ? m : null };
+    return lastGithub.mobile ?? u.mobile;
+  } catch {
+    return u.mobile;
+  }
+}
 
 export function usePhoneUpdate(api: Outpost) {
   const [state, setState] = useState<UpdateState>({ phase: "none" });
@@ -51,8 +71,7 @@ export function usePhoneUpdate(api: Outpost) {
       if (busy.current) return;
       busy.current = true;
       try {
-        const u = await api.get<{ mobile: Mobile | null }>("/api/updates");
-        const m = u.mobile;
+        const m = await newestMobile(api);
         if (!m || !isNewer(m.version, APP_VERSION)) {
           setState({ phase: "none" });
           return;
@@ -117,7 +136,7 @@ export function usePhoneUpdate(api: Outpost) {
     const sub = AppState.addEventListener("change", (st) => {
       const s = stateRef.current;
       if (st === "active") {
-        if (s.phase === "permission" || s.phase === "none" || s.phase === "available") void prepare(false);
+        if (s.phase === "permission" || s.phase === "none" || s.phase === "available" || s.phase === "error") void prepare(false);
       } else if (st === "background" && s.phase === "ready" && s.silent) {
         void loadAutoUpdate().then((auto) => auto && void install());
       }

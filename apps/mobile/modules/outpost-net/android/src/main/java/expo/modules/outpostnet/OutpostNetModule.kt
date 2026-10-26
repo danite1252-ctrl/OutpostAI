@@ -140,6 +140,16 @@ class OutpostNetModule : Module() {
     Function("openInstallSettings") { updater.openInstallSettings(); Unit }
     Function("updateDownloaded") { name: String -> updater.downloaded(name) }
 
+    AsyncFunction("fetchText") { url: String, promise: Promise ->
+      Thread {
+        try {
+          promise.resolve(updater.fetchText(url))
+        } catch (e: Exception) {
+          promise.reject("ERR_NETWORK", e.message ?: "Couldn't reach GitHub.", e)
+        }
+      }.start()
+    }
+
     AsyncFunction("downloadUpdate") { url: String, name: String, sha256: String?, promise: Promise ->
       Thread {
         try {

@@ -64,6 +64,19 @@ class AppUpdater(
     ctx.startActivity(intent)
   }
 
+  /** A small text file over ordinary HTTPS (the release's latest.json on GitHub). */
+  fun fetchText(url: String): String {
+    require(url.startsWith("https://")) { "Only HTTPS." }
+    client.newBuilder().callTimeout(20, TimeUnit.SECONDS).build()
+      .newCall(Request.Builder().url(url).header("Accept", "application/json").build())
+      .execute().use { resp ->
+        if (!resp.isSuccessful) throw IllegalStateException("GitHub said no (${resp.code}).")
+        val body = resp.body?.string() ?: ""
+        if (body.length > 256 * 1024) throw IllegalStateException("That was too big to be release information.")
+        return body
+      }
+  }
+
   /** The APK already downloaded under this name, if it's complete. */
   fun downloaded(name: String): String? {
     val f = File(dir(), safe(name))

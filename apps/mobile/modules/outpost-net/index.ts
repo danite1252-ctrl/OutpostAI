@@ -107,6 +107,8 @@ declare class OutpostNetModule extends NativeModule<Events> {
   openInstallSettings(): void;
   /** The path of an update already downloaded under `name`, or null. */
   updateDownloaded(name: string): string | null;
+  /** A small text file over ordinary HTTPS (GitHub's latest.json). */
+  fetchText(url: string): Promise<string>;
   /** Download an update (HTTPS); resolves with its path. */
   downloadUpdate(url: string, name: string, sha256: string | null): Promise<string>;
   /** Hand a downloaded update to Android's installer (it closes Outpost to update). */

@@ -155,6 +155,7 @@ contacts the internet only for:
 | When | Where | What |
 | --- | --- | --- |
 | Once a day, unless switched off | github.com | Asks for the latest version number. Nothing about you is sent. |
+| The phone app opens (at most every 20 minutes), unless switched off | github.com | The phone asks for the latest version number, and downloads a newer phone app |
 | You install or update an engine | github.com, pypi.org, download.pytorch.org, huggingface.co (voice) | The engine's files |
 | You download a model | ollama.com, huggingface.co | The model's files |
 | You add a webhook | Your own URL | The events you chose |
