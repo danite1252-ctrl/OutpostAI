@@ -1,6 +1,7 @@
 import * as ImagePicker from "expo-image-picker";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, BackHandler, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Alert, BackHandler, Image, Keyboard, KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { MicIcon, PlusIcon, SendIcon, StopIcon } from "../icons";
 import { AuthedImage } from "../images";
 import { GalleryPicker } from "./Create";
 import HandsFree from "./HandsFree";
@@ -195,6 +196,12 @@ function Conversation({
     return () => stop.current?.();
   }, [reload]);
 
+  // Keep the newest message in view when the keyboard opens.
+  useEffect(() => {
+    const sub = Keyboard.addListener("keyboardDidShow", () => scroller.current?.scrollToEnd({ animated: true }));
+    return () => sub.remove();
+  }, []);
+
   // Android's back button returns to the chat list rather than leaving the app.
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -252,7 +259,8 @@ function Conversation({
   }
 
   return (
-    <View style={s.screen}>
+    // The message bar rides up with the keyboard, and the chat above shrinks to fit.
+    <KeyboardAvoidingView style={s.screen} behavior="padding">
       <View style={[s.row, { padding: 12, borderBottomWidth: 1, borderBottomColor: C.line }]}>
         <Pressable accessibilityRole="button" accessibilityLabel="Back to chats" onPress={onBack} style={[s.chip, { minHeight: 40 }]}>
           <Text style={{ color: C.ink }}>‹ Chats</Text>
@@ -275,7 +283,14 @@ function Conversation({
           <Text style={{ color: C.ink }}>Talk</Text>
         </Pressable>
       </View>
-      <ScrollView ref={scroller} contentContainerStyle={[s.pad, { paddingBottom: 24 }]} onContentSizeChange={() => scroller.current?.scrollToEnd({ animated: false })}>
+      <ScrollView
+        ref={scroller}
+        style={{ flex: 1 }}
+        contentContainerStyle={[s.pad, { paddingBottom: 24 }]}
+        keyboardShouldPersistTaps="handled"
+        onContentSizeChange={() => scroller.current?.scrollToEnd({ animated: false })}
+        onLayout={() => scroller.current?.scrollToEnd({ animated: false })}
+      >
         {messages.length === 0 && !draft && <P muted>{persona ? `Say hello to ${persona.name}.` : "Start the chat."}</P>}
         {messages
           .filter((m) => m.role !== "system")
@@ -317,31 +332,47 @@ function Conversation({
             ))}
           </View>
         )}
-        <View style={s.row}>
-          <Pressable accessibilityRole="button" accessibilityLabel="Attach a picture" onPress={() => setAttach((a) => !a)} style={[s.chip, { minHeight: 48 }]}>
-            <Text style={{ color: C.ink, fontSize: 18 }}>＋</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={mic ? "Stop listening" : "Talk instead of typing"}
-            disabled={!!draft}
-            onPress={toggleMic}
-            style={[s.chip, { minHeight: 48, backgroundColor: mic ? C.ember : "transparent", opacity: draft ? 0.45 : 1 }]}
-          >
-            <Text style={{ color: mic ? C.onEmber : C.ink, fontSize: 16 }}>{mic ? "■" : "Mic"}</Text>
-          </Pressable>
+        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8 }}>
+          {/* Attach and talk, stacked, so the message box gets the width. */}
+          <View style={{ gap: 6 }}>
+            <RoundButton label="Attach a picture" onPress={() => setAttach((a) => !a)} active={attach}>
+              <PlusIcon size={20} color={attach ? C.onEmber : C.soft} />
+            </RoundButton>
+            <RoundButton label={mic ? "Stop listening" : "Talk instead of typing"} onPress={toggleMic} active={!!mic} disabled={!!draft}>
+              {mic ? <StopIcon size={18} color={C.onEmber} /> : <MicIcon size={20} color={C.soft} />}
+            </RoundButton>
+          </View>
           <TextInput
             value={input}
             onChangeText={setInput}
             placeholder={mic ? "Listening…" : persona ? `Message ${persona.name}, or /draw…` : "Message, or /draw…"}
             placeholderTextColor={C.muted}
             multiline
-            style={[s.input, { flex: 1, maxHeight: 120, paddingTop: 12 }]}
+            onFocus={() => setTimeout(() => scroller.current?.scrollToEnd({ animated: true }), 250)}
+            style={{
+              flex: 1,
+              minHeight: 82,
+              maxHeight: 160,
+              borderRadius: 20,
+              borderWidth: 1,
+              borderColor: mic ? C.ember : C.line,
+              backgroundColor: C.deep,
+              color: C.ink,
+              fontSize: 16,
+              paddingHorizontal: 14,
+              paddingTop: 12,
+              paddingBottom: 12,
+              textAlignVertical: "top",
+            }}
           />
           {draft ? (
-            <Button kind="ghost" title="Stop" onPress={() => stop.current?.()} />
+            <RoundButton label="Stop the reply" onPress={() => stop.current?.()} size={48}>
+              <StopIcon size={20} color={C.ink} />
+            </RoundButton>
           ) : (
-            <Button title="Send" onPress={send} disabled={!input.trim() && images.length === 0} />
+            <RoundButton label="Send" onPress={send} size={48} filled disabled={!input.trim() && images.length === 0}>
+              <SendIcon size={22} color={C.onEmber} />
+            </RoundButton>
           )}
         </View>
       </View>
@@ -370,7 +401,7 @@ function Conversation({
           }}
         />
       )}
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -515,5 +546,49 @@ function JobCard({ api, jobId }: { api: Outpost; jobId: string }) {
         <View style={{ flex: 1 - Math.min(1, f) }} />
       </View>
     </View>
+  );
+}
+
+/** A round icon button for the message bar. */
+function RoundButton({
+  label,
+  onPress,
+  children,
+  size = 38,
+  filled,
+  active,
+  disabled,
+}: {
+  label: string;
+  onPress: () => void;
+  children: ReactNode;
+  size?: number;
+  /** The main action (send): always ember. */
+  filled?: boolean;
+  /** On (listening, attach menu open). */
+  active?: boolean;
+  disabled?: boolean;
+}) {
+  const lit = filled || active;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: !!disabled, selected: !!active }}
+      onPress={onPress}
+      disabled={disabled}
+      hitSlop={4}
+      style={({ pressed }) => ({
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: lit ? C.ember : C.raised,
+        opacity: disabled ? 0.4 : pressed ? 0.75 : 1,
+      })}
+    >
+      {children}
+    </Pressable>
   );
 }
