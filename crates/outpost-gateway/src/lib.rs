@@ -9,10 +9,14 @@ pub mod discovery;
 pub mod error;
 pub mod extract;
 pub mod llm;
+pub mod mcp;
 pub mod memory;
 pub mod openapi;
 pub mod routes;
+pub mod tailscale;
 pub mod tls;
+pub mod train;
+pub mod webhooks;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, OnceLock};
@@ -57,6 +61,10 @@ pub struct AppState {
     pub queue: Arc<create::Queue>,
     /// The encrypted port for phones, once it is running (network access on).
     pub tls: Arc<OnceLock<tls::TlsInfo>>,
+    /// This PC's Tailscale address, once Outpost answers on it.
+    pub tailnet: Arc<OnceLock<IpAddr>>,
+    /// Dataset captioning in progress.
+    pub captions: routes::training::Captions,
 }
 
 impl AppState {
@@ -92,6 +100,8 @@ impl AppState {
             assets,
             queue: create::new_queue(),
             tls: Arc::new(OnceLock::new()),
+            tailnet: Arc::new(OnceLock::new()),
+            captions: Default::default(),
         }
     }
 
@@ -125,7 +135,10 @@ const DESKTOP_ORIGINS: [&str; 5] = [
 ];
 
 pub fn router(state: AppState) -> Router {
-    use routes::{accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup};
+    use routes::{
+        accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, training,
+        webhooks,
+    };
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(
@@ -173,6 +186,7 @@ pub fn router(state: AppState) -> Router {
             "/api/chats/{id}/messages",
             post(chat::send_message).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
         )
+        .route("/api/chats/{id}/messages/{message_id}", delete(chat::delete_message))
         .route("/api/files/{id}", get(chat::get_file))
         .route("/api/memory", get(chat::list_memory).post(chat::add_memory))
         .route(
@@ -208,7 +222,44 @@ pub fn router(state: AppState) -> Router {
         .route("/api/pair/hello", post(pairing::hello))
         .route("/api/pair/complete", post(pairing::complete))
         .route("/api/devices", get(pairing::list_devices))
+        .route("/api/connection", get(network::connection))
         .route("/api/devices/{id}", delete(pairing::revoke_device))
+        .route("/api/training", get(training::status).put(training::set_settings))
+        .route("/api/training/trigger-check", get(training::trigger_check))
+        .route("/api/datasets", get(training::list_datasets).post(training::create_dataset))
+        .route(
+            "/api/datasets/{id}",
+            get(training::get_dataset)
+                .patch(training::update_dataset)
+                .delete(training::delete_dataset),
+        )
+        .route(
+            "/api/datasets/{id}/images",
+            post(training::add_image).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
+        )
+        .route(
+            "/api/datasets/{id}/images/{image_id}",
+            get(training::get_image)
+                .patch(training::set_caption)
+                .delete(training::delete_image),
+        )
+        .route("/api/datasets/{id}/import", post(training::import_folder))
+        .route("/api/datasets/{id}/caption", post(training::caption))
+        .route("/api/datasets/{id}/train", post(training::start_training))
+        .route("/api/trainings/{id}", get(training::get_training))
+        .route("/api/trainings/{id}/samples/{file}", get(training::get_sample))
+        .route("/api/trainings/{id}/use", post(training::use_checkpoint))
+        .route("/api/characters", get(training::list_characters).post(training::add_character))
+        .route("/api/characters/lora-files", get(training::lora_files))
+        .route(
+            "/api/characters/{id}",
+            patch(training::rename_character).delete(training::delete_character),
+        )
+        .route("/mcp", post(mcp::handle).get(mcp::no_stream))
+        .route("/api/integrations", get(mcp::integrations))
+        .route("/api/webhooks", get(webhooks::list).post(webhooks::create))
+        .route("/api/webhooks/{id}", delete(webhooks::delete))
+        .route("/api/webhooks/{id}/test", post(webhooks::test))
         .route("/api/hardware", get(models::hardware))
         .route("/api/models", get(models::overview))
         .route("/api/models/pull", post(models::pull))
@@ -247,17 +298,7 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     tokio::spawn(create::worker(state.clone()));
     // With network access on, phones get the encrypted port next door, and the
     // Outpost announces itself on the network.
-    let secure = if bind.ip().is_loopback() {
-        None
-    } else {
-        match start_secure_port(&state).await {
-            Ok(handle) => Some(handle),
-            Err(e) => {
-                tracing::warn!(error = %e, "couldn't start the encrypted port for phones");
-                None
-            }
-        }
-    };
+    let background = start_remote_access(&state).await;
     let result = axum::serve(
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),
@@ -266,8 +307,8 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
         let _ = tokio::signal::ctrl_c().await;
     })
     .await;
-    // Stop the encrypted port (and the network announcement) with the main one.
-    if let Some(handle) = secure {
+    // Stop the encrypted port, the Tailscale listener and the announcement with the main one.
+    for handle in background {
         handle.abort();
     }
     engines.shutdown();
@@ -280,11 +321,57 @@ pub fn secure_port(api_port: u16) -> u16 {
     api_port.wrapping_add(1)
 }
 
-async fn start_secure_port(state: &AppState) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+/// Everything that answers beyond this PC: with network access on, the encrypted port on
+/// every interface (the plain port already listens everywhere); with only Tailscale
+/// allowed, both ports on the Tailscale address alone.
+async fn start_remote_access(state: &AppState) -> Vec<tokio::task::JoinHandle<()>> {
+    let bind = state.config.bind;
+    let lan = !bind.ip().is_loopback();
+    let tailscale_on = outpost_core::settings::get_bool(&state.pool, outpost_core::settings::TAILSCALE_ACCESS)
+        .await
+        .unwrap_or(false);
+    let ts_ip = if tailscale_on { tailscale::ip() } else { None };
+    if tailscale_on && ts_ip.is_none() {
+        tracing::warn!("Tailscale access is on, but this PC has no Tailscale address right now");
+    }
+    let mut handles = Vec::new();
+    if lan {
+        match start_secure_port(state, bind.ip(), true).await {
+            Ok(h) => handles.push(h),
+            Err(e) => tracing::warn!(error = %e, "couldn't start the encrypted port for phones"),
+        }
+        if let Some(ip) = ts_ip {
+            // Listening everywhere already covers the Tailscale address.
+            let _ = state.tailnet.set(IpAddr::V4(ip));
+        }
+    } else if let Some(ip) = ts_ip {
+        let ip = IpAddr::V4(ip);
+        match tokio::net::TcpListener::bind(SocketAddr::new(ip, bind.port())).await {
+            Ok(listener) => {
+                tracing::info!(%ip, port = bind.port(), "API listening on Tailscale (app keys only)");
+                let app = router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+                handles.push(tokio::spawn(async move {
+                    let _ = axum::serve(listener, app).await;
+                }));
+                match start_secure_port(state, ip, false).await {
+                    Ok(h) => {
+                        handles.push(h);
+                        let _ = state.tailnet.set(ip);
+                    }
+                    Err(e) => tracing::warn!(error = %e, "couldn't start the encrypted port on Tailscale"),
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, %ip, "couldn't listen on the Tailscale address"),
+        }
+    }
+    handles
+}
+
+async fn start_secure_port(state: &AppState, ip: IpAddr, announce: bool) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     let bind = state.config.bind;
     let identity = tls::load_or_create(&state.config.data_dir)?;
     let config = tls::server_config(&identity)?;
-    let addr = SocketAddr::new(bind.ip(), secure_port(bind.port()));
+    let addr = SocketAddr::new(ip, secure_port(bind.port()));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(addr.port());
     let _ = state.tls.set(tls::TlsInfo {
@@ -297,7 +384,7 @@ async fn start_secure_port(state: &AppState) -> anyhow::Result<tokio::task::Join
     // Announce it; a failure here only means phones must type the address.
     let hw = routes::models::measure(state).await;
     let tier = format!("{:?}", hw.tier).to_lowercase();
-    let daemon = routes::network::lan_ip().and_then(|ip| {
+    let daemon = routes::network::lan_ip().filter(|_| announce).and_then(|ip| {
         let name = routes::health::machine_name();
         discovery::advertise(&name, ip, port, bind.port(), &tier)
             .map_err(|e| tracing::warn!(error = %e, "couldn't announce Outpost on the network"))

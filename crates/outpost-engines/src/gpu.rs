@@ -27,6 +27,25 @@ pub async fn detect() -> Vec<Gpu> {
     parse_nvidia_smi(&String::from_utf8_lossy(&output.stdout))
 }
 
+/// Video memory in use right now on the first NVIDIA card, in MiB. `None` when it
+/// can't be told (no NVIDIA card, or nvidia-smi isn't there).
+pub async fn used_mb() -> Option<u64> {
+    // nvidia-smi isn't always on PATH; the driver puts it in System32.
+    for program in ["nvidia-smi", r"C:\Windows\System32\nvidia-smi.exe"] {
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(["--query-gpu=memory.used", "--format=csv,noheader,nounits"])
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true);
+        crate::process::hide_window(&mut cmd);
+        if let Ok(Ok(out)) = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output()).await {
+            if out.status.success() {
+                return String::from_utf8_lossy(&out.stdout).lines().next()?.trim().parse().ok();
+            }
+        }
+    }
+    None
+}
+
 fn parse_nvidia_smi(text: &str) -> Vec<Gpu> {
     text.lines()
         .filter_map(|line| {

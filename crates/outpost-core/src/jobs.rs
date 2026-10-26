@@ -60,6 +60,16 @@ pub async fn check_room(pool: &SqlitePool, account_id: &str) -> CoreResult<()> {
     Ok(())
 }
 
+/// My jobs waiting or running.
+pub async fn waiting_for(pool: &SqlitePool, account_id: &str) -> CoreResult<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE account_id = ? AND status IN ('queued', 'running')")
+            .bind(account_id)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
 /// Jobs waiting to start, for everyone.
 pub async fn queued_count(pool: &SqlitePool) -> CoreResult<i64> {
     Ok(sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE status = 'queued'")
@@ -194,25 +204,16 @@ pub async fn line(pool: &SqlitePool) -> CoreResult<Vec<LineEntry>> {
 
 /// The oldest queued job, marked running. `None` when the queue is empty.
 pub async fn take_next(pool: &SqlitePool) -> CoreResult<Option<Job>> {
-    let mut tx = pool.begin().await?;
-    let next: Option<Job> = sqlx::query_as(&format!(
-        "SELECT {COLS} FROM jobs WHERE status = 'queued' ORDER BY {RUN_ORDER} LIMIT 1"
+    // One statement: picking and marking can't be split by another write (a read-then-
+    // write transaction would fail rather than wait when one lands in between).
+    Ok(sqlx::query_as(&format!(
+        "UPDATE jobs SET status = 'running', started_at = ?
+         WHERE id = (SELECT id FROM jobs WHERE status = 'queued' ORDER BY {RUN_ORDER} LIMIT 1) AND status = 'queued'
+         RETURNING {COLS}"
     ))
-    .fetch_optional(&mut *tx)
-    .await?;
-    let Some(mut job) = next else {
-        return Ok(None);
-    };
-    let t = now();
-    sqlx::query("UPDATE jobs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'")
-        .bind(t)
-        .bind(&job.id)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    job.status = JobStatus::Running;
-    job.started_at = Some(t);
-    Ok(Some(job))
+    .bind(now())
+    .fetch_optional(pool)
+    .await?)
 }
 
 pub async fn set_seed(pool: &SqlitePool, id: &str, seed: u64) -> CoreResult<()> {

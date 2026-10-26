@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { api, ApiError, createApi, type EngineInfo, type Job, type Media, type Pack, type PackInput, type Task } from "../api";
+import { api, ApiError, createApi, type Character, type EngineInfo, type Job, type Media, type Pack, type PackInput, type Task } from "../api";
 import { downloadsChanged, formatBytes, formatEta, formatSpeed } from "../components/downloads";
 import { GalleryGrid, GalleryPicker, mediaAsInput, Viewer, type CreateRequest } from "../components/gallery";
 import { dropCached, prepareImage } from "../components/images";
@@ -51,6 +51,9 @@ function saveChoices(c: Partial<Record<Task, string>>) {
 }
 
 type Values = Record<string, unknown>;
+
+/** LoRA files, and which of them are my trained characters. */
+type LoraInfo = { loras: string[]; folder: string; characters: Character[] };
 
 function message(err: unknown) {
   return err instanceof ApiError ? err.message : "Something went wrong.";
@@ -97,7 +100,7 @@ export default function Create({
   const [task, setTask] = useState<Task>("picture");
   const [choices, setChoices] = useState<Partial<Record<Task, string>>>(loadChoices);
   const [values, setValues] = useState<Values>({});
-  const [loras, setLoras] = useState<{ loras: string[]; folder: string }>({ loras: [], folder: "" });
+  const [loras, setLoras] = useState<LoraInfo>({ loras: [], folder: "", characters: [] });
   const [jobs, setJobs] = useState<Job[]>([]);
   const [gallery, setGallery] = useState<Media[]>([]);
   const [viewing, setViewing] = useState<Media | null>(null);
@@ -614,7 +617,7 @@ function PackForm({
   token: string;
   pack: Pack;
   values: Values;
-  loras: { loras: string[]; folder: string };
+  loras: LoraInfo;
   busy: boolean;
   onChange: (key: string, v: unknown) => void;
   onRefreshLoras: () => void;
@@ -623,11 +626,22 @@ function PackForm({
   const basic = pack.inputs.filter((i) => !i.advanced);
   const advanced = pack.inputs.filter((i) => i.advanced);
   const missingRequired = pack.inputs.some((i) => i.required && !values[i.key]);
+  // For a character workflow, the prompt's hint names the character picked.
+  const loraInput = pack.inputs.find((i) => i.kind === "lora");
+  const character = loraInput ? loras.characters.find((c) => c.lora_file === values[loraInput.key]) : undefined;
+  const promptHelp = !loraInput
+    ? undefined
+    : character
+      ? `Start with ${character.name}'s trigger word and what they are, e.g. "${character.trigger_word}${
+          character.subject ? ` ${character.subject}` : ""
+        }, at the beach at sunset, ${character.style ?? "photo"}". In chat: "draw ${character.name} at the beach".`
+      : "Pick a character above, then start the prompt with its trigger word.";
   const field = (i: PackInput) => (
     <InputField
       key={i.key}
       token={token}
       input={i}
+      help={i.key === "prompt" ? promptHelp : undefined}
       value={values[i.key]}
       loras={loras}
       onChange={onChange}
@@ -657,6 +671,7 @@ function PackForm({
 function InputField({
   token,
   input: i,
+  help: helpText,
   value,
   loras,
   onChange,
@@ -665,8 +680,10 @@ function InputField({
 }: {
   token: string;
   input: PackInput;
+  /** Replaces the input's own hint. */
+  help?: string;
   value: unknown;
-  loras: { loras: string[]; folder: string };
+  loras: LoraInfo;
   onChange: (key: string, v: unknown) => void;
   onRefreshLoras: () => void;
   onSubmit: () => void;
@@ -678,7 +695,7 @@ function InputField({
       {i.required && <span className="text-ember"> *</span>}
     </label>
   );
-  const help = i.help && <span className="text-xs text-muted">{i.help}</span>;
+  const help = (helpText ?? i.help) && <span className="text-xs text-muted">{helpText ?? i.help}</span>;
   const box = "min-h-11 rounded-xl border border-line bg-deep px-3 text-ink focus:border-ember focus:outline-none";
 
   switch (i.kind) {
@@ -779,18 +796,33 @@ function InputField({
               className={`${box} flex-1`}
             >
               <option value="">None</option>
-              {loras.loras.map((l) => (
-                <option key={l} value={l}>
-                  {l.replace(/\.safetensors$/i, "")}
-                </option>
-              ))}
+              {loras.characters.length > 0 && (
+                <optgroup label="My characters">
+                  {loras.characters
+                    .filter((c) => loras.loras.includes(c.lora_file))
+                    .map((c) => (
+                      <option key={c.id} value={c.lora_file}>
+                        {c.name} ({c.trigger_word})
+                      </option>
+                    ))}
+                </optgroup>
+              )}
+              <optgroup label="LoRA files">
+                {loras.loras
+                  .filter((l) => !loras.characters.some((c) => c.lora_file === l))
+                  .map((l) => (
+                    <option key={l} value={l}>
+                      {l.replace(/\.safetensors$/i, "")}
+                    </option>
+                  ))}
+              </optgroup>
             </select>
             <Button variant="ghost" onClick={onRefreshLoras} title="Look for new LoRA files">
               Refresh
             </Button>
           </div>
           <span className="text-xs text-muted">
-            {i.help} To add one, copy its <span className="font-mono">.safetensors</span> file into{" "}
+            {i.help} Train one in Train, or copy its <span className="font-mono">.safetensors</span> file into{" "}
             <span className="font-mono break-all">{loras.folder || "the LoRA folder"}</span>, then Refresh. Start the
             prompt with its trigger word.
           </span>
@@ -906,7 +938,7 @@ function sizeLabel(o: string) {
 }
 
 function JobRow({ job: j, packs, onCancel }: { job: Job; packs: Pack[]; onCancel?: () => void }) {
-  const name = packs.find((p) => p.id === j.pack_id)?.name ?? j.pack_id;
+  const name = packs.find((p) => p.id === j.pack_id)?.name ?? (j.pack_id === "train" ? "Training a character" : j.pack_id);
   const prompt = useMemo(() => {
     try {
       return (JSON.parse(j.inputs).prompt as string) ?? "";

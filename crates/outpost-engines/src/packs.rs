@@ -828,6 +828,9 @@ mod tests {
             .unwrap()
             .graph;
         assert_eq!(g[LORA_NODE]["inputs"]["lora_name"], "zd4nni.safetensors");
+        // Characters default to 16 steps at strength 1.1 (closer likeness, from testing).
+        assert_eq!(g["3"]["inputs"]["steps"], 16);
+        assert_eq!(g[LORA_NODE]["inputs"]["strength_model"], 1.1);
         // It shares Z-Image Turbo's graph and files.
         assert_eq!(p.graph, find("z_image_turbo").unwrap().graph);
     }

@@ -129,6 +129,8 @@ pub struct Exchange {
     pub account_id: String,
     pub persona: Option<Persona>,
     pub chat_id: String,
+    /// The message the user sent; what's learned is tied to it, so deleting it forgets.
+    pub user_message_id: String,
     /// The chat's model, already loaded, so learning costs one short request.
     pub model: String,
     pub can_think: bool,
@@ -144,6 +146,7 @@ pub async fn learn(state: AppState, ex: Exchange) {
         account_id,
         persona,
         chat_id,
+        user_message_id,
         model,
         can_think,
         user_text,
@@ -242,6 +245,10 @@ pub async fn learn(state: AppState, ex: Exchange) {
         .await
         {
             Ok(saved) => {
+                if !matches!(memory::link_message(&state.pool, &saved.id, &user_message_id).await, Ok(true)) {
+                    // The message was deleted while this was being learned.
+                    continue;
+                }
                 tracing::info!(account = %account_id, "learned a memory");
                 known.insert(
                     0,

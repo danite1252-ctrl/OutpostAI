@@ -67,7 +67,12 @@ pub async fn create_code(State(state): State<AppState>, auth: Auth) -> ApiResult
         )
     })?;
     let (code, row) = pairing::create(&state.pool, &auth.account.id).await?;
-    let hosts: Vec<String> = super::network::lan_ip().into_iter().map(|ip| ip.to_string()).collect();
+    let ts = if state.tailnet.get().is_some() {
+        crate::tailscale::detect().await
+    } else {
+        None
+    };
+    let hosts = super::network::phone_hosts(&state, ts.as_ref()).await;
     let name = super::health::machine_name();
     let link = format!(
         "outpost://pair?v=1&name={}&hosts={}&port={}&fp={}&code={}",

@@ -7,6 +7,13 @@ use crate::CoreResult;
 /// "on" when other devices on the network may reach the API (app keys still required).
 pub const NETWORK_ACCESS: &str = "network.lan_access";
 
+/// "on" when the owner's Tailscale devices may reach the API and the phone port, even
+/// with network access off.
+pub const TAILSCALE_ACCESS: &str = "network.tailscale";
+
+/// Where ai-toolkit (the LoRA trainer) is installed. Unset: `C:\dev\ai-toolkit`.
+pub const AI_TOOLKIT_DIR: &str = "training.ai_toolkit_dir";
+
 pub async fn get(pool: &SqlitePool, key: &str) -> CoreResult<Option<String>> {
     Ok(sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
         .bind(key)

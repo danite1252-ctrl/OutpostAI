@@ -3,6 +3,7 @@ import { api, ApiError, type DeviceView, type NetworkStatus, type PairingStatus,
 import { ago } from "../components/context";
 import { AppKeysPanel } from "../components/keys";
 import { NetworkPanel } from "../components/network";
+import { WebhooksPanel } from "../components/webhooks";
 import { Button, ErrorNote, Icon, icons } from "../components/ui";
 
 /** Phones, app keys and network access: everything that reaches Outpost from elsewhere. */
@@ -58,17 +59,17 @@ export default function Connections({ auth }: { auth: SignInResponse }) {
         </div>
         {!ready && network && (
           <p className="rounded-2xl border border-line bg-surface p-4 text-sm" role="status">
-            {network.lan_access
+            {network.lan_access || network.tailscale_access
               ? "Network access is on but not running yet: close and reopen Outpost, then pair."
               : isOwner
-                ? "Turn on \"Allow other devices on my network\" below, then restart Outpost to pair a phone."
+                ? "Turn on \"Allow other devices on my network\" or \"Allow my Tailscale devices\" below, then restart Outpost to pair a phone."
                 : "Ask the owner to turn on network access so phones can pair."}
           </p>
         )}
         {ready && network && (
           <p className="text-xs text-muted">
             Encrypted port {network.secure_port}
-            {network.lan_address ? ` on ${network.lan_address}` : ""} · check words{" "}
+            {network.phone_hosts.length ? ` on ${network.phone_hosts.join(", ")}` : ""} · check words{" "}
             <span className="font-mono text-soft">{network.words.join(" · ")}</span>
           </p>
         )}
@@ -102,6 +103,7 @@ export default function Connections({ auth }: { auth: SignInResponse }) {
       </div>
 
       <AppKeysPanel auth={auth} />
+      <WebhooksPanel token={auth.token} />
       {isOwner && <NetworkPanel token={auth.token} />}
 
       {pairing && (

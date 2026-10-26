@@ -159,6 +159,15 @@ impl AssetStore {
         out
     }
 
+    /// What a LoRA file in the LoRA folder says about itself (from its header): the
+    /// model it was trained for and its trigger word, when it recorded them.
+    pub fn lora_info(&self, file: &str) -> Option<LoraInfo> {
+        if file.contains(['/', '\\']) || file.contains("..") || !file.to_ascii_lowercase().ends_with(".safetensors") {
+            return None;
+        }
+        lora_info_at(&self.loras_dir().join(file))
+    }
+
     /// Download the pack's missing files in the background.
     pub fn install(self: &Arc<Self>, pack: &Pack) -> anyhow::Result<()> {
         let missing: Vec<(ModelFile, PathBuf)> = pack
@@ -470,5 +479,93 @@ mod tests {
         assert!(y.contains("base_path: \"C:/Users/Dan/AppData/Local/Outpost/models/comfyui\""));
         assert!(y.contains("    loras: loras\n"));
         assert!(y.contains("is_default: true"));
+    }
+}
+
+/// What a LoRA file says about itself.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct LoraInfo {
+    /// Made for Z-Image (so the Characters workflow can use it).
+    pub z_image: bool,
+    /// The base model it names, e.g. `zimage` or `z_image`.
+    pub base: Option<String>,
+    /// Its trigger word, when the trainer recorded one (ai-toolkit does).
+    pub trigger: Option<String>,
+    /// The name it was saved under by its trainer.
+    pub trained_as: Option<String>,
+}
+
+/// Read a `.safetensors` header: an 8-byte length, then JSON naming every tensor, with
+/// the trainer's notes under `__metadata__`.
+pub fn lora_info_at(path: &Path) -> Option<LoraInfo> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut len = [0u8; 8];
+    f.read_exact(&mut len).ok()?;
+    let len = u64::from_le_bytes(len);
+    if len == 0 || len > 50 * 1024 * 1024 {
+        return None;
+    }
+    let mut header = vec![0u8; len as usize];
+    f.read_exact(&mut header).ok()?;
+    let header: serde_json::Value = serde_json::from_slice(&header).ok()?;
+    Some(read_lora_header(&header))
+}
+
+fn read_lora_header(header: &serde_json::Value) -> LoraInfo {
+    let meta = header.get("__metadata__");
+    let text = |k: &str| meta.and_then(|m| m.get(k)).and_then(|v| v.as_str()).map(str::to_string);
+    let base = text("ss_base_model_version").or_else(|| text("modelspec.architecture"));
+    // Z-Image's transformer: `layers.N.attention...` with `adaLN_modulation`/`feed_forward`.
+    let z_keys = header.as_object().is_some_and(|o| {
+        o.keys().any(|k| k.contains("layers.0.attention.to_") || k.contains("layers.0.attention.qkv"))
+            && o.keys().any(|k| k.contains("feed_forward.w"))
+    });
+    let z_named = base.as_deref().is_some_and(|b| {
+        let b = b.to_ascii_lowercase().replace(['_', '-', ' '], "");
+        b.contains("zimage")
+    });
+    // ai-toolkit and kohya: {"1_zk4t": {"zk4t": 1}}; the folder name after the repeat count.
+    let trigger = text("trigger_word")
+        .or_else(|| text("modelspec.trigger_phrase"))
+        .or_else(|| {
+            let freq: serde_json::Value = serde_json::from_str(&text("ss_tag_frequency")?).ok()?;
+            let folder = freq.as_object()?.keys().next()?.clone();
+            let word = folder.split_once('_').map(|(n, w)| if n.chars().all(|c| c.is_ascii_digit()) { w } else { folder.as_str() }).unwrap_or(&folder);
+            Some(word.to_string())
+        })
+        .filter(|t| !t.trim().is_empty());
+    LoraInfo {
+        z_image: z_named || z_keys,
+        base,
+        trigger,
+        trained_as: text("ss_output_name").or_else(|| text("name")),
+    }
+}
+
+#[cfg(test)]
+mod lora_info_tests {
+    use super::*;
+
+    #[test]
+    fn lora_headers_tell_their_trigger_and_model() {
+        let ai_toolkit = serde_json::json!({
+            "__metadata__": {"ss_base_model_version": "zimage", "ss_tag_frequency": "{\"1_zk4t\": {\"zk4t\": 1}}", "name": "lora"},
+            "diffusion_model.layers.0.attention.to_k.lora_A.weight": {},
+            "diffusion_model.layers.0.feed_forward.w1.lora_A.weight": {}
+        });
+        let i = read_lora_header(&ai_toolkit);
+        assert!(i.z_image);
+        assert_eq!(i.trigger.as_deref(), Some("zk4t"));
+        let kohya = serde_json::json!({
+            "__metadata__": {"ss_base_model_version": "z_image", "ss_output_name": "char_zzz_kat_zimage"},
+            "diffusion_model.layers.0.attention.to_k.lora_A.weight": {}
+        });
+        let i = read_lora_header(&kohya);
+        assert!(i.z_image);
+        assert_eq!(i.trigger, None);
+        assert_eq!(i.trained_as.as_deref(), Some("char_zzz_kat_zimage"));
+        let qwen = serde_json::json!({"transformer_blocks.0.attn.add_k_proj.alpha": {}});
+        assert!(!read_lora_header(&qwen).z_image);
     }
 }

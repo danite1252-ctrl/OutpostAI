@@ -23,6 +23,32 @@ struct Args {
     #[arg(long, env = "OUTPOST_OLLAMA_URL", default_value = DEFAULT_OLLAMA_URL)]
     ollama_url: String,
 
+    /// Test run: make a dataset for the owner from this folder of pictures, caption
+    /// it, queue its training, then serve as usual.
+    #[arg(long, value_name = "FOLDER")]
+    queue_training: Option<PathBuf>,
+
+    /// The test character's name (with --queue-training).
+    #[arg(long, default_value = "Character")]
+    train_name: String,
+
+    /// Its trigger word (with --queue-training); made from the name if left out.
+    #[arg(long)]
+    train_trigger: Option<String>,
+
+    /// Training steps (with --queue-training).
+    #[arg(long, default_value_t = 2000)]
+    train_steps: u32,
+
+    /// Act as a local MCP server for apps like Claude Desktop: read MCP messages on
+    /// stdin and pass them to the running Outpost (needs --key or OUTPOST_KEY).
+    #[arg(long)]
+    mcp_stdio: bool,
+
+    /// An Outpost app key, for --mcp-stdio.
+    #[arg(long, env = "OUTPOST_KEY", hide_env_values = true)]
+    key: Option<String>,
+
     /// Print the OpenAPI spec as JSON and exit.
     #[arg(long)]
     print_openapi: bool,
@@ -34,6 +60,15 @@ async fn main() -> anyhow::Result<()> {
     if args.print_openapi {
         println!("{}", outpost_gateway::openapi::spec_json());
         return Ok(());
+    }
+
+    if args.mcp_stdio {
+        // stdout carries MCP messages only: no logging here.
+        let key = args
+            .key
+            .ok_or_else(|| anyhow::anyhow!("--mcp-stdio needs an app key: --key op_... or OUTPOST_KEY"))?;
+        let port = args.bind.map(|b| b.port()).unwrap_or(outpost_gateway::config::DEFAULT_PORT);
+        return outpost_gateway::mcp::stdio_bridge(format!("http://127.0.0.1:{port}/mcp"), key).await;
     }
 
     tracing_subscriber::fmt()
@@ -63,5 +98,14 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    if let Some(folder) = args.queue_training {
+        tokio::spawn(outpost_gateway::train::queue_from_folder(
+            state.clone(),
+            folder,
+            args.train_name,
+            args.train_trigger,
+            args.train_steps,
+        ));
+    }
     outpost_gateway::serve_state(state).await
 }

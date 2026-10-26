@@ -141,6 +141,37 @@ pub async fn delete(pool: &SqlitePool, account_id: &str, id: &str) -> CoreResult
     Ok(())
 }
 
+/// Note which message taught an automatic memory. If that message was deleted while
+/// the memory was being learned, the memory goes too. Returns whether it was kept.
+pub async fn link_message(pool: &SqlitePool, memory_id: &str, message_id: &str) -> CoreResult<bool> {
+    sqlx::query("UPDATE memories SET message_id = ? WHERE id = ?")
+        .bind(message_id)
+        .bind(memory_id)
+        .execute(pool)
+        .await?;
+    let gone = sqlx::query("DELETE FROM memories WHERE id = ? AND NOT EXISTS (SELECT 1 FROM messages WHERE id = ?)")
+        .bind(memory_id)
+        .bind(message_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    Ok(gone == 0)
+}
+
+/// Forget what was learned from these messages. Returns how many memories went.
+pub async fn forget_messages(pool: &SqlitePool, account_id: &str, message_ids: &[String]) -> CoreResult<u64> {
+    let mut n = 0;
+    for id in message_ids {
+        n += sqlx::query("DELETE FROM memories WHERE account_id = ? AND source = 'auto' AND message_id = ?")
+            .bind(account_id)
+            .bind(id)
+            .execute(pool)
+            .await?
+            .rows_affected();
+    }
+    Ok(n)
+}
+
 /// Forget what was learned in a chat (before the chat is deleted). Returns how many.
 pub async fn forget_chat(pool: &SqlitePool, account_id: &str, chat_id: &str) -> CoreResult<u64> {
     Ok(
@@ -347,6 +378,47 @@ fn from_blob(b: &[u8]) -> Option<Vec<f32>> {
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect()
     })
+}
+
+#[cfg(test)]
+mod message_tests {
+    use super::*;
+    use crate::accounts::{self, NewAccount, Role};
+    use crate::db::open_in_memory;
+
+    #[tokio::test]
+    async fn deleting_a_message_forgets_what_it_taught() {
+        let pool = open_in_memory().await.unwrap();
+        let dan = accounts::create(
+            &pool,
+            NewAccount {
+                name: "Dan".into(),
+                role: Role::Member,
+                secret: Some("4821".into()),
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        let chat = crate::chats::create(&pool, &dan, None, None).await.unwrap();
+        let said = crate::chats::add_message(&pool, &chat.id, "user", "I keep bees", None, None).await.unwrap();
+        crate::chats::add_message(&pool, &chat.id, "assistant", "Lovely!", None, None).await.unwrap();
+        let m = add_auto(&pool, &dan, None, Some(&chat.id), "The user keeps bees", None).await.unwrap();
+        assert!(link_message(&pool, &m.id, &said.id).await.unwrap());
+        add(&pool, &dan, None, "Call me Dan").await.unwrap();
+
+        let removed = crate::chats::remove_message(&pool, &dan, &chat.id, &said.id).await.unwrap();
+        assert_eq!(removed.len(), 2, "the reply goes with it");
+        assert_eq!(forget_messages(&pool, &dan, &removed).await.unwrap(), 1);
+        let left = list(&pool, &dan).await.unwrap();
+        assert_eq!(left.len(), 1, "manual memories stay");
+        assert!(crate::chats::messages(&pool, &chat.id).await.unwrap().is_empty());
+
+        // Learned from a message deleted meanwhile: not kept.
+        let m = add_auto(&pool, &dan, None, Some(&chat.id), "The user likes honey", None).await.unwrap();
+        assert!(!link_message(&pool, &m.id, &said.id).await.unwrap());
+        assert_eq!(list(&pool, &dan).await.unwrap().len(), 1);
+    }
 }
 
 #[cfg(test)]

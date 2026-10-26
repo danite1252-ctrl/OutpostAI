@@ -18,6 +18,9 @@ pub mod personas;
 pub mod secret;
 pub mod sessions;
 pub mod settings;
+pub mod training;
+pub mod trigger;
+pub mod webhooks;
 
 pub use error::{CoreError, CoreResult};
 

@@ -11,6 +11,8 @@ pub mod network;
 pub mod openai;
 pub mod pairing;
 pub mod setup;
+pub mod training;
+pub mod webhooks;
 
 use outpost_core::accounts::Account;
 use outpost_core::auth::SignIn;

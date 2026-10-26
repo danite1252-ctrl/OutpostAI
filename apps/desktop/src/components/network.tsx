@@ -36,6 +36,27 @@ export function NetworkPanel({ token }: { token: string }) {
     }
   }
 
+  async function toggleTailscale() {
+    if (!status) return;
+    const turnOn = !status.tailscale_access;
+    if (
+      turnOn &&
+      !window.confirm(
+        "Your devices on Tailscale (your phone away from home, Hermes on another machine) will be able to reach Outpost with an app key or a paired phone. Nothing is opened to the internet. Continue?",
+      )
+    )
+      return;
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus(await api.setNetwork(token, status.lan_access, turnOn));
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const open = status?.listening_on ? !status.listening_on.startsWith("127.") : false;
 
   return (
@@ -63,10 +84,39 @@ export function NetworkPanel({ token }: { token: string }) {
           {status?.lan_access ? "Turn off" : "Turn on"}
         </Button>
       </div>
+      <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-line bg-surface p-5">
+        <span className="flex flex-1 flex-col gap-1">
+          <span className="flex items-center gap-2 font-medium">
+            <StatusDot on={!!status?.tailscale_running} />
+            Allow my Tailscale devices
+          </span>
+          <span className="text-xs text-muted">
+            {!status
+              ? "Checking…"
+              : status.tailscale
+                ? `This PC on Tailscale: ${status.tailscale.dns_name ?? status.tailscale.ip}${
+                    status.tailscale.dns_name ? ` (${status.tailscale.ip})` : ""
+                  }. Your phone uses it away from home.`
+                : "Tailscale isn't running on this PC. Install it and sign in, then reopen this page."}
+          </span>
+        </span>
+        <Button
+          variant={status?.tailscale_access ? "ghost" : "primary"}
+          disabled={!status || busy || (!status.tailscale && !status.tailscale_access)}
+          onClick={() => void toggleTailscale()}
+        >
+          {status?.tailscale_access ? "Turn off" : "Turn on"}
+        </Button>
+      </div>
+      {status && status.phone_hosts.length > 0 && (
+        <p className="text-xs text-muted">
+          Phones try, in order: <span className="font-mono">{status.phone_hosts.join(" → ")}</span>
+        </p>
+      )}
       {status?.restart_required && (
         <p className="rounded-2xl border border-ember bg-surface p-4 text-sm" role="status">
-          Saved. Close and reopen Outpost to {status.lan_access ? "start" : "stop"} listening on the network.
-          {status.lan_access &&
+          Saved. Close and reopen Outpost to apply the change.
+          {(status.lan_access || status.tailscale_access) &&
             " Windows may ask whether to allow Outpost through the firewall (for both ports): choose Private networks."}
         </p>
       )}

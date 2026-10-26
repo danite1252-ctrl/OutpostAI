@@ -234,6 +234,14 @@ export interface NetworkStatus {
   fingerprint: string | null;
   /** Three words from the certificate; a phone shows the same ones. */
   words: string[];
+  /** The saved "Allow my Tailscale devices" setting. */
+  tailscale_access: boolean;
+  /** This PC on Tailscale, when it's connected. */
+  tailscale: { ip: string; dns_name: string | null } | null;
+  /** Outpost answers on Tailscale right now. */
+  tailscale_running: boolean;
+  /** Addresses phones can use, best first. */
+  phone_hosts: string[];
 }
 
 export interface PairingView {
@@ -347,6 +355,13 @@ export const api = {
   updateChat: (token: string, id: string, body: { title?: string; persona_id?: string; model?: string }) =>
     request<Chat>("PATCH", `/api/chats/${id}`, { token, body }),
   deleteChat: (token: string, id: string) => request<void>("DELETE", `/api/chats/${id}`, { token }),
+  /** Deletes a message (yours take their reply too) and what was learned from it. */
+  deleteMessage: (token: string, chatId: string, messageId: string) =>
+    request<{ removed: string[]; forgotten: number }>(
+      "DELETE",
+      `/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`,
+      { token },
+    ),
   memory: (token: string) => request<Memory[]>("GET", "/api/memory", { token }),
   addMemory: (token: string, text: string, personaId?: string) =>
     request<Memory>("POST", "/api/memory", { token, body: { text, persona_id: personaId ?? null } }),
@@ -361,8 +376,11 @@ export const api = {
     request<SignInResponse>("POST", "/api/keys", { token, body: { label, account_id: accountId ?? null } }),
   revokeKey: (token: string, id: string) => request<void>("DELETE", `/api/keys/${id}`, { token }),
   network: (token: string) => request<NetworkStatus>("GET", "/api/settings/network", { token }),
-  setNetwork: (token: string, lanAccess: boolean) =>
-    request<NetworkStatus>("PUT", "/api/settings/network", { token, body: { lan_access: lanAccess } }),
+  setNetwork: (token: string, lanAccess: boolean, tailscaleAccess?: boolean) =>
+    request<NetworkStatus>("PUT", "/api/settings/network", {
+      token,
+      body: { lan_access: lanAccess, tailscale_access: tailscaleAccess ?? null },
+    }),
   createPairing: (token: string) => request<PairingView>("POST", "/api/pairing", { token }),
   pairingStatus: (token: string, id: string) =>
     request<PairingStatus>("GET", `/api/pairing/${encodeURIComponent(id)}`, { token }),
@@ -592,7 +610,8 @@ export const createApi = {
   packs: (token: string) => request<Pack[]>("GET", "/api/packs", { token }),
   installPack: (token: string, id: string) =>
     request<void>("POST", `/api/packs/${encodeURIComponent(id)}/install`, { token }),
-  loras: (token: string) => request<{ loras: string[]; folder: string }>("GET", "/api/loras", { token }),
+  loras: (token: string) =>
+    request<{ loras: string[]; folder: string; characters: Character[] }>("GET", "/api/loras", { token }),
   jobs: (token: string) => request<Job[]>("GET", "/api/jobs?limit=30", { token }),
   createJob: (token: string, pack: string, inputs: Record<string, unknown>) =>
     request<Job>("POST", "/api/jobs", { token, body: { pack, inputs } }),
@@ -623,4 +642,232 @@ export async function authedBlob(token: string, path: string): Promise<Blob> {
 /** Any authenticated file (attachment or gallery item) as an object URL. */
 export async function authedObjectUrl(token: string, path: string): Promise<string> {
   return URL.createObjectURL(await authedBlob(token, path));
+}
+
+// ---------------------------------------------------------------- Training Studio
+
+export interface TriggerCheck {
+  word: string;
+  ok: boolean;
+  problem: string | null;
+  suggestion: string | null;
+}
+
+export interface TrainingStatus {
+  toolkit_dir: string;
+  /** Why training can't run yet; null when ai-toolkit is ready. */
+  toolkit_problem: string | null;
+  caption_models: string[];
+  character_pack_ready: boolean;
+  vram_needed_gb: number;
+  vram_gb: number;
+}
+
+export interface Dataset {
+  id: string;
+  account_id: string;
+  name: string;
+  trigger_word: string;
+  created_at: number;
+  updated_at: number;
+  image_count: number;
+  captioned_count: number;
+}
+
+export interface DatasetImage {
+  id: string;
+  dataset_id: string;
+  mime: string;
+  bytes: number;
+  caption: string;
+  created_at: number;
+}
+
+export interface CaptionRun {
+  running: boolean;
+  done: number;
+  total: number;
+  failed: number;
+  model: string;
+  error: string | null;
+}
+
+export interface Checkpoint {
+  step: number;
+  /** Empty for step 0: the pictures drawn before training. */
+  file: string;
+  samples: string[];
+}
+
+export interface TrainingView {
+  id: string;
+  account_id: string;
+  dataset_id: string;
+  job_id: string;
+  trigger_word: string;
+  steps: number;
+  image_count: number;
+  created_at: number;
+  status: JobStatus;
+  error: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+  position: number | null;
+  progress: Job["progress"];
+  eta_secs: number | null;
+  checkpoints: Checkpoint[];
+  chosen_step: number | null;
+  /** The test prompts, in the order of each checkpoint's pictures. */
+  sample_prompts: string[];
+}
+
+export interface DatasetView extends Dataset {
+  trigger_check: TriggerCheck;
+  images: DatasetImage[];
+  captioning: CaptionRun | null;
+  /** Test prompts made from the captions. */
+  suggested_prompts: string[];
+  trainings: TrainingView[];
+}
+
+export interface Character {
+  id: string;
+  account_id: string;
+  name: string;
+  trigger_word: string;
+  lora_file: string;
+  training_id: string | null;
+  step: number | null;
+  created_at: number;
+  /** What it is ("woman", "dog") and how it's drawn, from its captions. */
+  subject: string | null;
+  style: string | null;
+}
+
+/** A file in the LoRA folder and what it says about itself. */
+export interface LoraFile {
+  file: string;
+  /** Made for Z-Image, so the Characters workflow can use it. */
+  z_image: boolean;
+  base: string | null;
+  /** Its trigger word, when its trainer recorded it. */
+  trigger: string | null;
+  trained_as: string | null;
+  /** The character already using it. */
+  character: string | null;
+}
+
+const ds = (id: string) => `/api/datasets/${encodeURIComponent(id)}`;
+
+export const trainApi = {
+  status: (token: string) => request<TrainingStatus>("GET", "/api/training", { token }),
+  setToolkitDir: (token: string, dir: string) =>
+    request<TrainingStatus>("PUT", "/api/training", { token, body: { toolkit_dir: dir } }),
+  checkTrigger: (token: string, word: string) =>
+    request<TriggerCheck>("GET", `/api/training/trigger-check?word=${encodeURIComponent(word)}`, { token }),
+  datasets: (token: string) => request<Dataset[]>("GET", "/api/datasets", { token }),
+  createDataset: (token: string, name: string, trigger?: string) =>
+    request<DatasetView>("POST", "/api/datasets", { token, body: { name, trigger_word: trigger ?? null } }),
+  dataset: (token: string, id: string) => request<DatasetView>("GET", ds(id), { token }),
+  updateDataset: (token: string, id: string, body: { name?: string; trigger_word?: string }) =>
+    request<DatasetView>("PATCH", ds(id), { token, body }),
+  deleteDataset: (token: string, id: string) => request<void>("DELETE", ds(id), { token }),
+  addImage: (token: string, id: string, image: string, caption = "") =>
+    request<DatasetImage>("POST", `${ds(id)}/images`, { token, body: { image, caption } }),
+  importFolder: (token: string, id: string, folder: string) =>
+    request<{ added: number; skipped: string[] }>("POST", `${ds(id)}/import`, { token, body: { folder } }),
+  setCaption: (token: string, id: string, imageId: string, caption: string) =>
+    request<DatasetImage>("PATCH", `${ds(id)}/images/${encodeURIComponent(imageId)}`, { token, body: { caption } }),
+  deleteImage: (token: string, id: string, imageId: string) =>
+    request<void>("DELETE", `${ds(id)}/images/${encodeURIComponent(imageId)}`, { token }),
+  caption: (token: string, id: string, body: { model?: string; overwrite?: boolean }) =>
+    request<CaptionRun>("POST", `${ds(id)}/caption`, { token, body }),
+  train: (token: string, id: string, steps: number, samplePrompts?: string[]) =>
+    request<TrainingView>("POST", `${ds(id)}/train`, { token, body: { steps, sample_prompts: samplePrompts ?? null } }),
+  training: (token: string, id: string) => request<TrainingView>("GET", `/api/trainings/${encodeURIComponent(id)}`, { token }),
+  useCheckpoint: (token: string, id: string, step: number, name?: string) =>
+    request<Character>("POST", `/api/trainings/${encodeURIComponent(id)}/use`, { token, body: { step, name: name ?? null } }),
+  characters: (token: string) => request<Character[]>("GET", "/api/characters", { token }),
+  loraFiles: (token: string) => request<LoraFile[]>("GET", "/api/characters/lora-files", { token }),
+  addCharacter: (
+    token: string,
+    body: { lora_file: string; name: string; trigger_word: string; subject?: string; style?: string },
+  ) => request<Character>("POST", "/api/characters", { token, body }),
+  renameCharacter: (token: string, id: string, name: string) =>
+    request<Character>("PATCH", `/api/characters/${encodeURIComponent(id)}`, { token, body: { name } }),
+  deleteCharacter: (token: string, id: string) =>
+    request<void>("DELETE", `/api/characters/${encodeURIComponent(id)}`, { token }),
+  imagePath: (datasetId: string, imageId: string) => `${ds(datasetId)}/images/${encodeURIComponent(imageId)}`,
+  samplePath: (trainingId: string, file: string) =>
+    `/api/trainings/${encodeURIComponent(trainingId)}/samples/${encodeURIComponent(file)}`,
+};
+
+/** A chat reply that started a picture carries `[[outpost-job:<id>]]`, one per picture. */
+export const JOB_CARD = /\[\[outpost-job:([0-9a-f-]{36})\]\]/;
+
+/** The job ids in a chat reply, in order. */
+export function jobCards(content: string): string[] {
+  return [...content.matchAll(/\[\[outpost-job:([0-9a-f-]{36})\]\]/g)].map((m) => m[1]);
+}
+
+// ---------------------------------------------------------------- API, MCP and webhooks
+
+export interface Webhook {
+  id: string;
+  account_id: string;
+  url: string;
+  events: string[];
+  created_at: number;
+  last_at: number | null;
+  /** HTTP status of the last delivery; 0 when it couldn't connect. */
+  last_status: number | null;
+  last_error: string | null;
+}
+
+export const hooksApi = {
+  list: (token: string) => request<{ webhooks: Webhook[]; events: string[] }>("GET", "/api/webhooks", { token }),
+  create: (token: string, url: string, events: string[]) =>
+    request<{ webhook: Webhook; secret: string }>("POST", "/api/webhooks", { token, body: { url, events } }),
+  remove: (token: string, id: string) => request<void>("DELETE", `/api/webhooks/${encodeURIComponent(id)}`, { token }),
+  test: (token: string, id: string) =>
+    request<{ status: number; error: string | null }>("POST", `/api/webhooks/${encodeURIComponent(id)}/test`, { token }),
+};
+
+export interface McpTool {
+  name: string;
+  title?: string;
+  description: string;
+}
+
+export const integrationsApi = {
+  get: (token: string) => request<{ port: number; bridge_path: string | null }>("GET", "/api/integrations", { token }),
+  /** The OpenAPI document (no sign-in needed). */
+  openapi: () => request<OpenApiDoc>("GET", "/openapi.json"),
+  /** The MCP tools, asked over MCP itself. */
+  mcpTools: async (token: string) => {
+    const r = await request<{ result?: { tools: McpTool[] } }>("POST", "/mcp", {
+      token,
+      body: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+    });
+    return r.result?.tools ?? [];
+  },
+};
+
+/** The parts of an OpenAPI 3 document the API page shows. */
+export interface OpenApiDoc {
+  info: { title: string; version: string };
+  tags?: { name: string; description?: string }[];
+  paths: Record<
+    string,
+    Record<
+      string,
+      {
+        tags?: string[];
+        summary?: string;
+        description?: string;
+        parameters?: { name: string; in: string; required?: boolean; description?: string }[];
+        requestBody?: { content?: Record<string, { schema?: { $ref?: string } }> };
+      }
+    >
+  >;
 }

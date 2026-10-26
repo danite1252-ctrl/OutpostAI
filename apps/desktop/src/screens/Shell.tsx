@@ -9,11 +9,13 @@ import Personas from "./Personas";
 import Create from "./Create";
 import Gallery from "./Gallery";
 import Connections from "./Connections";
+import Train from "./Train";
+import Api from "./Api";
 import { DownloadsButton } from "../components/downloads";
 import { QueueButton } from "../components/queue";
 import type { CreateRequest } from "../components/gallery";
 
-type Section = "chat" | "create" | "gallery" | "train" | "models" | "personas" | "connections" | "settings";
+type Section = "chat" | "create" | "gallery" | "train" | "models" | "personas" | "connections" | "api" | "settings";
 
 const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "chat", label: "Chat", icon: icons.chat },
@@ -23,14 +25,9 @@ const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "models", label: "Models", icon: icons.models },
   { id: "personas", label: "Personas", icon: icons.personas },
   { id: "connections", label: "Connections", icon: icons.connections },
+  { id: "api", label: "API", icon: icons.api },
   { id: "settings", label: "Settings", icon: icons.settings },
 ];
-
-type Built = "chat" | "personas" | "models" | "settings" | "create" | "gallery" | "connections";
-
-const COMING: Record<Exclude<Section, Built>, { phase: number; text: string }> = {
-  train: { phase: 4, text: "Training Studio: datasets, vision captions and Z-Image LoRAs." },
-};
 
 export default function Shell({
   auth,
@@ -162,21 +159,10 @@ export default function Shell({
             />
           )}
           {section === "connections" && <Connections auth={auth} />}
-          {section === "train" && (
-            <ComingSoon label={NAV.find((n) => n.id === section)!.label} {...COMING[section]} />
-          )}
+          {section === "api" && <Api auth={auth} onOpenConnections={() => setSection("connections")} />}
+          {section === "train" && <Train auth={auth} onUnauthorized={onSignedOutElsewhere} />}
         </main>
       </div>
     </div>
-  );
-}
-
-function ComingSoon({ label, phase, text }: { label: string; phase: number; text: string }) {
-  return (
-    <section className="mx-auto mt-16 flex max-w-lg flex-col items-center gap-3 text-center">
-      <span className="rounded-full bg-raised px-3 py-1 font-mono text-xs text-amber">Phase {phase}</span>
-      <h1 className="text-2xl font-semibold">{label}</h1>
-      <p className="text-muted">{text}</p>
-    </section>
   );
 }

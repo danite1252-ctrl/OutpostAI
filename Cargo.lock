@@ -2862,6 +2862,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "if-addrs",
  "mdns-sd",
  "outpost-core",
  "outpost-engines",
@@ -2881,6 +2882,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "utoipa",
+ "uuid",
 ]
 
 [[package]]

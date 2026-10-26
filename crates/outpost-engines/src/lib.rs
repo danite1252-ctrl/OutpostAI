@@ -19,8 +19,10 @@ mod ollama;
 pub mod packs;
 mod process;
 pub mod rate;
+pub mod trainer;
 pub mod types;
 pub mod versions;
 
 pub use manager::{EngineError, EngineManager};
+pub use process::Log;
 pub use types::{EngineId, EngineInfo, EngineState, EnginesStatus, Progress};

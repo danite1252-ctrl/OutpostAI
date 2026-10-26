@@ -1,0 +1,20 @@
+# Common English words an image model already knows well, written for Outpost (MIT).
+# A trigger word that is, starts with or ends with one of these fights what the
+# model already means by it. Three letters or more; one per line.
+the and for are but not you all any can her was one our out day get has him his how man new now old see two way who boy did its let put say she too use
+man men woman women girl girls boy boys lady guy dude kid kids child baby person people face head hair eye eyes nose lip lips ear hand hands arm arms leg legs foot feet body skin
+cat cats dog dogs pup puppy kitten kitty fox wolf bear lion tiger bird duck cow pig horse rat mouse bat bee ant owl fish frog snake deer goat sheep rabbit bunny monkey ape panda koala seal whale shark crab
+red blue green yellow pink purple orange black white grey gray brown gold silver tan teal cyan navy beige dark light bright pale
+sun moon star sky sea ocean lake river rain snow ice fire wind cloud tree trees leaf flower rose lily grass rock stone sand hill mountain beach forest garden park field desert island cave
+car bus van truck bike boat ship train plane road street city town house home room door window wall roof bed chair table desk lamp book cup mug box bag hat cap coat shirt dress skirt shoe shoes boot boots sock jean jeans suit tie ring belt glove scarf
+king queen prince princess knight god angel devil demon ghost witch wizard elf fairy robot alien zombie vampire hero pirate ninja cowboy soldier doctor nurse chef cop
+love kiss smile laugh cry sad happy angry cute pretty sexy hot cool nice good bad big small tall short fat thin young old new long wide round soft hard wet dry warm cold
+art photo picture image painting drawing sketch anime cartoon comic manga render style portrait selfie model studio film movie
+one two three four five six seven eight nine ten zero first last top bottom left right front back side end start
+mom mum dad mother father sister brother son daughter wife husband friend family aunt uncle granny nana papa
+cake pie bread milk tea coffee wine beer apple banana cherry lemon peach berry candy sugar honey salt meat egg rice
+gun sword knife bow axe shield spear bomb war army
+eat run walk sit stand jump fly swim sleep sing dance play read write draw paint look watch hold sit lie
+year time week month night morning evening noon dawn dusk summer winter spring autumn fall
+word name word line dot ball box art top pop rap jazz rock metal punk
+kat cat katz cats kit kitty

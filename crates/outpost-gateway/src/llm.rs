@@ -33,6 +33,14 @@ pub async fn resolve_model(
     chat_model: Option<&str>,
     persona: Option<&Persona>,
 ) -> Result<Resolved, ApiError> {
+    // A training fills the graphics card; a chat model loading now could crash it.
+    if state.queue.training() {
+        return Err(ApiError::new(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "gpu_training",
+            "The graphics card is training a character, so chat is paused until it's done. The queue shows how long is left.",
+        ));
+    }
     let wanted = chat_model.or_else(|| persona.and_then(|p| p.model.as_deref()));
     let installed = state.models.installed().await.map_err(|_| {
         ApiError::new(
@@ -113,6 +121,18 @@ pub async fn system_prompt(
 }
 
 /// Body for Ollama's native `/api/chat`, streaming.
+/// A chat message that started a picture (`/draw`) carries a card marker for the
+/// apps, `[[outpost-job:<id>]]`; the model sees the words only.
+pub fn without_job_cards(content: &str) -> String {
+    content
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("[[outpost-job:"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
 pub fn ollama_chat_body(
     model: &str,
     system: &str,
@@ -128,7 +148,7 @@ pub fn ollama_chat_body(
     let start = history.len().saturating_sub(HISTORY);
     for m in &history[start..] {
         if m.role == "user" || m.role == "assistant" {
-            let mut msg = json!({ "role": m.role, "content": m.content });
+            let mut msg = json!({ "role": m.role, "content": without_job_cards(&m.content) });
             if let Some(imgs) = images.get(&m.id).filter(|i| !i.is_empty()) {
                 msg["images"] = json!(imgs);
             }

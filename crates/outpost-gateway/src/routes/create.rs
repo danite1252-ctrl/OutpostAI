@@ -124,15 +124,24 @@ pub struct LoraList {
     pub loras: Vec<String>,
     /// The folder to put new ones in.
     pub folder: String,
+    /// My trained characters, by the LoRA file each uses.
+    pub characters: Vec<outpost_core::training::Character>,
 }
 
 /// LoRA files in Outpost's LoRA folder.
 #[utoipa::path(get, path = "/api/loras", tag = "create", security(("bearer" = [])),
     responses((status = 200, description = "LoRAs", body = LoraList)))]
-pub async fn list_loras(State(state): State<AppState>, _auth: Auth) -> Json<LoraList> {
+pub async fn list_loras(State(state): State<AppState>, auth: Auth) -> Json<LoraList> {
+    let mut characters = outpost_core::training::characters(&state.pool, Some(auth.account.id.as_str()))
+        .await
+        .unwrap_or_default();
+    for c in &mut characters {
+        let _ = outpost_core::training::fill_subject(&state.pool, c).await;
+    }
     Json(LoraList {
         loras: state.assets.loras(),
         folder: state.assets.loras_dir().to_string_lossy().to_string(),
+        characters,
     })
 }
 

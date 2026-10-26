@@ -178,6 +178,14 @@ commercial use.
 - **Phones confirm risky actions** (deleting models, making app keys, changing accounts) by
   sending the PIN again in an `X-Outpost-Pin` header.
 - **Queue order.** Jobs from the desktop go first, then phones, then app keys.
+- **Away from home (Tailscale, phase 3c).** "Allow my Tailscale devices" makes both ports
+  answer on this PC's Tailscale address (100.x, and its MagicDNS name), even with home
+  network access off. Pairing QR codes list the home address first, then Tailscale; the
+  phone tries them in order and remembers the one that answered, and already-paired
+  phones learn new addresses from `/api/connection`. Nothing is opened to the internet.
+- **No Cloudflare tunnel.** A tunnel would swap in Cloudflare's certificate (breaking the
+  pinning that proves it's your PC) and make outside requests look local. Tailscale covers
+  away-from-home use without either problem.
 - **App keys can't manage Outpost.** Making app keys, changing accounts, deleting models
   and installing engines or workflows need the desktop app or a phone (with its PIN); an
   app key gets 403, since it may travel over plain HTTP.
@@ -188,11 +196,86 @@ commercial use.
   make remote requests look local. Phase 3c's Tailscale and Cloudflare support is designed
   around this.
 
-## Training spike
+## Phone app (phase 3b)
 
-Before Training Studio (phase 4) is built, `docs/spike-ai-toolkit.md` checks that
-ai-toolkit trains Z-Image Turbo and Wan 2.2 on a 16 GB card. Its scripts live in
-`scripts/spike/` (install, start, and a captioner that uses Outpost's vision model).
+`apps/mobile` is the Android app (Expo SDK 54, React Native). It pairs with the QR code
+or by picking the Outpost from the list found on the Wi-Fi, opens with the phone's own
+fingerprint or face, and has Chat (streamed replies, photos), Create (every task and
+workflow), Gallery (mine and shared, videos, the owner's view of others) and the Queue.
+Pictures from the Outpost gallery can be attached in Chat and used in Create, on the phone
+and the desktop.
+
+It talks only to the encrypted port, through its own small native module
+(`apps/mobile/modules/outpost-net`, Kotlin): OkHttp with a trust manager that accepts
+exactly the certificate pinned at pairing, plus Android's network service discovery for
+`_outpost._tcp`. The pairing token lives in the Android Keystore (expo-secure-store).
+
+Build a test APK (Android Studio's SDK and Java are used):
+
+```powershell
+cd C:\dev\Outpost\apps\mobile
+npm install
+npx expo prebuild --platform android
+cd android; .\gradlew.bat assembleDebug
+```
+
+Then `adb install -r app\build\outputs\apk\debug\app-debug.apk`, or copy the APK to
+the phone.
+
+## Train (phase 4)
+
+Training Studio teaches Outpost a character from 15 to 30 pictures, as a LoRA for
+Z-Image Turbo. It uses [ai-toolkit](https://github.com/ostris/ai-toolkit) (Ostris, MIT),
+installed separately: by default in `C:\dev\ai-toolkit` (set another folder in Train).
+`scripts/spike/install-ai-toolkit.ps1` installs it.
+
+1. **New character**, then add pictures (pick, drop, or copy a folder on this PC).
+2. **Trigger word**: the made-up word that calls the character up. Outpost warns about
+   real words and names (`kat`, `danni`, `rexdog`) and suggests a safer one (`zk4t`).
+3. **Captions**: a vision model from Models (the eye badge) writes one per picture;
+   edit any. They describe only what changes between pictures (clothes, place, pose,
+   light), never the face, hair, skin or build: whatever a caption names, the model ties
+   to those words instead of to the trigger word. The trigger is put in front when training.
+4. **Start training**: it waits in the same GPU queue as pictures (shown in the Queue
+   button) and takes 2 to 3 hours for 2000 steps on a 16 GB card. ComfyUI is stopped and
+   chat pauses while it runs, so nothing runs out of memory.
+5. Every 250 steps it saves a checkpoint and draws the same test scenes. The test
+   prompts are made from the captions (a dog stays a dog, a cartoon stays a cartoon)
+   and can be edited before starting. Compare
+   them and press **Use this one**: the LoRA is copied into the LoRA folder as
+   `<trigger>.safetensors` and the character shows by name in Create › Characters.
+6. **In chat**: `/draw <anything>`, or "draw Kat at the beach" naming a character. The
+   reply is a card that fills in with the picture (desktop and phone). Several at once:
+   `draw 4 pictures of Kat at the beach`, or scenes split by `;` or new lines (up to 8).
+
+A Z-Image LoRA trained elsewhere becomes a character too: copy it into the LoRA folder,
+then Train › Characters › **Add from a LoRA file…** (Outpost fills in the trigger word
+when the file recorded it, as ai-toolkit's do).
+
+Runs live in `<data>/training/` (datasets, and `runs/<id>/` with `config.json`,
+`train.log`, checkpoints and samples). For an unattended test,
+`outpost-gateway --queue-training <folder> --train-name Kat --train-trigger zk4t` makes
+the dataset for the owner, captions it, queues the training and keeps serving.
+`docs/phase4-test.md` is the live test.
+
+The earlier spike (`docs/spike-ai-toolkit.md`, `scripts/spike/`) checked ai-toolkit on a
+16 GB card before this was built.
+
+## Other apps: API page, MCP and webhooks (phase 5a)
+
+- **API page** (desktop › API): where apps connect, setup for Hermes / OpenAI-style apps,
+  MCP setup for Claude Desktop, and every endpoint with a curl line.
+- **MCP server** at `/mcp` (Streamable HTTP, app key as bearer). Tools: `chat`,
+  `list_personas`, `draw` (characters by name, several pictures, returns the images),
+  `job_status`, `list_characters`, `recent_pictures`, `get_picture`, `remember`. For apps
+  that start local programs (Claude Desktop): `outpost-gateway --mcp-stdio` with
+  `OUTPOST_KEY` set bridges stdio to the running Outpost.
+- **Webhooks** (Connections › Webhooks): a signed JSON POST to your URL on
+  `job.finished`, `training.finished` and `character.created`. Check
+  `X-Outpost-Signature: sha256=<HMAC-SHA256 of the body with the secret>`; three tries,
+  last result shown. `scripts/webhooks/listen.ps1` is a test receiver.
+
+`docs/phase5a-test.md` is the live test.
 
 ## API
 
@@ -240,6 +323,7 @@ ai-toolkit trains Z-Image Turbo and Wan 2.2 on a 16 GB card. Its scripts live in
 | POST | `/api/pair/hello` | none, encrypted port | Phone step 1: check the code, list accounts |
 | POST | `/api/pair/complete` | none, encrypted port | Phone step 2: code + account + PIN → device token |
 | GET, DELETE | `/api/devices[/{id}]` | bearer | My paired phones (`?all=true` everyone's, owner) / unpair |
+| GET | `/api/connection` | bearer | Where the encrypted port answers now (home address, Tailscale), for phones |
 | GET | `/openapi.json` | none | The full spec |
 
 Security notes: PINs and passwords are hashed with Argon2id; tokens are random 256-bit

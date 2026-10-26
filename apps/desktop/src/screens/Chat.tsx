@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type Dra
 import {
   api,
   ApiError,
+  JOB_CARD,
+  jobCards,
   MAX_IMAGES,
   streamMessage,
   type Chat as ChatT,
@@ -11,7 +13,10 @@ import {
 } from "../api";
 import { AttachmentImage, prepareImage, type PendingImage } from "../components/images";
 import { Markdown } from "../components/markdown";
+import { JobCard } from "../components/jobcard";
+import { jobsChanged } from "../components/queue";
 import { ContextPanel } from "../components/context";
+import { GalleryPicker, mediaAsInput } from "../components/gallery";
 import { Avatar, Button, ErrorNote } from "../components/ui";
 
 const CONTEXT_KEY = "outpost.chat.context";
@@ -46,6 +51,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
   const [installed, setInstalled] = useState<InstalledModel[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showContext, setShowContext] = useState(loadShowContext);
+  const [fromGallery, setFromGallery] = useState(false);
   const filePicker = useRef<HTMLInputElement | null>(null);
   const abort = useRef<AbortController | null>(null);
   const bottom = useRef<HTMLDivElement | null>(null);
@@ -202,6 +208,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
           thinking: (t) => setDraft((d) => (d ? { ...d, thinking: d.thinking + t } : d)),
           token: (t) => setDraft((d) => (d ? { ...d, content: d.content + t } : d)),
           done: ({ message, error }) => {
+            if (JOB_CARD.test(message.content)) jobsChanged();
             if (here()) setMessages((m) => (m.some((x) => x.id === message.id) ? m : [...m, message]));
             if (error) setError(error);
           },
@@ -242,6 +249,21 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void send();
+    }
+  }
+
+  async function removeMessage(m: Message) {
+    if (!activeId) return;
+    const ask =
+      m.role === "user"
+        ? "Delete this message and the reply to it? Anything the persona learned from it is forgotten too."
+        : "Delete this reply?";
+    if (!window.confirm(ask)) return;
+    try {
+      const r = await api.deleteMessage(token, activeId, m.id);
+      setMessages((list) => list.filter((x) => !r.removed.includes(x.id)));
+    } catch (err) {
+      fail(err);
     }
   }
 
@@ -331,7 +353,13 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
               </p>
             )}
             {messages.map((m) => (
-              <Bubble key={m.id} token={token} message={m} persona={persona} />
+              <Bubble
+                key={m.id}
+                token={token}
+                message={m}
+                persona={persona}
+                onDelete={streamingId === activeId ? undefined : () => void removeMessage(m)}
+              />
             ))}
             {draft && streamingId === activeId && (
               <Bubble
@@ -380,7 +408,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKey}
               onPaste={onPaste}
-              placeholder={persona ? `Message ${persona.name}… (Enter to send, Shift+Enter for a new line)` : "Message…"}
+              placeholder={persona ? `Message ${persona.name}… (Enter to send, Shift+Enter for a new line, /draw for a picture)` : "Message… (/draw for a picture)"}
               className="w-full resize-none bg-transparent text-ink placeholder:text-muted/60 focus:outline-none"
             />
             <div className="flex items-center justify-end gap-2">
@@ -397,13 +425,21 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
               />
               <Button
                 variant="ghost"
-                className="mr-auto"
                 disabled={!!draft || images.length >= MAX_IMAGES}
                 onClick={() => filePicker.current?.click()}
                 title="Attach images (or paste / drop them)"
               >
                 Attach image
               </Button>
+              <Button
+                variant="ghost"
+                disabled={!!draft || images.length >= MAX_IMAGES}
+                onClick={() => setFromGallery(true)}
+                title="Attach one of your Outpost pictures"
+              >
+                From gallery
+              </Button>
+              <span className="flex-1" />
               {draft ? (
                 <Button variant="ghost" onClick={stop}>
                   Stop following
@@ -417,6 +453,23 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
           </div>
         </div>
       </section>
+
+      {fromGallery && (
+        <GalleryPicker
+          token={token}
+          onClose={() => setFromGallery(false)}
+          onPick={(m) => {
+            setFromGallery(false);
+            mediaAsInput(token, m).then(
+              (dataUrl) =>
+                setImages((cur) =>
+                  [...cur, { key: `gallery-${m.id}-${Date.now()}`, name: m.prompt ?? "Gallery picture", dataUrl }].slice(0, MAX_IMAGES),
+                ),
+              (err: unknown) => setError(err instanceof Error ? err.message : "That picture couldn't be attached."),
+            );
+          }}
+        />
+      )}
 
       {showContext && (
         <div className="hidden min-h-0 lg:flex">
@@ -432,21 +485,39 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
   );
 }
 
+/** Shows on hover (and keyboard focus) beside a message. */
+function DeleteButton({ onClick, label }: { onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="rounded-md px-1.5 py-0.5 text-xs text-muted opacity-0 group-hover:opacity-100 hover:text-danger focus:opacity-100"
+    >
+      Delete
+    </button>
+  );
+}
+
 function Bubble({
   token,
   message,
   persona,
   live = false,
+  onDelete,
 }: {
   token: string;
   message: Pick<Message, "role" | "content" | "thinking" | "attachments">;
   persona: Persona | null;
   live?: boolean;
+  /** Saved messages can be deleted. */
+  onDelete?: () => void;
 }) {
   const { role, content, thinking, attachments } = message;
   if (role === "user") {
     return (
-      <div className="flex max-w-[80%] flex-col items-end gap-2 self-end">
+      <div className="group flex max-w-[80%] flex-col items-end gap-2 self-end">
         {attachments.length > 0 && (
           <div className="flex flex-wrap justify-end gap-2">
             {attachments.map((a) => (
@@ -455,11 +526,12 @@ function Bubble({
           </div>
         )}
         {content && <div className="rounded-2xl rounded-br-md bg-raised px-4 py-3 whitespace-pre-wrap">{content}</div>}
+        {onDelete && <DeleteButton onClick={onDelete} label="Delete this message and its reply" />}
       </div>
     );
   }
   return (
-    <div className="flex gap-3">
+    <div className="group flex gap-3">
       <Avatar name={persona?.name ?? "AI"} color={persona?.avatar_color ?? "#FFB547"} size={32} />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         {thinking && (
@@ -469,7 +541,19 @@ function Bubble({
           </details>
         )}
         <div aria-live={live ? "polite" : undefined}>
-          <Markdown text={content} />
+          <Markdown text={content.replace(new RegExp(JOB_CARD.source, "g"), "").trim()} />
+          {jobCards(content).length > 0 && (
+            <div className="flex flex-wrap gap-3">
+              {jobCards(content).map((id) => (
+                <JobCard key={id} token={token} jobId={id} />
+              ))}
+            </div>
+          )}
+          {onDelete && (
+            <div className="mt-1">
+              <DeleteButton onClick={onDelete} label="Delete this reply" />
+            </div>
+          )}
           {live && <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-ember align-middle" />}
         </div>
       </div>

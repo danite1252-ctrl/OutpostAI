@@ -3,7 +3,8 @@ use utoipa::{Modify, OpenApi};
 
 use crate::error::{ErrorBody, ErrorDetail};
 use crate::routes::{
-    accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, SignInResponse,
+    accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, training, webhooks,
+    SignInResponse,
 };
 
 #[derive(OpenApi)]
@@ -37,6 +38,7 @@ use crate::routes::{
         chat::update_chat,
         chat::delete_chat,
         chat::send_message,
+        chat::delete_message,
         chat::get_file,
         chat::list_memory,
         chat::add_memory,
@@ -76,7 +78,37 @@ use crate::routes::{
         pairing::complete,
         pairing::list_devices,
         pairing::revoke_device,
+        network::connection,
         network::set_network,
+        crate::mcp::handle,
+        crate::mcp::integrations,
+        webhooks::list,
+        webhooks::create,
+        webhooks::delete,
+        webhooks::test,
+        training::status,
+        training::set_settings,
+        training::trigger_check,
+        training::list_datasets,
+        training::create_dataset,
+        training::get_dataset,
+        training::update_dataset,
+        training::delete_dataset,
+        training::add_image,
+        training::import_folder,
+        training::get_image,
+        training::set_caption,
+        training::delete_image,
+        training::caption,
+        training::start_training,
+        training::get_training,
+        training::get_sample,
+        training::use_checkpoint,
+        training::list_characters,
+        training::add_character,
+        training::lora_files,
+        training::rename_character,
+        training::delete_character,
     ),
     components(schemas(
         ErrorBody,
@@ -99,6 +131,9 @@ use crate::routes::{
         (name = "auth", description = "Signing in and out"),
         (name = "accounts", description = "Managing accounts (owner)"),
         (name = "openai", description = "OpenAI-compatible endpoints"),
+        (name = "webhooks", description = "Signed POSTs to your own URLs when pictures, trainings or characters are done"),
+        (name = "mcp", description = "Outpost as an MCP server: tools for chat, pictures, characters and memory"),
+        (name = "training", description = "Training Studio: datasets, captions, LoRA trainings and characters"),
         (name = "pairing", description = "Pairing phones over the encrypted port, and paired phones"),
     )
 )]

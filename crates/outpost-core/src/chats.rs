@@ -189,6 +189,26 @@ pub async fn delete_message(pool: &SqlitePool, chat_id: &str, message_id: &str) 
     Ok(())
 }
 
+/// Delete one of my messages. A message I sent takes the reply that answered it with
+/// it. Returns the ids removed (their attachments' rows go too; the caller removes
+/// the files first with [`crate::attachments::paths_for_message`]).
+pub async fn remove_message(pool: &SqlitePool, account_id: &str, chat_id: &str, message_id: &str) -> CoreResult<Vec<String>> {
+    get(pool, account_id, chat_id).await?;
+    let all = messages(pool, chat_id).await?;
+    let i = all.iter().position(|m| m.id == message_id).ok_or(CoreError::NotFound)?;
+    let mut ids = vec![all[i].id.clone()];
+    if all[i].role == "user" {
+        if let Some(reply) = all.get(i + 1).filter(|m| m.role == "assistant") {
+            ids.push(reply.id.clone());
+        }
+    }
+    for id in &ids {
+        sqlx::query("DELETE FROM attachments WHERE message_id = ?").bind(id).execute(pool).await?;
+        delete_message(pool, chat_id, id).await?;
+    }
+    Ok(ids)
+}
+
 /// Append a message and bump the chat to the top of the list.
 pub async fn add_message(
     pool: &SqlitePool,
@@ -202,15 +222,10 @@ pub async fn add_message(
         return Err(CoreError::Invalid(format!("Unknown role {role}.")));
     }
     let t = now();
-    let mut tx = pool.begin().await?;
-    let seq: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE chat_id = ?")
-        .bind(chat_id)
-        .fetch_one(&mut *tx)
-        .await?;
-    let msg = Message {
+    let mut msg = Message {
         id: uuid::Uuid::new_v4().to_string(),
         chat_id: chat_id.to_string(),
-        seq,
+        seq: 0,
         role: role.to_string(),
         content: content.to_string(),
         thinking: thinking.filter(|t| !t.is_empty()).map(Into::into),
@@ -218,25 +233,28 @@ pub async fn add_message(
         created_at: t,
         attachments: Vec::new(),
     };
-    sqlx::query(
-        "INSERT INTO messages (id, chat_id, seq, role, content, thinking, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    // One statement, so it waits its turn if something else is writing (a read-then-
+    // write transaction would fail instead, e.g. while the job queue starts a job).
+    msg.seq = sqlx::query_scalar(
+        "INSERT INTO messages (id, chat_id, seq, role, content, thinking, model, created_at)
+         SELECT ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ? FROM messages WHERE chat_id = ?
+         RETURNING seq",
     )
     .bind(&msg.id)
     .bind(&msg.chat_id)
-    .bind(msg.seq)
     .bind(&msg.role)
     .bind(&msg.content)
     .bind(&msg.thinking)
     .bind(&msg.model)
     .bind(t)
-    .execute(&mut *tx)
+    .bind(chat_id)
+    .fetch_one(pool)
     .await?;
     sqlx::query("UPDATE chats SET updated_at = ? WHERE id = ?")
         .bind(t)
         .bind(chat_id)
-        .execute(&mut *tx)
+        .execute(pool)
         .await?;
-    tx.commit().await?;
     Ok(msg)
 }
 

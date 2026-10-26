@@ -23,6 +23,8 @@ use crate::AppState;
 #[derive(Debug, Clone)]
 pub struct Running {
     pub job_id: String,
+    /// `train` for a LoRA training.
+    pub pack_id: String,
     pub prompt_id: Option<String>,
     pub progress: JobProgress,
     /// Cancel was asked for; checked before the job reaches ComfyUI.
@@ -33,7 +35,7 @@ pub struct Running {
 }
 
 impl Running {
-    fn track(&mut self, p: &JobProgress) {
+    pub(crate) fn track(&mut self, p: &JobProgress) {
         if p.steps == 0 || p.step == 0 {
             return;
         }
@@ -82,11 +84,16 @@ impl Queue {
         r.prompt_id.clone()
     }
 
-    fn cancelled(&self) -> bool {
+    pub(crate) fn cancelled(&self) -> bool {
         self.running().is_some_and(|r| r.cancelled)
     }
 
-    fn update(&self, f: impl FnOnce(&mut Running)) {
+    /// A LoRA training has the graphics card (chat waits, so it can't run out of memory).
+    pub fn training(&self) -> bool {
+        self.running().is_some_and(|r| r.pack_id == crate::train::PACK_ID)
+    }
+
+    pub(crate) fn update(&self, f: impl FnOnce(&mut Running)) {
         if let Some(r) = self.running.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
             f(r);
         }
@@ -116,6 +123,7 @@ pub async fn worker(state: AppState) {
         };
         state.queue.set_running(Some(Running {
             job_id: job.id.clone(),
+            pack_id: job.pack_id.clone(),
             prompt_id: None,
             progress: JobProgress {
                 phase: "Starting".into(),
@@ -125,7 +133,12 @@ pub async fn worker(state: AppState) {
             sampling: None,
         }));
         // Run each job in its own task so a bug in one can't stop the queue.
-        let outcome = match tokio::spawn(run(state.clone(), job.clone())).await {
+        let task = if job.pack_id == crate::train::PACK_ID {
+            tokio::spawn(crate::train::run(state.clone(), job.clone()))
+        } else {
+            tokio::spawn(run(state.clone(), job.clone()))
+        };
+        let outcome = match task.await {
             Ok(result) => result,
             Err(e) => {
                 tracing::error!(job = %job.id, error = %e, "create job crashed");
@@ -145,6 +158,7 @@ pub async fn worker(state: AppState) {
         if let Err(e) = jobs::finish(&state.pool, &job.id, status, error.as_deref()).await {
             tracing::warn!(error = %e, "could not record a finished job");
         }
+        crate::webhooks::job_finished(&state, &job.id).await;
         state.queue.set_running(None);
         remove_inputs(&state, &job).await;
         // Queue empty: give the GPU back to chat.
@@ -303,22 +317,26 @@ async fn ensure_comfyui(state: &AppState) -> Result<(), ComfyError> {
     Err(ComfyError::Offline)
 }
 
-/// Unload Ollama's models so image and video jobs get the whole GPU. Chat loads its
-/// model again on the next message.
-async fn free_ollama(state: &AppState) {
+/// The models Ollama has in memory right now (none if it isn't running).
+pub(crate) async fn ollama_loaded(state: &AppState) -> Vec<String> {
     let base = state.config.ollama_url.trim_end_matches('/').to_string();
     let Ok(resp) = state.http.get(format!("{base}/api/ps")).send().await else {
-        return;
+        return Vec::new();
     };
-    let Ok(body) = resp.json::<Value>().await else { return };
-    let loaded: Vec<String> = body
-        .get("models")
+    let Ok(body) = resp.json::<Value>().await else { return Vec::new() };
+    body.get("models")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|m| m.get("name").and_then(Value::as_str).map(str::to_string))
-        .collect();
-    for model in loaded {
+        .collect()
+}
+
+/// Unload Ollama's models so image and video jobs get the whole GPU. Chat loads its
+/// model again on the next message.
+pub(crate) async fn free_ollama(state: &AppState) {
+    let base = state.config.ollama_url.trim_end_matches('/').to_string();
+    for model in ollama_loaded(state).await {
         let _ = state
             .http
             .post(format!("{base}/api/generate"))
@@ -346,6 +364,7 @@ mod tests {
     fn time_left_follows_the_pass() {
         let mut r = Running {
             job_id: "j".into(),
+            pack_id: "z_image_turbo".into(),
             prompt_id: None,
             progress: JobProgress::default(),
             cancelled: false,

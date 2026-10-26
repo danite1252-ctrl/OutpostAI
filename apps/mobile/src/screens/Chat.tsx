@@ -1,0 +1,423 @@
+import * as ImagePicker from "expo-image-picker";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Alert, BackHandler, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { AuthedImage } from "../images";
+import { GalleryPicker } from "./Create";
+import type { Chat as ChatT, Message, Outpost, Persona } from "../outpost";
+import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
+
+const MAX_IMAGES = 4;
+
+export default function Chat({ api, onError }: { api: Outpost; onError: (e: unknown) => void }) {
+  const [chats, setChats] = useState<ChatT[]>([]);
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [open, setOpen] = useState<ChatT | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [c, p] = await Promise.all([api.get<ChatT[]>("/api/chats"), api.get<Persona[]>("/api/personas")]);
+      setChats(c);
+      setPersonas(p);
+    } catch (e) {
+      onError(e);
+      setError(e instanceof Error ? e.message : "Couldn't load chats.");
+    }
+  }, [api, onError]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function start(persona?: Persona) {
+    try {
+      const chat = await api.json<ChatT>("POST", "/api/chats", { persona_id: persona?.id ?? personas[0]?.id ?? null });
+      setChats((c) => [chat, ...c]);
+      setOpen(chat);
+    } catch (e) {
+      onError(e);
+      setError(e instanceof Error ? e.message : "Couldn't start a chat.");
+    }
+  }
+
+  if (open) {
+    return (
+      <Conversation
+        api={api}
+        chat={open}
+        persona={personas.find((p) => p.id === open.persona_id) ?? null}
+        onBack={() => {
+          setOpen(null);
+          void load();
+        }}
+        onError={onError}
+      />
+    );
+  }
+
+  return (
+    <ScrollView style={s.screen} contentContainerStyle={s.pad}>
+      <H1>Chat</H1>
+      <Text style={s.label}>New chat with</Text>
+      <View style={[s.row, { flexWrap: "wrap" }]}>
+        {personas.map((p) => (
+          <Chip key={p.id} label={p.name} onPress={() => void start(p)} />
+        ))}
+        {personas.length === 0 && <Button title="New chat" onPress={() => void start()} />}
+      </View>
+      <ErrorText>{error}</ErrorText>
+      {chats.map((c) => {
+        const p = personas.find((x) => x.id === c.persona_id);
+        return (
+          <Pressable
+            key={c.id}
+            accessibilityRole="button"
+            onPress={() => setOpen(c)}
+            style={({ pressed }) => [s.card, s.row, pressed && { backgroundColor: C.raised }]}
+          >
+            <Avatar name={p?.name ?? "AI"} color={p?.avatar_color ?? C.amber} />
+            <View style={{ flex: 1 }}>
+              <Text numberOfLines={1} style={{ color: C.ink, fontSize: 16 }}>
+                {c.title}
+              </Text>
+              <Text style={{ color: C.muted, fontSize: 13 }}>{p?.name ?? "No persona"}</Text>
+            </View>
+          </Pressable>
+        );
+      })}
+      {chats.length === 0 && <P muted>No chats yet. Everything stays on your PC.</P>}
+    </ScrollView>
+  );
+}
+
+interface Draft {
+  content: string;
+  thinking: string;
+}
+
+function Conversation({
+  api,
+  chat,
+  persona,
+  onBack,
+  onError,
+}: {
+  api: Outpost;
+  chat: ChatT;
+  persona: Persona | null;
+  onBack: () => void;
+  onError: (e: unknown) => void;
+}) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [input, setInput] = useState("");
+  const [images, setImages] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const stop = useRef<(() => void) | null>(null);
+  const [attach, setAttach] = useState(false);
+  const [fromGallery, setFromGallery] = useState(false);
+  const scroller = useRef<ScrollView | null>(null);
+
+  // Long-press a message to delete it (yours take their reply, and what was learned).
+  const removeMessage = (m: Message) =>
+    Alert.alert(
+      m.role === "user" ? "Delete this message?" : "Delete this reply?",
+      m.role === "user" ? "Its reply goes too, and anything the persona learned from it is forgotten." : undefined,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () =>
+            void api
+              .json<{ removed: string[] }>("DELETE", `/api/chats/${chat.id}/messages/${m.id}`)
+              .then((r) => setMessages((list) => list.filter((x) => !r.removed.includes(x.id))))
+              .catch((e) => {
+                onError(e);
+                setError(e instanceof Error ? e.message : "Couldn't delete it.");
+              }),
+        },
+      ],
+    );
+
+  const reload = useCallback(
+    () =>
+      api.get<{ messages: Message[] }>(`/api/chats/${chat.id}`).then(
+        (r) => setMessages(r.messages),
+        (e) => {
+          onError(e);
+          setError(e instanceof Error ? e.message : "Couldn't load the chat.");
+        },
+      ),
+    [api, chat.id, onError],
+  );
+  useEffect(() => {
+    void reload();
+    return () => stop.current?.();
+  }, [reload]);
+
+  // Android's back button returns to the chat list rather than leaving the app.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      onBack();
+      return true;
+    });
+    return () => sub.remove();
+  }, [onBack]);
+
+  async function pick() {
+    setAttach(false);
+    const r = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], base64: true, quality: 0.85, allowsMultipleSelection: true, selectionLimit: MAX_IMAGES });
+    if (r.canceled) return;
+    const picked = r.assets
+      .filter((a) => a.base64)
+      .map((a) => `data:${a.mimeType ?? "image/jpeg"};base64,${a.base64}`);
+    setImages((cur) => [...cur, ...picked].slice(0, MAX_IMAGES));
+  }
+
+  function send() {
+    const text = input.trim();
+    if ((!text && images.length === 0) || draft) return;
+    const sending = images;
+    setInput("");
+    setImages([]);
+    setError(null);
+    setDraft({ content: "", thinking: "" });
+    stop.current = api.stream(`/api/chats/${chat.id}/messages`, { content: text, images: sending }, {
+      event: (name, data) => {
+        const d = data as { text?: string; message?: unknown; user_message?: Message };
+        if (name === "start" && d.user_message) setMessages((m) => [...m, d.user_message!]);
+        else if (name === "token") setDraft((x) => (x ? { ...x, content: x.content + (d.text ?? "") } : x));
+        else if (name === "thinking") setDraft((x) => (x ? { ...x, thinking: x.thinking + (d.text ?? "") } : x));
+        else if (name === "error") setError(String((d as { message?: string }).message ?? "The reply failed."));
+      },
+      done: () => {
+        setDraft(null);
+        stop.current = null;
+        void reload();
+      },
+      error: (e) => {
+        setDraft(null);
+        stop.current = null;
+        onError(e);
+        setError(e.message);
+        setInput(text);
+        setImages(sending);
+      },
+    });
+  }
+
+  return (
+    <View style={s.screen}>
+      <View style={[s.row, { padding: 12, borderBottomWidth: 1, borderBottomColor: C.line }]}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Back to chats" onPress={onBack} style={[s.chip, { minHeight: 40 }]}>
+          <Text style={{ color: C.ink }}>‹ Chats</Text>
+        </Pressable>
+        {persona && <Avatar name={persona.name} color={persona.avatar_color} size={28} />}
+        <Text numberOfLines={1} style={{ color: C.ink, fontSize: 16, flex: 1 }}>
+          {chat.title}
+        </Text>
+      </View>
+      <ScrollView ref={scroller} contentContainerStyle={[s.pad, { paddingBottom: 24 }]} onContentSizeChange={() => scroller.current?.scrollToEnd({ animated: false })}>
+        {messages.length === 0 && !draft && <P muted>{persona ? `Say hello to ${persona.name}.` : "Start the chat."}</P>}
+        {messages
+          .filter((m) => m.role !== "system")
+          .map((m) => (
+            <Bubble
+              key={m.id}
+              api={api}
+              role={m.role}
+              content={m.content}
+              thinking={m.thinking}
+              attachments={m.attachments.map((a) => a.id)}
+              onDelete={draft ? undefined : () => removeMessage(m)}
+            />
+          ))}
+        {draft && <Bubble api={api} role="assistant" content={draft.content || "…"} thinking={draft.thinking || null} attachments={[]} />}
+      </ScrollView>
+      <View style={{ padding: 12, gap: 8, borderTopWidth: 1, borderTopColor: C.line }}>
+        <ErrorText>{error}</ErrorText>
+        {attach && (
+          <View style={s.row}>
+            <Chip
+              label="From gallery"
+              onPress={() => {
+                setAttach(false);
+                setFromGallery(true);
+              }}
+            />
+            <Chip label="Phone photos" onPress={() => void pick()} />
+          </View>
+        )}
+        {images.length > 0 && (
+          <View style={s.row}>
+            {images.map((uri, i) => (
+              <Pressable key={i} accessibilityLabel="Remove picture" onPress={() => setImages((cur) => cur.filter((_, j) => j !== i))}>
+                <Image source={{ uri }} style={{ width: 52, height: 52, borderRadius: 8 }} />
+              </Pressable>
+            ))}
+          </View>
+        )}
+        <View style={s.row}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Attach a picture" onPress={() => setAttach((a) => !a)} style={[s.chip, { minHeight: 48 }]}>
+            <Text style={{ color: C.ink, fontSize: 18 }}>＋</Text>
+          </Pressable>
+          <TextInput
+            value={input}
+            onChangeText={setInput}
+            placeholder={persona ? `Message ${persona.name}, or /draw…` : "Message, or /draw…"}
+            placeholderTextColor={C.muted}
+            multiline
+            style={[s.input, { flex: 1, maxHeight: 120, paddingTop: 12 }]}
+          />
+          {draft ? (
+            <Button kind="ghost" title="Stop" onPress={() => stop.current?.()} />
+          ) : (
+            <Button title="Send" onPress={send} disabled={!input.trim() && images.length === 0} />
+          )}
+        </View>
+      </View>
+      {fromGallery && (
+        <GalleryPicker
+          api={api}
+          onClose={() => setFromGallery(false)}
+          onPick={(m) => {
+            setFromGallery(false);
+            api.image(`/api/media/${m.id}`).then(
+              (uri) => setImages((cur) => [...cur, uri].slice(0, MAX_IMAGES)),
+              (e) => setError(e instanceof Error ? e.message : "That picture couldn't be attached."),
+            );
+          }}
+        />
+      )}
+    </View>
+  );
+}
+
+function Bubble({
+  api,
+  role,
+  content,
+  thinking,
+  attachments,
+  onDelete,
+}: {
+  api: Outpost;
+  role: Message["role"];
+  content: string;
+  thinking: string | null;
+  attachments: string[];
+  onDelete?: () => void;
+}) {
+  const [showThinking, setShowThinking] = useState(false);
+  const user = role === "user";
+  const jobIds = user ? [] : [...content.matchAll(new RegExp(JOB_CARD.source, "g"))].map((m) => m[1]);
+  const text = jobIds.length ? content.replace(new RegExp(JOB_CARD.source, "g"), "").trim() : content;
+  return (
+    <Pressable
+      onLongPress={onDelete}
+      delayLongPress={450}
+      accessibilityHint={onDelete ? "Long-press to delete" : undefined}
+      style={{ alignSelf: user ? "flex-end" : "stretch", maxWidth: user ? "85%" : "100%", gap: 6 }}
+    >
+      {attachments.length > 0 && (
+        <View style={[s.row, { justifyContent: user ? "flex-end" : "flex-start", flexWrap: "wrap" }]}>
+          {attachments.map((id) => (
+            <AuthedImage key={id} api={api} path={`/api/files/${id}`} style={{ width: 120, height: 120, borderRadius: 10 }} />
+          ))}
+        </View>
+      )}
+      {thinking ? (
+        <Pressable onPress={() => setShowThinking((v) => !v)}>
+          <Text style={{ color: C.muted, fontSize: 13 }}>{showThinking ? thinking : "Show reasoning"}</Text>
+        </Pressable>
+      ) : null}
+      {text ? (
+        <Text
+          style={{
+            color: C.ink,
+            fontSize: 16,
+            lineHeight: 23,
+            backgroundColor: user ? C.raised : "transparent",
+            borderRadius: 14,
+            padding: user ? 12 : 0,
+          }}
+        >
+          {text}
+        </Text>
+      ) : null}
+      {jobIds.map((id) => (
+        <JobCard key={id} api={api} jobId={id} />
+      ))}
+    </Pressable>
+  );
+}
+
+/** A reply that started a picture carries `[[outpost-job:<id>]]`. */
+const JOB_CARD = /\[\[outpost-job:([0-9a-f-]{36})\]\]/;
+
+type JobView = {
+  status: "queued" | "running" | "done" | "failed" | "cancelled";
+  error: string | null;
+  position: number | null;
+  progress: { phase: string; step: number; steps: number; percent: number | null } | null;
+  media: { id: string; kind: "image" | "video" }[];
+};
+
+/** The picture a /draw started: waiting, drawing, then the picture itself. */
+function JobCard({ api, jobId }: { api: Outpost; jobId: string }) {
+  const [job, setJob] = useState<JobView | null>(null);
+  const [gone, setGone] = useState(false);
+  const finished = job != null && job.status !== "queued" && job.status !== "running";
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      api.get<JobView>(`/api/jobs/${jobId}`).then(
+        (j) => live && setJob(j),
+        () => live && setGone(true),
+      );
+    void load();
+    if (finished) return;
+    const t = setInterval(() => void load(), 2000);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, [api, jobId, finished]);
+  const card = { borderWidth: 1, borderColor: C.line, borderRadius: 14, padding: 12, gap: 8, backgroundColor: C.surface };
+  if (gone) return <Text style={{ color: C.muted }}>This picture is no longer here.</Text>;
+  if (!job) return <View style={[card, { height: 60 }]} />;
+  if (job.status === "done") {
+    return (
+      <View style={[s.row, { flexWrap: "wrap" }]}>
+        {job.media.map((m) =>
+          m.kind === "image" ? (
+            <AuthedImage key={m.id} api={api} path={`/api/media/${m.id}`} style={{ width: 280, height: 280, borderRadius: 14 }} />
+          ) : (
+            <Text key={m.id} style={{ color: C.soft }}>
+              Video ready: open it in the Gallery.
+            </Text>
+          ),
+        )}
+      </View>
+    );
+  }
+  if (job.status === "failed") return <Text style={{ color: C.danger }}>Couldn't draw it: {job.error ?? "unknown error"}</Text>;
+  if (job.status === "cancelled") return <Text style={{ color: C.muted }}>Stopped.</Text>;
+  const p = job.progress;
+  const f = p ? (p.percent != null ? p.percent / 100 : p.steps > 0 ? p.step / p.steps : 0) : 0;
+  const label =
+    job.status === "queued"
+      ? job.position
+        ? `Waiting: ${job.position} ahead`
+        : "Starting…"
+      : `${p?.phase ?? "Drawing"}${p && p.steps > 0 ? ` · step ${p.step} of ${p.steps}` : ""}`;
+  return (
+    <View style={card} accessibilityLiveRegion="polite">
+      <Text style={{ color: C.muted }}>{label}</Text>
+      <View style={{ height: 6, borderRadius: 3, backgroundColor: C.raised, overflow: "hidden", flexDirection: "row" }}>
+        <View style={{ flex: Math.min(1, f), backgroundColor: C.ember }} />
+        <View style={{ flex: 1 - Math.min(1, f) }} />
+      </View>
+    </View>
+  );
+}

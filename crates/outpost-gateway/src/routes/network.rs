@@ -32,11 +32,44 @@ pub struct NetworkStatus {
     /// SHA-256 of Outpost's certificate, and its three check words.
     pub fingerprint: Option<String>,
     pub words: Vec<String>,
+    /// The saved "Allow my Tailscale devices" setting.
+    pub tailscale_access: bool,
+    /// This PC on Tailscale, when it's connected.
+    pub tailscale: Option<crate::tailscale::TailscaleInfo>,
+    /// Outpost is answering on Tailscale right now.
+    pub tailscale_running: bool,
+    /// Addresses a phone can use, best first (home network, then Tailscale).
+    pub phone_hosts: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct NetworkRequest {
     pub lan_access: bool,
+    /// Left out: unchanged.
+    #[serde(default)]
+    pub tailscale_access: Option<bool>,
+}
+
+/// Where phones can reach the encrypted port, best first: the home network address,
+/// then the Tailscale name and address.
+pub async fn phone_hosts(state: &AppState, ts: Option<&crate::tailscale::TailscaleInfo>) -> Vec<String> {
+    let mut hosts = Vec::new();
+    let open_now = state.listening.get().is_some_and(|a| !a.ip().is_loopback());
+    if open_now {
+        if let Some(ip) = lan_ip() {
+            hosts.push(ip.to_string());
+        }
+    }
+    if state.tailnet.get().is_some() {
+        if let Some(ts) = ts {
+            if let Some(name) = &ts.dns_name {
+                hosts.push(name.clone());
+            }
+            hosts.push(ts.ip.clone());
+        }
+    }
+    hosts.dedup();
+    hosts
 }
 
 /// This PC's LAN address. Opens no connection: a UDP "connect" only picks the
@@ -54,10 +87,18 @@ async fn status(state: &AppState) -> ApiResult<NetworkStatus> {
     let open_now = listening.is_some_and(|a: SocketAddr| !a.ip().is_loopback());
     let lan = lan_ip();
     let port = listening.map(|a| a.port()).unwrap_or(state.config.bind.port());
+    let tailscale_access = settings::get_bool(&state.pool, settings::TAILSCALE_ACCESS).await?;
+    let ts = crate::tailscale::detect().await;
+    let tailscale_running = state.tailnet.get().is_some();
+    let ts_differs = ts.is_some() && tailscale_access != tailscale_running;
     Ok(NetworkStatus {
         lan_access,
         listening_on: listening.map(|a| a.to_string()),
-        restart_required: listening.is_some() && open_now != lan_access,
+        restart_required: listening.is_some() && (open_now != lan_access || ts_differs),
+        phone_hosts: phone_hosts(state, ts.as_ref()).await,
+        tailscale_access,
+        tailscale: ts,
+        tailscale_running,
         lan_address: lan.map(|ip| ip.to_string()),
         base_url: match (open_now, lan) {
             (true, Some(ip)) => Some(format!("http://{ip}:{port}/v1")),
@@ -93,13 +134,47 @@ pub async fn set_network(
     require_loopback(&addr, "Changing network access")?;
     auth.require_owner()?;
     settings::set_bool(&state.pool, settings::NETWORK_ACCESS, req.lan_access).await?;
+    if let Some(on) = req.tailscale_access {
+        settings::set_bool(&state.pool, settings::TAILSCALE_ACCESS, on).await?;
+    }
     outpost_core::audit::log_quiet(
         &state.pool,
         Some(&auth.account.id),
         Some(&auth.session.id),
         "network_access",
-        Some(if req.lan_access { "on" } else { "off" }),
+        Some(&format!(
+            "lan {}, tailscale {}",
+            if req.lan_access { "on" } else { "off" },
+            match req.tailscale_access {
+                Some(true) => "on",
+                Some(false) => "off",
+                None => "unchanged",
+            }
+        )),
     )
     .await;
     Ok(Json(status(&state).await?))
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ConnectionInfo {
+    /// Addresses for the encrypted port, best first.
+    pub hosts: Vec<String>,
+    pub port: Option<u16>,
+}
+
+/// Where this Outpost can be reached now. Paired phones ask for it to learn new
+/// addresses (e.g. Tailscale) without pairing again.
+#[utoipa::path(get, path = "/api/connection", tag = "pairing", security(("bearer" = [])),
+    responses((status = 200, description = "Addresses", body = ConnectionInfo)))]
+pub async fn connection(State(state): State<AppState>, _auth: Auth) -> ApiResult<Json<ConnectionInfo>> {
+    let ts = if state.tailnet.get().is_some() {
+        crate::tailscale::detect().await
+    } else {
+        None
+    };
+    Ok(Json(ConnectionInfo {
+        hosts: phone_hosts(&state, ts.as_ref()).await,
+        port: state.tls.get().map(|t| t.port),
+    }))
 }

@@ -328,6 +328,7 @@ async fn openapi_lists_every_route() {
         "/api/chats",
         "/api/chats/{id}",
         "/api/chats/{id}/messages",
+        "/api/chats/{id}/messages/{message_id}",
         "/api/memory",
         "/api/memory/{id}",
         "/api/keys",
@@ -353,6 +354,27 @@ async fn openapi_lists_every_route() {
         "/api/pair/complete",
         "/api/devices",
         "/api/devices/{id}",
+        "/api/connection",
+        "/mcp",
+        "/api/integrations",
+        "/api/webhooks",
+        "/api/webhooks/{id}",
+        "/api/webhooks/{id}/test",
+        "/api/training",
+        "/api/training/trigger-check",
+        "/api/datasets",
+        "/api/datasets/{id}",
+        "/api/datasets/{id}/images",
+        "/api/datasets/{id}/images/{image_id}",
+        "/api/datasets/{id}/import",
+        "/api/datasets/{id}/caption",
+        "/api/datasets/{id}/train",
+        "/api/trainings/{id}",
+        "/api/trainings/{id}/samples/{file}",
+        "/api/trainings/{id}/use",
+        "/api/characters",
+        "/api/characters/{id}",
+        "/api/characters/lora-files",
     ] {
         assert!(paths.contains_key(p), "missing {p} in OpenAPI spec");
     }
@@ -552,6 +574,10 @@ async fn personas_chats_and_memory() {
     assert!(ids.contains(&"persona:assistant".to_string()));
     assert!(ids.contains(&"persona:coder".to_string()));
 
+    // Deleting a message that isn't there (the core tests cover the rest).
+    let (status, _) = call(&app, "DELETE", &format!("/api/chats/{chat_id}/messages/nope"), Some(&token), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
     let (status, _) = call(&app, "DELETE", &format!("/api/chats/{chat_id}"), Some(&token), None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 }
@@ -671,6 +697,27 @@ async fn network_setting_is_for_the_owner_on_this_pc() {
     assert_eq!(net["lan_access"], true);
     let (_, net) = call(&local, "GET", "/api/settings/network", Some(&owner_token), None).await;
     assert_eq!(net["lan_access"], true);
+    assert_eq!(net["tailscale_access"], false);
+    // Tailscale is its own switch; leaving it out keeps it as it was.
+    let (_, net) = call(
+        &local,
+        "PUT",
+        "/api/settings/network",
+        Some(&owner_token),
+        Some(json!({"lan_access": true, "tailscale_access": true})),
+    )
+    .await;
+    assert_eq!(net["tailscale_access"], true);
+    let (_, net) = call(
+        &local,
+        "PUT",
+        "/api/settings/network",
+        Some(&owner_token),
+        Some(json!({"lan_access": true})),
+    )
+    .await;
+    assert_eq!(net["tailscale_access"], true);
+    assert!(net["phone_hosts"].is_array());
 
     // A member can't change it.
     let (status, sam) = call(
@@ -1110,6 +1157,11 @@ async fn a_phone_pairs_over_the_secure_port_only() {
     // The phone token works on the secure port only.
     let (status, _) = call(&phone, "GET", "/api/me", Some(&device), None).await;
     assert_eq!(status, StatusCode::OK);
+    // A paired phone can ask where else Outpost answers (e.g. Tailscale).
+    let (status, conn) = call(&phone, "GET", "/api/connection", Some(&device), None).await;
+    assert_eq!(status, StatusCode::OK, "{conn}");
+    assert_eq!(conn["port"], 7421);
+    assert!(conn["hosts"].is_array());
     let (status, _) = call(&phone_plain, "GET", "/api/me", Some(&device), None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     // A phone can't make pairing codes.
@@ -1152,4 +1204,185 @@ async fn a_phone_pairs_over_the_secure_port_only() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, _) = call(&phone, "GET", "/api/me", Some(&device), None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn training_studio_datasets_captions_and_checks() {
+    let app = app().await;
+    let (token, _) = setup_owner(&app).await;
+    let t = Some(token.as_str());
+    const PNG: &str = "iVBORw0KGgoAAAAA";
+
+    // Real words and names are flagged, with a safer suggestion.
+    let (status, c) = call(&app, "GET", "/api/training/trigger-check?word=kat", t, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(c["ok"], false);
+    let suggestion = c["suggestion"].as_str().unwrap().to_string();
+    let (_, c) = call(&app, "GET", &format!("/api/training/trigger-check?word={suggestion}"), t, None).await;
+    assert_eq!(c["ok"], true);
+
+    // Point at a folder with no ai-toolkit so nothing can really train here.
+    let missing = temp_data_dir().join("no-toolkit");
+    let (status, st) = call(&app, "PUT", "/api/training", t, Some(json!({"toolkit_dir": missing}))).await;
+    assert_eq!(status, StatusCode::OK, "{st}");
+    assert!(st["toolkit_problem"].is_string());
+
+    let (status, d) = call(&app, "POST", "/api/datasets", t, Some(json!({"name": "Kat"}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{d}");
+    assert_eq!(d["trigger_check"]["ok"], true, "a trigger made from the name is safe: {d}");
+    let id = d["id"].as_str().unwrap().to_string();
+    let trigger = d["trigger_word"].as_str().unwrap().to_string();
+
+    let (status, _) = call(&app, "POST", &format!("/api/datasets/{id}/images"), t, Some(json!({"image": "aGVsbG8="}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "not a picture");
+    let mut first = String::new();
+    for i in 0..4 {
+        let caption = if i == 0 { format!("{trigger}, a woman smiling") } else { String::new() };
+        let (status, img) = call(
+            &app,
+            "POST",
+            &format!("/api/datasets/{id}/images"),
+            t,
+            Some(json!({"image": format!("data:image/png;base64,{PNG}"), "caption": caption})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{img}");
+        if i == 0 {
+            assert_eq!(img["caption"], "a woman smiling", "the trigger is added at training time");
+            first = img["id"].as_str().unwrap().to_string();
+        }
+    }
+    // A folder on this PC: pictures plus their captions.
+    let folder = temp_data_dir().join("kat");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("one.png"), [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0]).unwrap();
+    std::fs::write(folder.join("one.txt"), "on a bench").unwrap();
+    let (status, r) = call(&app, "POST", &format!("/api/datasets/{id}/import"), t, Some(json!({"folder": folder}))).await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    assert_eq!(r["added"], 1);
+
+    let (status, img) = call(
+        &app,
+        "PATCH",
+        &format!("/api/datasets/{id}/images/{first}"),
+        t,
+        Some(json!({"caption": "a woman in a red coat."})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(img["caption"], "a woman in a red coat");
+    let (_, d) = call(&app, "GET", &format!("/api/datasets/{id}"), t, None).await;
+    assert_eq!(d["image_count"], 5);
+    assert_eq!(d["captioned_count"], 2);
+    // Test prompts follow the captions ("a woman ...") and start with the trigger.
+    let suggested = d["suggested_prompts"].as_array().unwrap();
+    assert_eq!(suggested.len(), 3);
+    assert!(suggested[0].as_str().unwrap().starts_with(&format!("{trigger}, a woman in a red coat")), "{d}");
+    let (status, _) = call(&app, "GET", &format!("/api/datasets/{id}/images/{first}"), t, None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // No vision model (when no Ollama is running on this PC) is explained; with a real
+    // Ollama about, captioning starts instead. Either way, no ai-toolkit is explained.
+    let (status, e) = call(&app, "POST", &format!("/api/datasets/{id}/caption"), t, Some(json!({}))).await;
+    assert!(
+        (status == StatusCode::BAD_REQUEST && e["error"]["code"] == "no_vision_model") || status == StatusCode::ACCEPTED,
+        "{status} {e}"
+    );
+    let (status, e) = call(&app, "POST", &format!("/api/datasets/{id}/train"), t, Some(json!({}))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(e["error"]["code"], "toolkit_missing");
+    let (status, _) = call(&app, "POST", &format!("/api/datasets/{id}/train"), t, Some(json!({"steps": 10}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // No characters yet; /draw explains what's missing instead of chatting.
+    let (_, chars) = call(&app, "GET", "/api/characters", t, None).await;
+    assert_eq!(chars, json!([]));
+    let (_, loras) = call(&app, "GET", "/api/loras", t, None).await;
+    assert_eq!(loras["characters"], json!([]));
+    let (_, chat) = call(&app, "POST", "/api/chats", t, Some(json!({}))).await;
+    let url = format!("/api/chats/{}/messages", chat["id"].as_str().unwrap());
+    let (status, e) = call(&app, "POST", &url, t, Some(json!({"content": "/draw a lighthouse at dusk"}))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{e}");
+    let (status, _) = call(&app, "POST", &url, t, Some(json!({"content": "/draw"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _) = call(&app, "DELETE", &format!("/api/datasets/{id}"), t, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = call(&app, "GET", &format!("/api/datasets/{id}"), t, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn mcp_speaks_json_rpc_with_an_app_key() {
+    let app = app().await;
+    let (token, _) = setup_owner(&app).await;
+    let t = Some(token.as_str());
+    let rpc = |id: i64, method: &str, params: Value| json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+
+    // No key: refused like the rest of the API.
+    let (status, _) = call(&app, "POST", "/mcp", None, Some(rpc(1, "ping", json!({})))).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, init) = call(&app, "POST", "/mcp", t, Some(rpc(1, "initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}})))).await;
+    assert_eq!(status, StatusCode::OK, "{init}");
+    assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
+    assert_eq!(init["result"]["serverInfo"]["name"], "outpost");
+
+    // A notification gets no body.
+    let (status, body) = call(&app, "POST", "/mcp", t, Some(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(body, Value::Null);
+
+    let (_, list) = call(&app, "POST", "/mcp", t, Some(rpc(2, "tools/list", json!({})))).await;
+    let names: Vec<String> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
+    assert!(names.contains(&"draw".to_string()) && names.contains(&"list_characters".to_string()));
+
+    let (_, r) = call(&app, "POST", "/mcp", t, Some(rpc(3, "tools/call", json!({"name": "list_characters", "arguments": {}})))).await;
+    assert_eq!(r["result"]["isError"], false);
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("No characters"));
+
+    // Nothing downloaded here: draw explains instead of hanging.
+    let (_, r) = call(&app, "POST", "/mcp", t, Some(rpc(4, "tools/call", json!({"name": "draw", "arguments": {"prompt": "a lighthouse"}})))).await;
+    assert_eq!(r["result"]["isError"], true, "{r}");
+
+    let (_, r) = call(&app, "POST", "/mcp", t, Some(rpc(5, "tools/call", json!({"name": "remember", "arguments": {"text": "Dan keeps bees"}})))).await;
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let (_, mem) = call(&app, "GET", "/api/memory", t, None).await;
+    assert_eq!(mem[0]["text"], "Dan keeps bees");
+
+    let (_, r) = call(&app, "POST", "/mcp", t, Some(rpc(6, "no/such", json!({})))).await;
+    assert_eq!(r["error"]["code"], -32601);
+}
+
+#[tokio::test]
+async fn webhooks_are_set_up_by_people_and_signed() {
+    let app = app().await;
+    let (token, _) = setup_owner(&app).await;
+    let t = Some(token.as_str());
+    let (status, list) = call(&app, "GET", "/api/webhooks", t, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(list["events"].as_array().unwrap().iter().any(|e| e == "job.finished"));
+
+    let (status, _) = call(&app, "POST", "/api/webhooks", t, Some(json!({"url": "not a url", "events": ["job.finished"]}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Nothing listens on port 9: made fine, and the test ping says it couldn't connect.
+    let (status, made) = call(&app, "POST", "/api/webhooks", t, Some(json!({"url": "http://127.0.0.1:9/hook", "events": ["job.finished", "bogus"]}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert!(made["secret"].as_str().unwrap().starts_with("whsec_"));
+    assert_eq!(made["webhook"]["events"], json!(["job.finished"]));
+    let id = made["webhook"]["id"].as_str().unwrap().to_string();
+    let (_, r) = call(&app, "POST", &format!("/api/webhooks/{id}/test"), t, None).await;
+    assert_eq!(r["status"], 0, "{r}");
+    let (_, list) = call(&app, "GET", "/api/webhooks", t, None).await;
+    assert!(list["webhooks"][0].get("secret").is_none());
+    assert_eq!(list["webhooks"][0]["last_status"], 0);
+
+    // App keys can't make webhooks.
+    let (_, key) = call(&app, "POST", "/api/keys", t, Some(json!({"label": "script"}))).await;
+    let k = key["token"].as_str().unwrap().to_string();
+    let (status, _) = call(&app, "POST", "/api/webhooks", Some(&k), Some(json!({"url": "http://127.0.0.1:9/x", "events": ["job.finished"]}))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _) = call(&app, "DELETE", &format!("/api/webhooks/{id}"), t, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
 }

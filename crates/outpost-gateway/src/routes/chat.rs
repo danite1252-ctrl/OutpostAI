@@ -268,6 +268,20 @@ pub async fn send_message(
         .collect::<Result<Vec<_>, _>>()?;
     let account_id = auth.account.id.clone();
     let chat = chats::get(&state.pool, &account_id, &id).await?;
+    // "/draw ..." (or "draw <a character> ...") makes a picture instead of a reply.
+    let my_characters = outpost_core::training::characters(&state.pool, Some(account_id.as_str())).await?;
+    if let Some(prompt) = draw_request(&content, &my_characters) {
+        if !images.is_empty() {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                "Send /draw without pictures. To change a picture, use Create › Edit.",
+            ));
+        }
+        let rx = draw(&state, &auth, &chat, &content, prompt).await?;
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<Event, Infallible>);
+        return Ok(Sse::new(stream).keep_alive(KeepAlive::default()));
+    }
     let persona = match &chat.persona_id {
         Some(pid) => personas::get(&state.pool, &account_id, pid).await.ok(),
         None => None,
@@ -339,6 +353,7 @@ pub async fn send_message(
     let learn_persona = persona.clone();
     let learn_account = account_id.clone();
     let user_text = content.clone();
+    let user_message_id = user_msg.id.clone();
     let can_think = resolved.can_think;
     let _ = tx
         .send(event(
@@ -416,6 +431,7 @@ pub async fn send_message(
                             account_id: learn_account,
                             persona: learn_persona,
                             chat_id,
+                            user_message_id,
                             model,
                             can_think,
                             user_text,
@@ -438,6 +454,306 @@ pub async fn send_message(
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<Event, Infallible>);
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct RemovedMessages {
+    /// The messages deleted: the one asked for, and the reply to it if it was yours.
+    pub removed: Vec<String>,
+    /// Memories learned from them that were forgotten.
+    pub forgotten: u64,
+}
+
+/// Delete a message from one of my chats. A message I sent takes its reply with it,
+/// and anything the persona learned from it is forgotten. Pictures attached go too.
+#[utoipa::path(delete, path = "/api/chats/{id}/messages/{message_id}", tag = "chat", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Chat id"), ("message_id" = String, Path, description = "Message id")),
+    responses((status = 200, description = "Deleted", body = RemovedMessages), (status = 404, description = "Not found", body = ErrorBody)))]
+pub async fn delete_message(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path((id, message_id)): Path<(String, String)>,
+) -> ApiResult<Json<RemovedMessages>> {
+    let account_id = &auth.account.id;
+    chats::get(&state.pool, account_id, &id).await?;
+    let files_dir = state.config.files_dir();
+    // Find the files before their rows go.
+    let mut files = attachments::paths_for_message(&state.pool, &files_dir, &message_id).await?;
+    let removed = chats::remove_message(&state.pool, account_id, &id, &message_id).await?;
+    for other in removed.iter().skip(1) {
+        files.extend(attachments::paths_for_message(&state.pool, &files_dir, other).await.unwrap_or_default());
+    }
+    attachments::remove_files(&files).await;
+    let forgotten = memory::forget_messages(&state.pool, account_id, &removed).await?;
+    Ok(Json(RemovedMessages { removed, forgotten }))
+}
+
+// ---------------------------------------------------------------- drawing from chat
+
+/// The words to draw, when a message asks for a picture: `/draw <words>`, or
+/// "draw ..." / "make a picture of ..." naming one of my characters.
+pub fn draw_request<'a>(content: &'a str, characters: &[outpost_core::training::Character]) -> Option<&'a str> {
+    let lower = content.to_lowercase();
+    if lower == "/draw" || lower.starts_with("/draw ") {
+        return Some(content.get(5..).unwrap_or("").trim());
+    }
+    for lead in ["draw me ", "draw ", "make a picture of ", "make me a picture of ", "picture of "] {
+        if lower.starts_with(lead) {
+            let Some(rest) = content.get(lead.len()..).map(str::trim) else { continue };
+            if outpost_core::training::mentioned(rest, characters).is_some() {
+                return Some(rest);
+            }
+        }
+    }
+    None
+}
+
+/// Most pictures one chat message may ask for.
+pub const MAX_DRAWINGS: usize = 8;
+
+/// The pictures one draw message asks for. Scenes go on separate lines or between
+/// `;` ("Kat at the beach; in the snow"), and a count asks for several of each, with
+/// different seeds: "4 pictures of Kat at the beach", "Kat at the beach x4". At most
+/// [`MAX_DRAWINGS`] in all.
+pub fn plan_drawings(prompt: &str) -> Vec<String> {
+    const WORDS: [&str; 8] = ["one", "two", "three", "four", "five", "six", "seven", "eight"];
+    const NOUNS: [&str; 12] = [
+        "pictures", "picture", "photos", "photo", "images", "image", "pics", "pic", "versions", "variations",
+        "drawings", "shots",
+    ];
+    let number = |w: &str| -> Option<usize> {
+        let w = w.to_lowercase();
+        w.parse::<usize>().ok().or_else(|| WORDS.iter().position(|x| *x == w).map(|i| i + 1))
+    };
+    let mut text = prompt.trim().to_string();
+    let mut count = 1;
+    // Leading "4 pictures of ..." / "three photos of ...".
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if let (Some(n), Some(noun)) = (words.first().and_then(|w| number(w)), words.get(1)) {
+        if NOUNS.contains(&noun.to_lowercase().as_str()) && (1..=MAX_DRAWINGS).contains(&n) {
+            let skip = if words.get(2).is_some_and(|w| w.eq_ignore_ascii_case("of")) { 3 } else { 2 };
+            count = n;
+            text = words[skip..].join(" ");
+        }
+    }
+    // Trailing "x4" / "×4".
+    if let Some((rest, last)) = text.rsplit_once(char::is_whitespace) {
+        let n = last
+            .strip_prefix(['x', 'X', '×'])
+            .and_then(|d| d.parse::<usize>().ok())
+            .filter(|n| (1..=MAX_DRAWINGS).contains(n));
+        if let Some(n) = n {
+            count = n;
+            text = rest.trim().to_string();
+        }
+    }
+    let scenes: Vec<String> = text
+        .split(['\n', ';'])
+        .map(|line| {
+            let t = line.trim().trim_start_matches(['-', '*', '•']).trim_start();
+            // "1. at the beach" / "2) in the snow"
+            let t = match t.split_once(['.', ')']) {
+                Some((n, rest)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => rest.trim_start(),
+                _ => t,
+            };
+            t.trim().trim_end_matches(['.', ',']).to_string()
+        })
+        .filter(|t| !t.is_empty())
+        .collect();
+    scenes
+        .iter()
+        .flat_map(|s| std::iter::repeat(s.clone()).take(count))
+        .take(MAX_DRAWINGS)
+        .collect()
+}
+
+/// One picture to queue: the workflow, its inputs, and who or what it shows.
+pub struct PlannedPicture {
+    pub pack: outpost_engines::packs::Pack,
+    pub inputs: serde_json::Map<String, serde_json::Value>,
+    /// The character's name, or "that".
+    pub what: String,
+}
+
+impl PlannedPicture {
+    /// The exact prompt it sends.
+    pub fn prompt(&self) -> &str {
+        self.inputs.get("prompt").and_then(serde_json::Value::as_str).unwrap_or_default()
+    }
+}
+
+/// Plan the pictures a draw request asks for (see [`plan_drawings`]), with the right
+/// workflow for each: a named character uses its LoRA, anything else Outpost's pick of
+/// the picture workflows. Checks everything before anything is queued.
+pub async fn plan_pictures(state: &AppState, account_id: &str, prompt: &str) -> ApiResult<Vec<PlannedPicture>> {
+    use outpost_engines::packs;
+    let characters = outpost_core::training::characters(&state.pool, Some(account_id)).await?;
+    let characters = &characters[..];
+    let scenes = plan_drawings(prompt);
+    if scenes.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            "Say what to draw, e.g. \"/draw a lighthouse at dusk\".",
+        ));
+    }
+    let waiting = outpost_core::jobs::waiting_for(&state.pool, account_id).await?;
+    let room = (outpost_core::jobs::MAX_QUEUED_PER_ACCOUNT - waiting).max(0) as usize;
+    if scenes.len() > room {
+        return Err(ApiError::conflict(format!(
+            "You have {waiting} pictures waiting already, so there's room for {room} more. Let some finish first."
+        )));
+    }
+    let loras = state.assets.loras();
+    // The picture workflow for scenes without a character: Outpost's pick among ready ones.
+    let picture_pack = {
+        let hw = crate::routes::models::measure(state).await;
+        let ready: Vec<packs::Pack> = packs::built_in()
+            .into_iter()
+            .filter(|p| p.task() == packs::Task::Picture && state.assets.status(p).ready)
+            .collect();
+        packs::pick(&ready, packs::Task::Picture, |p| crate::routes::create::pack_fit(p.vram_gb, &hw))
+            .or(ready.first())
+            .cloned()
+    };
+    // Plan every picture first, so a problem stops them all before any is queued.
+    let mut planned: Vec<PlannedPicture> = Vec::new();
+    let mut carried: Option<outpost_core::training::Character> = None;
+    for scene in &scenes {
+        // A later scene without a name keeps the character of the one before.
+        let named = outpost_core::training::mentioned(scene, characters).cloned();
+        let character = named.or_else(|| carried.clone());
+        let (pack, inputs, what) = if let Some(mut c) = character {
+            // Older characters learn what they are from their captions now.
+            outpost_core::training::fill_subject(&state.pool, &mut c).await?;
+            let pack = packs::find("character_z_image")
+                .filter(|p| state.assets.status(p).ready)
+                .ok_or_else(|| {
+                    ApiError::conflict("Z-Image Turbo (for characters) isn't downloaded yet. Get it in Create › Characters first.")
+                })?;
+            if !loras.contains(&c.lora_file) {
+                return Err(ApiError::conflict(format!(
+                    "{}'s LoRA ({}) is missing from the LoRA folder.",
+                    c.name, c.lora_file
+                )));
+            }
+            let inputs = serde_json::json!({
+                "prompt": outpost_core::training::with_trigger(scene, &c),
+                "lora": c.lora_file,
+            });
+            let what = c.name.clone();
+            carried = Some(c);
+            (pack, inputs, what)
+        } else {
+            let pack = picture_pack
+                .clone()
+                .ok_or_else(|| ApiError::conflict("No picture workflow is downloaded yet. Get one in Create › Picture first."))?;
+            (pack, serde_json::json!({ "prompt": scene }), "that".to_string())
+        };
+        let inputs = inputs.as_object().cloned().unwrap_or_default();
+        pack.build(&inputs, || 0, &std::collections::HashMap::new(), &loras)
+            .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, "invalid", e.to_string()))?;
+        planned.push(PlannedPicture { pack, inputs, what });
+    }
+    Ok(planned)
+}
+
+/// Queue planned pictures; returns their job ids in order.
+pub async fn queue_pictures(
+    state: &AppState,
+    account_id: &str,
+    priority: i64,
+    planned: &[PlannedPicture],
+) -> ApiResult<Vec<String>> {
+    let mut ids = Vec::new();
+    for p in planned {
+        let job = outpost_core::jobs::create(
+            &state.pool,
+            account_id,
+            &p.pack.id,
+            &serde_json::Value::Object(p.inputs.clone()),
+            priority,
+        )
+        .await?;
+        ids.push(job.id);
+    }
+    state.queue.wake.notify_one();
+    Ok(ids)
+}
+
+
+/// Queue pictures for a chat message and answer with a card per picture that the
+/// apps fill in as they draw: `[[outpost-job:<id>]]`.
+async fn draw(
+    state: &AppState,
+    auth: &Auth,
+    chat: &Chat,
+    content: &str,
+    prompt: &str,
+) -> ApiResult<tokio::sync::mpsc::Receiver<Event>> {
+    let planned = plan_pictures(state, &auth.account.id, prompt).await?;
+    let ids = queue_pictures(state, &auth.account.id, outpost_core::jobs::priority_for(auth.session.kind), &planned).await?;
+    let lines: Vec<String> = planned.iter().map(|p| p.prompt().to_string()).collect();
+    let cards: Vec<String> = ids.iter().map(|id| format!("[[outpost-job:{id}]]")).collect();
+
+    if chat.title == "New chat" && chats::messages(&state.pool, &chat.id).await?.is_empty() {
+        let title = chats::title_from(prompt);
+        let _ = chats::update(&state.pool, &auth.account.id, &chat.id, Some(title.as_str()), None, None).await;
+    }
+    let user_msg = chats::add_message(&state.pool, &chat.id, "user", content, None, None).await?;
+    let first_what = &planned[0].what;
+    let pack_name = &planned[0].pack.name;
+    let reply = if planned.len() == 1 {
+        format!("Drawing {first_what} with {pack_name}: \"{}\"\n\n{}", lines[0], cards[0])
+    } else {
+        let mut distinct = lines.clone();
+        distinct.dedup();
+        let list = if distinct.len() == 1 {
+            format!("\"{}\"", distinct[0])
+        } else {
+            distinct.iter().enumerate().map(|(i, l)| format!("{}. \"{l}\"", i + 1)).collect::<Vec<_>>().join("\n")
+        };
+        format!(
+            "Drawing {} pictures of {first_what} with {pack_name}:\n{list}\n\n{}",
+            planned.len(),
+            cards.join("\n")
+        )
+    };
+    let saved = chats::add_message(&state.pool, &chat.id, "assistant", &reply, None, Some(pack_name.as_str())).await?;
+    let (tx, rx) = tokio::sync::mpsc::channel::<Event>(4);
+    let _ = tx
+        .send(event("start", serde_json::json!({ "user_message": user_msg, "model": pack_name })))
+        .await;
+    let _ = tx.send(event("token", serde_json::json!({ "text": reply }))).await;
+    let _ = tx
+        .send(event("done", serde_json::json!({ "message": saved, "error": null })))
+        .await;
+    Ok(rx)
+}
+
+#[cfg(test)]
+mod draw_tests {
+    use super::plan_drawings;
+
+    #[test]
+    fn one_message_can_ask_for_several_pictures() {
+        assert_eq!(plan_drawings("Kat at the beach"), vec!["Kat at the beach"]);
+        assert_eq!(plan_drawings("4 pictures of Kat at the beach").len(), 4);
+        assert_eq!(plan_drawings("three photos of Kat")[2], "Kat");
+        assert_eq!(plan_drawings("Kat at the beach x3"), vec!["Kat at the beach"; 3]);
+        assert_eq!(
+            plan_drawings("Kat at the beach; in the snow\n- reading in a café."),
+            vec!["Kat at the beach", "in the snow", "reading in a café"]
+        );
+        assert_eq!(plan_drawings("1. a fox\n2) a hen").len(), 2);
+        assert_eq!(plan_drawings("2 pictures of Kat at the beach; in the snow").len(), 4);
+        assert_eq!(plan_drawings("20 pictures of a cat").len(), 1, "too many isn't a count");
+        assert_eq!(plan_drawings("a; b; c; d; e x3").len(), 8, "capped");
+        // Numbers that aren't counts stay in the prompt.
+        assert_eq!(plan_drawings("2 cats on a sofa"), vec!["2 cats on a sofa"]);
+        assert_eq!(plan_drawings("Kat and her dog at the beach"), vec!["Kat and her dog at the beach"]);
+        assert!(plan_drawings("  ").is_empty());
+    }
 }
 
 // ---------------------------------------------------------------- memory

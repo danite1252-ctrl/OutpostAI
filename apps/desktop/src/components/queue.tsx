@@ -61,7 +61,7 @@ export function QueueButton({ token, onOpenCreate, onOpenGallery }: { token: str
   // Workflow names, once.
   useEffect(() => {
     createApi.packs(token).then(
-      (ps) => setNames(Object.fromEntries(ps.map((p) => [p.id, p.name]))),
+      (ps) => setNames({ ...Object.fromEntries(ps.map((p) => [p.id, p.name])), train: "Training a character" }),
       () => undefined,
     );
   }, [token]);
