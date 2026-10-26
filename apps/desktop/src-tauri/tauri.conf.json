@@ -29,7 +29,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis"
+    ],
     "category": "Productivity",
     "shortDescription": "Your private AI outpost",
     "icon": [
@@ -38,6 +40,27 @@
       "icons/128x128@2x.png",
       "icons/icon.png",
       "icons/icon.ico"
-    ]
+    ],
+    "publisher": "OutpostAI",
+    "copyright": "MIT licence",
+    "homepage": "https://github.com/danite1252-ctrl/OutpostAI",
+    "longDescription": "Outpost runs AI on your own PC: chat, pictures, voice and character training, for you and your household, with nothing sent to the cloud.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYwMzRERkJCNzk0MzE3MTkKUldRWkYwTjV1OTgwWU5JOS9UdlFOMU9DMDMwU2ptRnNSZGt6ekFDcHI3Y0gvN0o2bis5UXorZ0oK",
+      "endpoints": [
+        "https://github.com/danite1252-ctrl/OutpostAI/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

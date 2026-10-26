@@ -3,7 +3,7 @@ use utoipa::{Modify, OpenApi};
 
 use crate::error::{ErrorBody, ErrorDetail};
 use crate::routes::{
-    accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, training, voice, webhooks,
+    accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, system, training, voice, webhooks,
     SignInResponse,
 };
 
@@ -87,6 +87,15 @@ use crate::routes::{
         voice::openai_speech,
         voice::openai_transcriptions,
         crate::mcp::integrations,
+        system::diagnostics,
+        system::mark_seen,
+        system::recent_log,
+        system::crash,
+        system::delete_crash,
+        system::delete_all_crashes,
+        system::update_status,
+        system::check_updates,
+        system::update_settings,
         webhooks::list,
         webhooks::create,
         webhooks::delete,
@@ -126,7 +135,7 @@ use crate::routes::{
     )),
     modifiers(&BearerAuth),
     tags(
-        (name = "system", description = "Health and settings"),
+        (name = "system", description = "Health, settings, diagnostics (logs and crash reports on this PC) and updates"),
         (name = "engines", description = "Ollama and ComfyUI: install, start, stop"),
         (name = "models", description = "Hardware, model catalogue and downloads"),
         (name = "chat", description = "Personas, chats with streamed replies, memory"),

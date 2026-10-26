@@ -11,6 +11,7 @@ pub mod network;
 pub mod openai;
 pub mod pairing;
 pub mod setup;
+pub mod system;
 pub mod training;
 pub mod voice;
 pub mod webhooks;

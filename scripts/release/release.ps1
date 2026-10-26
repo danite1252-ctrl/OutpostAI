@@ -1,0 +1,145 @@
+# Build an Outpost release: the Windows installer (signed for the updater), the phone app
+# (signed with the release key) and latest.json, ready to put on GitHub Releases.
+#
+#   1. Build:    powershell -ExecutionPolicy Bypass -File scripts\release\release.ps1 -Version 0.2.0 -Notes "What's new..."
+#   2. Commit and push the version change it made.
+#   3. Publish:  powershell -ExecutionPolicy Bypass -File scripts\release\release.ps1 -Version 0.2.0 -Notes "What's new..." -PublishOnly
+#
+# Needs, once: the update key ($HOME\.outpost\updater.key, from `npx tauri signer generate`)
+# and the phone key ($HOME\.outpost\outpost-release.keystore, from make-keys.ps1).
+# See docs\releasing.md.
+
+param(
+    [Parameter(Mandatory = $true)][string]$Version,
+    [string]$Notes = "",
+    [switch]$Publish,
+    [switch]$PublishOnly,
+    [switch]$SkipPhone
+)
+
+$ErrorActionPreference = "Stop"
+$repo = "danite1252-ctrl/OutpostAI"
+$root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+$keys = Join-Path $HOME ".outpost"
+$updaterKey = Join-Path $keys "updater.key"
+$keystore = Join-Path $keys "outpost-release.keystore"
+$tag = "v$Version"
+$out = Join-Path $root "target\release-out\$tag"
+
+function Step($text) { Write-Host ""; Write-Host "== $text" -ForegroundColor Cyan }
+function Run($what) {
+    & $what[0] $what[1..($what.Length - 1)]
+    if ($LASTEXITCODE -ne 0) { throw "Failed: $($what -join ' ')" }
+}
+function Plain($secure) {
+    [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+}
+
+if ($Publish -and -not $PublishOnly) { throw "Build first (without -Publish), commit and push the version change, then run again with -PublishOnly." }
+if ($PublishOnly) {
+    $Publish = $true
+    if (-not (Test-Path (Join-Path $out "latest.json"))) { throw "Nothing built for $tag yet: run this without -PublishOnly first." }
+    Set-Location $root
+    if (git status --porcelain) { throw "Commit (and push) the version change first: git add -A; git commit -m `"Outpost $Version`"; git push" }
+}
+if (-not $PublishOnly) {
+
+if (-not (Test-Path $updaterKey)) { throw "No update key at $updaterKey. Make it first (docs\releasing.md)." }
+if (-not $SkipPhone -and -not (Test-Path $keystore)) { throw "No phone release key at $keystore. Run scripts\release\make-keys.ps1 first, or add -SkipPhone." }
+
+Set-Location $root
+# Version files may already be changed by an earlier try of this release.
+$dirty = git status --porcelain | Where-Object { $_ -notmatch "Cargo\.(toml|lock)|package(-lock)?\.json|tauri\.conf\.json|app\.json|version\.ts" }
+if ($dirty) { throw "There are uncommitted changes. Commit them first, so the release matches the code." }
+
+$conf = Get-Content (Join-Path $root "apps\desktop\src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json
+if ($conf.plugins.updater.pubkey -like "PENDING*") { throw "The update key's public half isn't in tauri.conf.json yet (plugins.updater.pubkey). See docs\releasing.md." }
+
+Step "Version $Version"
+$current = (Get-Content (Join-Path $root "apps\desktop\src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json).version
+if ($current -ne $Version) { Run @("node", "scripts\release\bump.mjs", $Version) }
+
+$updaterPassword = Plain (Read-Host "Update key password" -AsSecureString)
+if (-not $SkipPhone) { $phonePassword = Plain (Read-Host "Phone release key password" -AsSecureString) }
+
+Step "Gateway (for apps that start Outpost's MCP bridge)"
+Run @("cargo", "build", "--release", "-p", "outpost-gateway")
+$bin = Join-Path $root "apps\desktop\src-tauri\binaries"
+New-Item -ItemType Directory -Force $bin | Out-Null
+Copy-Item (Join-Path $root "target\release\outpost-gateway.exe") (Join-Path $bin "outpost-gateway-x86_64-pc-windows-msvc.exe") -Force
+
+Step "Desktop installer"
+$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content $updaterKey -Raw
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $updaterPassword
+Run @("npm", "install", "--no-audit", "--no-fund")
+Run @("npm", "run", "tauri", "-w", "@outpost/desktop", "--", "build", "--config", "src-tauri/tauri.release.conf.json")
+Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY, Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+$nsis = Join-Path $root "target\release\bundle\nsis"
+$setup = Get-ChildItem $nsis -Filter "Outpost_$($Version)_x64-setup.exe" | Select-Object -First 1
+if (-not $setup) { throw "The installer wasn't made (looked in $nsis)." }
+$sig = Get-Content "$($setup.FullName).sig" -Raw
+
+New-Item -ItemType Directory -Force $out | Out-Null
+$setupName = "Outpost_$($Version)_x64-setup.exe"
+Copy-Item $setup.FullName (Join-Path $out $setupName) -Force
+Copy-Item "$($setup.FullName).sig" (Join-Path $out "$setupName.sig") -Force
+
+$apkName = "Outpost-$Version.apk"
+if (-not $SkipPhone) {
+    Step "Phone app"
+    $mobile = Join-Path $root "apps\mobile"
+    Set-Location $mobile
+    $env:CI = "true"
+    Run @("npm", "install", "--no-audit", "--no-fund")
+    Run @("npx", "expo", "prebuild", "--platform", "android", "--no-install")
+    $env:OUTPOST_KEYSTORE = $keystore
+    $env:OUTPOST_KEYSTORE_PASSWORD = $phonePassword
+    Set-Location (Join-Path $mobile "android")
+    Run @(".\gradlew.bat", "assembleRelease", "--console=plain")
+    Remove-Item Env:OUTPOST_KEYSTORE, Env:OUTPOST_KEYSTORE_PASSWORD
+    Set-Location $root
+    Copy-Item (Join-Path $mobile "android\app\build\outputs\apk\release\app-release.apk") (Join-Path $out $apkName) -Force
+}
+
+Step "latest.json"
+$download = "https://github.com/$repo/releases/download/$tag"
+$manifest = [ordered]@{
+    version   = $Version
+    notes     = $Notes
+    pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    platforms = [ordered]@{
+        "windows-x86_64" = [ordered]@{ signature = $sig.Trim(); url = "$download/$setupName" }
+    }
+}
+if (-not $SkipPhone) { $manifest.mobile = [ordered]@{ version = $Version; url = "$download/$apkName" } }
+# UTF-8 without a byte-order mark (GitHub serves it as-is).
+[IO.File]::WriteAllText((Join-Path $out "latest.json"), ($manifest | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
+
+Step "Built"
+Get-ChildItem $out | ForEach-Object { Write-Host "  $($_.Name)  ($([math]::Round($_.Length / 1MB, 1)) MB)" }
+
+$changed = git status --porcelain
+if ($changed -and -not $Publish) {
+    Write-Host ""
+    Write-Host "Next: commit and push the version change, then publish:" -ForegroundColor Yellow
+    Write-Host "  git add -A; git commit -m `"Outpost $Version`"; git push"
+    Write-Host "  powershell -ExecutionPolicy Bypass -File scripts\release\release.ps1 -Version $Version -Notes `"...`" -PublishOnly"
+}
+
+} # end of the build
+
+if ($Publish) {
+    Step "Publishing $tag on github.com/$repo"
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "The gh tool isn't installed (winget install GitHub.cli), so publish by hand: see docs\releasing.md." }
+    $files = Get-ChildItem $out | ForEach-Object { $_.FullName }
+    $notesText = if ($Notes) { $Notes } else { "Outpost $Version" }
+    # The tag goes on the commit you're on (pushed to GitHub).
+    $commit = (git rev-parse HEAD).Trim()
+    Run (@("gh", "release", "create", $tag, "--repo", $repo, "--target", $commit, "--title", "Outpost $Version", "--notes", $notesText) + $files)
+    Write-Host "Published. Installed copies of Outpost will see it within a day (or press Check now)."
+} else {
+    Write-Host ""
+    Write-Host "To publish: make a release called $tag on https://github.com/$repo/releases/new and attach every file in"
+    Write-Host "  $out"
+    Write-Host "(or run this again with -Publish once the gh tool is set up)."
+}

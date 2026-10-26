@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "externalBin": [
+      "binaries/outpost-gateway"
+    ]
+  }
+}

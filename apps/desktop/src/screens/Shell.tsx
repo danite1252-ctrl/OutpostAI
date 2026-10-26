@@ -13,6 +13,7 @@ import Train from "./Train";
 import Api from "./Api";
 import { DownloadsButton } from "../components/downloads";
 import { QueueButton } from "../components/queue";
+import { CrashNotice, UpdateBanner } from "../components/system";
 import type { CreateRequest } from "../components/gallery";
 
 type Section = "chat" | "create" | "gallery" | "train" | "models" | "personas" | "connections" | "api" | "settings";
@@ -120,6 +121,12 @@ export default function Shell({
           </div>
         </header>
 
+        {auth.account.role === "owner" && (
+          <>
+            <UpdateBanner token={auth.token} onOpenSettings={() => setSection("settings")} />
+            <CrashNotice token={auth.token} onOpenSettings={() => setSection("settings")} />
+          </>
+        )}
         {section === "chat" && (
           <div className="min-h-0 flex-1">
             <Chat token={auth.token} onUnauthorized={onSignedOutElsewhere} />

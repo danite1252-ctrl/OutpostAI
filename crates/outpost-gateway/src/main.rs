@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use clap::Parser;
 use outpost_gateway::config::{default_data_dir, DEFAULT_OLLAMA_URL};
 use outpost_gateway::{AppState, Config};
-use tracing_subscriber::EnvFilter;
 
 /// Outpost local API gateway.
 #[derive(Parser)]
@@ -71,12 +70,13 @@ async fn main() -> anyhow::Result<()> {
         return outpost_gateway::mcp::stdio_bridge(format!("http://127.0.0.1:{port}/mcp"), key).await;
     }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("outpost_gateway=info,outpost_core=info,tower_http=info")),
-        )
-        .init();
+    // Logs to the console and <data>/logs; crash reports to <data>/crash-reports.
+    let data_dir = args.data_dir.clone().unwrap_or_else(default_data_dir);
+    outpost_gateway::diagnostics::init(
+        &data_dir,
+        "gateway",
+        "outpost_gateway=info,outpost_core=info,outpost_engines=info,tower_http=info",
+    );
 
     let mut config = Config::local_default();
     config.data_dir = args.data_dir.unwrap_or_else(default_data_dir);
@@ -107,5 +107,7 @@ async fn main() -> anyhow::Result<()> {
             args.train_steps,
         ));
     }
-    outpost_gateway::serve_state(state).await
+    let result = outpost_gateway::serve_state(state).await;
+    outpost_gateway::diagnostics::clean_exit();
+    result
 }

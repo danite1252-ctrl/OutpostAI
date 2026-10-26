@@ -6,11 +6,29 @@ on your own GPU, all reachable over one API so phones and apps like Hermes can p
 
 Everything runs locally. No cloud models, accounts or services. MIT licensed.
 
-> Status: **phase 2, Create (in testing).** Phase 1 (chat) is complete: accounts with PINs,
-> the local gateway and API spec, managed Ollama and ComfyUI, the model catalogue, personas,
-> chat with formatted replies and images, memory that learns, app keys for Hermes and network
-> access. Phase 2 adds Create: image, edit, character and video workflows picked to suit your
-> graphics card, a GPU queue, a gallery and a downloads list.
+## Install
+
+Download the latest **`Outpost_<version>_x64-setup.exe`** (and the phone app,
+**`Outpost-<version>.apk`**) from
+[Releases](https://github.com/danite1252-ctrl/OutpostAI/releases). The
+[user guide](docs/user-guide.md) covers everything from first start to backups, and
+[what leaves your PC](docs/user-guide.md#privacy-what-leaves-your-pc).
+
+| | |
+| --- | --- |
+| **Chat** | Personas with memory, pictures in chat, `/draw` |
+| **Create** | Pictures, edits, characters, video and animation, picked to suit your graphics card |
+| **Train** | Characters (LoRAs) from your own photos, then use them by name |
+| **Voice** | Talk to chat, replies read aloud, hands-free conversations you can talk over |
+| **Phone** | Android app, paired with a QR code, encrypted to your PC only; Tailscale for away |
+| **Other apps** | OpenAI-compatible API, MCP server, signed webhooks |
+| **Updates** | A daily check of GitHub Releases (can be switched off); installs only when you say |
+| **Diagnostics** | Logs and crash reports kept on your PC, never sent |
+
+> Status: **phase 5c, release (in testing).** Phases 1–5b are complete. Making a release:
+> [docs/releasing.md](docs/releasing.md).
+
+# Building from source
 
 ## Layout
 
@@ -20,6 +38,8 @@ Everything runs locally. No cloud models, accounts or services. MIT licensed.
 | `crates/outpost-engines` | Installs, starts and supervises Ollama and ComfyUI |
 | `crates/outpost-gateway` | The HTTP API on port 7420 (library + `outpost-gateway` binary) |
 | `apps/desktop` | Tauri 2 + React desktop app; starts the gateway if none is running |
+| `apps/mobile` | Expo (React Native) Android app, with Outpost's own native module for the pinned connection and voice |
+| `scripts/release` | Version bump, release build and key scripts (see `docs/releasing.md`) |
 
 ## Prerequisites (Windows)
 

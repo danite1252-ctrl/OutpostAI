@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod create;
+pub mod diagnostics;
 pub mod discovery;
 pub mod error;
 pub mod extract;
@@ -16,6 +17,7 @@ pub mod routes;
 pub mod tailscale;
 pub mod tls;
 pub mod train;
+pub mod updates;
 pub mod webhooks;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -65,6 +67,8 @@ pub struct AppState {
     pub tailnet: Arc<OnceLock<IpAddr>>,
     /// Dataset captioning in progress.
     pub captions: routes::training::Captions,
+    /// What the last update check found.
+    pub updates: updates::Updates,
 }
 
 impl AppState {
@@ -102,6 +106,7 @@ impl AppState {
             tls: Arc::new(OnceLock::new()),
             tailnet: Arc::new(OnceLock::new()),
             captions: Default::default(),
+            updates: Default::default(),
         }
     }
 
@@ -136,7 +141,7 @@ const DESKTOP_ORIGINS: [&str; 5] = [
 
 pub fn router(state: AppState) -> Router {
     use routes::{
-        accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, training,
+        accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, system, training,
         voice, webhooks,
     };
 
@@ -271,6 +276,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/webhooks", get(webhooks::list).post(webhooks::create))
         .route("/api/webhooks/{id}", delete(webhooks::delete))
         .route("/api/webhooks/{id}/test", post(webhooks::test))
+        .route("/api/diagnostics", get(system::diagnostics))
+        .route("/api/diagnostics/seen", post(system::mark_seen))
+        .route("/api/diagnostics/log", get(system::recent_log))
+        .route("/api/diagnostics/crashes", delete(system::delete_all_crashes))
+        .route("/api/diagnostics/crashes/{id}", get(system::crash).delete(system::delete_crash))
+        .route("/api/updates", get(system::update_status))
+        .route("/api/updates/check", post(system::check_updates))
+        .route("/api/updates/settings", put(system::update_settings))
         .route("/api/hardware", get(models::hardware))
         .route("/api/models", get(models::overview))
         .route("/api/models/pull", post(models::pull))
@@ -307,6 +320,8 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     let starter = engines.clone();
     tokio::spawn(async move { starter.init().await });
     tokio::spawn(create::worker(state.clone()));
+    // The one call to the internet: a daily look for a newer release (can be switched off).
+    tokio::spawn(updates::background(state.clone()));
     // With network access on, phones get the encrypted port next door, and the
     // Outpost announces itself on the network.
     let background = start_remote_access(&state).await;

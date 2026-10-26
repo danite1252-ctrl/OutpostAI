@@ -17,5 +17,10 @@ tauri-build = { version = "2", features = [] }
 outpost-engines.workspace = true
 outpost-gateway.workspace = true
 tauri = { version = "2", features = [] }
+# Installing a newer release after you press Update (the download's signature is checked).
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+# tauri::generate_context! writes the plugins' settings (the updater's) as serde_json values.
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

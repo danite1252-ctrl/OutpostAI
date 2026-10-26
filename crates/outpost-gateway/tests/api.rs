@@ -381,6 +381,11 @@ async fn openapi_lists_every_route() {
         "/api/characters",
         "/api/characters/{id}",
         "/api/characters/lora-files",
+        "/api/diagnostics",
+        "/api/diagnostics/crashes/{id}",
+        "/api/updates",
+        "/api/updates/check",
+        "/api/updates/settings",
     ] {
         assert!(paths.contains_key(p), "missing {p} in OpenAPI spec");
     }
@@ -1418,4 +1423,30 @@ async fn voice_explains_when_it_isnt_running() {
     assert_eq!((p["voice"].as_str(), p["speak_replies"].as_bool()), (Some("bm_george"), Some(true)));
     let (status, _) = call(&app, "PATCH", &format!("/api/personas/{id}"), t, Some(json!({"voice": "../../x"}))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn diagnostics_and_update_settings() {
+    let app = app().await;
+    let (token, _) = setup_owner(&app).await;
+    let t = Some(token.as_str());
+
+    let (status, d) = call(&app, "GET", "/api/diagnostics", t, None).await;
+    assert_eq!(status, StatusCode::OK, "{d}");
+    assert!(d["crash_dir"].as_str().unwrap().ends_with("crash-reports"));
+    assert_eq!(d["crashes"].as_array().unwrap().len(), 0);
+    let (status, _) = call(&app, "GET", "/api/diagnostics/crashes/..%2F..%2Foutpost.db", t, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(&app, "GET", "/api/diagnostics", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Update checks are on by default and can be switched off (no network call is made here).
+    let (status, u) = call(&app, "GET", "/api/updates", t, None).await;
+    assert_eq!(status, StatusCode::OK, "{u}");
+    assert_eq!(u["current"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(u["enabled"], true);
+    assert!(u["update"].is_null());
+    let (status, u) = call(&app, "PUT", "/api/updates/settings", t, Some(json!({"enabled": false}))).await;
+    assert_eq!(status, StatusCode::OK, "{u}");
+    assert_eq!(u["enabled"], false);
 }

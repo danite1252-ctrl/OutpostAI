@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Alert, ScrollView, Text, View } from "react-native";
+import { Alert, Linking, ScrollView, Text, View } from "react-native";
 import { checkWords } from "../words";
+import { APP_VERSION } from "../version";
 import type { Outpost } from "../outpost";
 import { loadVoiceCheck, saveVoiceCheck, type Saved } from "../store";
 import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
@@ -11,6 +12,14 @@ export default function Me({ api, saved, onSignedOut }: { api: Outpost; saved: S
   useEffect(() => {
     void loadVoiceCheck().then(setVoiceCheck);
   }, []);
+  // The PC checks GitHub for releases; a newer phone app is shown here (downloading it is up to you).
+  const [newer, setNewer] = useState<{ version: string; url: string } | null>(null);
+  useEffect(() => {
+    api
+      .get<{ mobile: { version: string; url: string } | null }>("/api/updates")
+      .then((u) => setNewer(u.mobile && isNewer(u.mobile.version, APP_VERSION) ? u.mobile : null))
+      .catch(() => undefined);
+  }, [api]);
 
   function unpair() {
     Alert.alert("Unpair this phone?", "It signs out of Outpost. You can pair it again from the PC.", [
@@ -52,6 +61,13 @@ export default function Me({ api, saved, onSignedOut }: { api: Outpost; saved: S
         This phone only talks to that PC, checked by its certificate. Risky things (deleting models, making app keys,
         changing accounts) ask for your PIN again.
       </P>
+      {newer && (
+        <View style={[s.card, { borderColor: C.ember }]}>
+          <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Outpost {newer.version} for this phone is out</Text>
+          <P muted>You have {APP_VERSION}. Download it, open it, and Android installs it over this one (you stay paired).</P>
+          <Button title="Download the new app" onPress={() => void Linking.openURL(newer.url)} />
+        </View>
+      )}
       <View style={s.card}>
         <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Troubleshooting</Text>
         <P muted>
@@ -71,7 +87,19 @@ export default function Me({ api, saved, onSignedOut }: { api: Outpost; saved: S
         </View>
       </View>
       <Button kind="danger" title="Unpair this phone" onPress={unpair} />
+      <P muted>Outpost for Android {APP_VERSION}</P>
       <ErrorText>{error}</ErrorText>
     </ScrollView>
   );
+}
+
+/** `a` is a newer version than `b` (0.10.0 > 0.9.2). */
+function isNewer(a: string, b: string) {
+  const parts = (v: string) => v.replace(/^v/, "").split("-")[0].split(".").map((n) => parseInt(n, 10) || 0);
+  const x = parts(a);
+  const y = parts(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0);
+  }
+  return false;
 }

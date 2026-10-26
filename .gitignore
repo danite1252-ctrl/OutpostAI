@@ -16,3 +16,8 @@ apps/mobile/.expo
 apps/mobile/.idea
 apps/mobile/modules/*/android/build
 apps/mobile/modules/*/android/.gradle
+# Release builds: the gateway copied in for the installer, and the finished files
+apps/desktop/src-tauri/binaries/
+# Signing keys never go in the repo (they live in %USERPROFILE%\.outpost)
+*.keystore
+*.key

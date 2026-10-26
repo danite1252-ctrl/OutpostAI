@@ -846,6 +846,51 @@ export interface McpTool {
   description: string;
 }
 
+export interface CrashSummary {
+  id: string;
+  /** "crash" (an error Outpost caught) or "unclean" (it didn't close normally). */
+  kind: "crash" | "unclean" | string;
+  /** Unix seconds. */
+  at: number;
+  summary: string;
+}
+
+export interface Diagnostics {
+  logs_dir: string;
+  crash_dir: string;
+  crashes: CrashSummary[];
+  unseen: number;
+}
+
+export interface Release {
+  version: string;
+  notes: string | null;
+  date: string | null;
+}
+
+export interface UpdateStatus {
+  current: string;
+  enabled: boolean;
+  repo: string;
+  releases_page: string;
+  checked_at: number | null;
+  update: Release | null;
+  mobile: { version: string; url: string } | null;
+  error: string | null;
+}
+
+export const systemApi = {
+  diagnostics: (token: string) => request<Diagnostics>("GET", "/api/diagnostics", { token }),
+  markSeen: (token: string) => request<void>("POST", "/api/diagnostics/seen", { token }),
+  crash: (token: string, id: string) => request<{ id: string; text: string }>("GET", `/api/diagnostics/crashes/${encodeURIComponent(id)}`, { token }),
+  deleteCrash: (token: string, id: string) => request<void>("DELETE", `/api/diagnostics/crashes/${encodeURIComponent(id)}`, { token }),
+  deleteAllCrashes: (token: string) => request<void>("DELETE", "/api/diagnostics/crashes", { token }),
+  recentLog: (token: string) => request<{ text: string }>("GET", "/api/diagnostics/log", { token }),
+  updates: (token: string) => request<UpdateStatus>("GET", "/api/updates", { token }),
+  checkUpdates: (token: string) => request<UpdateStatus>("POST", "/api/updates/check", { token }),
+  setUpdates: (token: string, enabled: boolean) => request<UpdateStatus>("PUT", "/api/updates/settings", { token, body: { enabled } }),
+};
+
 export const integrationsApi = {
   get: (token: string) => request<{ port: number; bridge_path: string | null }>("GET", "/api/integrations", { token }),
   /** The OpenAPI document (no sign-in needed). */
