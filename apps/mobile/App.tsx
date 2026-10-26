@@ -8,6 +8,7 @@ import Chat from "./src/screens/Chat";
 import Create from "./src/screens/Create";
 import Gallery from "./src/screens/Gallery";
 import Me from "./src/screens/Me";
+import { UpdateBar, usePhoneUpdate } from "./src/updater";
 import Pair from "./src/screens/Pair";
 import Queue, { useLine } from "./src/screens/Queue";
 import { awayFor, forget, load, markAway, save, type Saved } from "./src/store";
@@ -113,6 +114,7 @@ function Unlock({ saved, onUnlocked }: { saved: Saved; onUnlocked: () => void })
 function Main({ saved, onSaved, onSignedOut }: { saved: Saved; onSaved: (s: Saved) => void; onSignedOut: () => void }) {
   const [tab, setTab] = useState<Tab>("chat");
   const api = useMemo(() => new Outpost({ ...saved }), [saved]);
+  const update = usePhoneUpdate(api);
   const [revoked, setRevoked] = useState(false);
   const line = useLine(api, tab === "queue");
   const [editImage, setEditImage] = useState<{ dataUri: string; task: "edit" | "animate" } | null>(null);
@@ -178,6 +180,7 @@ function Main({ saved, onSaved, onSignedOut }: { saved: Saved; onSaved: (s: Save
   return (
     <View style={s.screen}>
       <Connection api={api} />
+      <UpdateBar update={update} />
       <View style={{ flex: 1 }} key={reconnects}>
         {tab === "chat" && <Chat api={api} onError={onError} />}
         {tab === "create" && (
@@ -195,7 +198,7 @@ function Main({ saved, onSaved, onSignedOut }: { saved: Saved; onSaved: (s: Save
           />
         )}
         {tab === "queue" && <Queue api={api} line={line} onError={onError} />}
-        {tab === "me" && <Me api={api} saved={saved} onSignedOut={onSignedOut} />}
+        {tab === "me" && <Me api={api} saved={saved} onSignedOut={onSignedOut} update={update} />}
       </View>
       <View style={{ flexDirection: "row", borderTopWidth: 1, borderTopColor: C.line, backgroundColor: C.surface, display: typing ? "none" : "flex" }}>
         {TABS.map((t) => (

@@ -6,7 +6,7 @@
 //! ```json
 //! { "version": "0.2.0", "notes": "...", "pub_date": "2026-11-01T00:00:00Z",
 //!   "platforms": { "windows-x86_64": { "url": "...setup.exe", "signature": "..." } },
-//!   "mobile": { "version": "0.2.0", "url": "https://github.com/.../Outpost-0.2.0.apk" } }
+//!   "mobile": { "version": "0.2.0", "url": "https://github.com/.../Outpost-0.2.0.apk", "sha256": "..." } }
 //! ```
 //!
 //! Outpost only reads it and says an update is ready; installing is the desktop app's job,
@@ -59,6 +59,9 @@ pub struct MobileRelease {
     pub version: String,
     /// Download link for the APK.
     pub url: String,
+    /// SHA-256 of the APK (lowercase hex), checked by the phone after downloading.
+    #[serde(default)]
+    pub sha256: Option<String>,
 }
 
 /// A newer release.

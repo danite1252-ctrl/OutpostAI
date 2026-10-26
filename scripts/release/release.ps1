@@ -133,7 +133,11 @@ $manifest = [ordered]@{
         "windows-x86_64" = [ordered]@{ signature = $sig.Trim(); url = "$download/$setupName" }
     }
 }
-if (-not $SkipPhone) { $manifest.mobile = [ordered]@{ version = $Version; url = "$download/$apkName" } }
+if (-not $SkipPhone) {
+    # The phone checks the download against this before installing it.
+    $apkHash = (Get-FileHash (Join-Path $out $apkName) -Algorithm SHA256).Hash.ToLower()
+    $manifest.mobile = [ordered]@{ version = $Version; url = "$download/$apkName"; sha256 = $apkHash }
+}
 # UTF-8 without a byte-order mark (GitHub serves it as-is).
 [IO.File]::WriteAllText((Join-Path $out "latest.json"), ($manifest | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
 

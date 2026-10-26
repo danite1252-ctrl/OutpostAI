@@ -47,6 +47,25 @@ export async function saveVoiceCheck(on: boolean): Promise<void> {
   }
 }
 
+const AUTO_UPDATE_KEY = "outpost.auto-update.v1";
+
+/** Download phone app updates by themselves, and install them on the way out. On unless turned off. */
+export async function loadAutoUpdate(): Promise<boolean> {
+  try {
+    return (await SecureStore.getItemAsync(AUTO_UPDATE_KEY)) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+export async function saveAutoUpdate(on: boolean): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(AUTO_UPDATE_KEY, on ? "1" : "0");
+  } catch {
+    // Not kept: stays on.
+  }
+}
+
 const AWAY_KEY = "outpost.away.v1";
 
 /** Note when the app went to the background (kept across the app being closed). */

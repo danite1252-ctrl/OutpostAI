@@ -97,6 +97,7 @@ class OutpostNetModule : Module() {
   private val context: Context
     get() = appContext.reactContext ?: throw IllegalStateException("No Android context.")
 
+  private val updater by lazy { AppUpdater({ context }) { name, body -> sendEvent(name, body) } }
   private val voice by lazy { PhoneVoice({ context }) { name, body -> sendEvent(name, body) } }
 
   private fun client(fingerprint: String): OkHttpClient =
@@ -131,7 +132,34 @@ class OutpostNetModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("OutpostNet")
 
-    Events("onChunk", "onEnd", "onError", "onService", "onServiceLost", "onSpeech", "onRecording", "onPlayback", "onConverse")
+    Events("onChunk", "onEnd", "onError", "onService", "onServiceLost", "onSpeech", "onRecording", "onPlayback", "onConverse", "onUpdate")
+
+    // ------------------------------------------------------------ updating the app (see AppUpdater)
+
+    Function("updateStatus") { updater.status() }
+    Function("openInstallSettings") { updater.openInstallSettings(); Unit }
+    Function("updateDownloaded") { name: String -> updater.downloaded(name) }
+
+    AsyncFunction("downloadUpdate") { url: String, name: String, sha256: String?, promise: Promise ->
+      Thread {
+        try {
+          promise.resolve(updater.download(url, name, sha256))
+        } catch (e: Exception) {
+          promise.reject("ERR_UPDATE", e.message ?: "The update couldn't be downloaded.", e)
+        }
+      }.start()
+    }
+
+    AsyncFunction("installUpdate") { path: String, promise: Promise ->
+      Thread {
+        try {
+          updater.install(path)
+          promise.resolve(null)
+        } catch (e: Exception) {
+          promise.reject("ERR_UPDATE", e.message ?: "The update couldn't be installed.", e)
+        }
+      }.start()
+    }
 
     // ------------------------------------------------------------ voice (see PhoneVoice)
 

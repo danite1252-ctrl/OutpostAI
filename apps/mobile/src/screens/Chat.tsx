@@ -1,6 +1,6 @@
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Alert, BackHandler, Image, Keyboard, KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, BackHandler, Image, Keyboard, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { MicIcon, PlusIcon, SendIcon, StopIcon } from "../icons";
 import { AuthedImage } from "../images";
 import { GalleryPicker } from "./Create";
@@ -259,8 +259,8 @@ function Conversation({
   }
 
   return (
-    // The message bar rides up with the keyboard, and the chat above shrinks to fit.
-    <KeyboardAvoidingView style={s.screen} behavior="padding">
+    // The app pads itself above the keyboard (App.tsx), so the chat above shrinks to fit.
+    <View style={s.screen}>
       <View style={[s.row, { padding: 12, borderBottomWidth: 1, borderBottomColor: C.line }]}>
         <Pressable accessibilityRole="button" accessibilityLabel="Back to chats" onPress={onBack} style={[s.chip, { minHeight: 40 }]}>
           <Text style={{ color: C.ink }}>‹ Chats</Text>
@@ -401,7 +401,7 @@ function Conversation({
           }}
         />
       )}
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 

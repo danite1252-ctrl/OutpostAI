@@ -4,6 +4,10 @@
   <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
   <!-- Talking to a persona: asked for the first time the microphone is used. -->
   <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <!-- Updating the app from inside it: Android asks once to allow it, and (Android 14+)
+       later updates of itself can go in without a prompt. -->
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+  <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
   <!-- Android 11+ only shows apps the speech recognizer if they say they look for it. -->
   <queries>
     <intent>

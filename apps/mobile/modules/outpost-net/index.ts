@@ -37,7 +37,14 @@ type Events = {
   onRecording(e: RecordingEvent): void;
   onPlayback(e: { type: "end" | "stopped" | "error" | "level"; message?: string; level?: number }): void;
   onConverse(e: ConverseEvent): void;
+  onUpdate(e: UpdateEvent): void;
 };
+
+/** Installing a phone app update: download progress, Android's prompt, the result. */
+export type UpdateEvent =
+  | { type: "progress"; percent: number }
+  | { type: "confirm" | "installed" | "cancelled" }
+  | { type: "failed"; message: string };
 
 /** Hands-free listening (always-on microphone with echo cancelling). */
 export type ConverseEvent =
@@ -94,6 +101,16 @@ declare class OutpostNetModule extends NativeModule<Events> {
   converse(bargeIn: boolean): void;
   converseMuted(muted: boolean): void;
   stopConversation(): void;
+  /** Whether Outpost may install apps, and whether its own updates can skip the prompt. */
+  updateStatus(): { canInstall: boolean; silent: boolean; sdk: number };
+  /** Android's "Install unknown apps" page for Outpost. */
+  openInstallSettings(): void;
+  /** The path of an update already downloaded under `name`, or null. */
+  updateDownloaded(name: string): string | null;
+  /** Download an update (HTTPS); resolves with its path. */
+  downloadUpdate(url: string, name: string, sha256: string | null): Promise<string>;
+  /** Hand a downloaded update to Android's installer (it closes Outpost to update). */
+  installUpdate(path: string): Promise<void>;
   stopDiscovery(): void;
 }
 

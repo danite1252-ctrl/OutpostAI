@@ -1,25 +1,33 @@
 import { useEffect, useState } from "react";
-import { Alert, Linking, ScrollView, Text, View } from "react-native";
+import { Alert, ScrollView, Text, View } from "react-native";
 import { checkWords } from "../words";
 import { APP_VERSION } from "../version";
 import type { Outpost } from "../outpost";
-import { loadVoiceCheck, saveVoiceCheck, type Saved } from "../store";
+import { loadAutoUpdate, loadVoiceCheck, saveAutoUpdate, saveVoiceCheck, type Saved } from "../store";
+import type { usePhoneUpdate } from "../updater";
 import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
 
-export default function Me({ api, saved, onSignedOut }: { api: Outpost; saved: Saved; onSignedOut: () => void }) {
+export default function Me({
+  api,
+  saved,
+  onSignedOut,
+  update,
+}: {
+  api: Outpost;
+  saved: Saved;
+  onSignedOut: () => void;
+  update: ReturnType<typeof usePhoneUpdate>;
+}) {
   const [error, setError] = useState<string | null>(null);
   const [voiceCheck, setVoiceCheck] = useState(false);
   useEffect(() => {
     void loadVoiceCheck().then(setVoiceCheck);
   }, []);
-  // The PC checks GitHub for releases; a newer phone app is shown here (downloading it is up to you).
-  const [newer, setNewer] = useState<{ version: string; url: string } | null>(null);
+  const [auto, setAuto] = useState(true);
   useEffect(() => {
-    api
-      .get<{ mobile: { version: string; url: string } | null }>("/api/updates")
-      .then((u) => setNewer(u.mobile && isNewer(u.mobile.version, APP_VERSION) ? u.mobile : null))
-      .catch(() => undefined);
-  }, [api]);
+    void loadAutoUpdate().then(setAuto);
+  }, []);
+  const u = update.state;
 
   function unpair() {
     Alert.alert("Unpair this phone?", "It signs out of Outpost. You can pair it again from the PC.", [
@@ -61,13 +69,42 @@ export default function Me({ api, saved, onSignedOut }: { api: Outpost; saved: S
         This phone only talks to that PC, checked by its certificate. Risky things (deleting models, making app keys,
         changing accounts) ask for your PIN again.
       </P>
-      {newer && (
-        <View style={[s.card, { borderColor: C.ember }]}>
-          <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Outpost {newer.version} for this phone is out</Text>
-          <P muted>You have {APP_VERSION}. Download it, open it, and Android installs it over this one (you stay paired).</P>
-          <Button title="Download the new app" onPress={() => void Linking.openURL(newer.url)} />
+      <View style={s.card}>
+        <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Updates</Text>
+        <P muted>
+          {u.phase === "none"
+            ? `Outpost ${APP_VERSION} for Android: up to date.`
+            : u.phase === "available"
+              ? `Outpost ${u.version} is out (you have ${APP_VERSION}).`
+              : u.phase === "downloading"
+                ? `Downloading Outpost ${u.version}… ${u.percent}%`
+                : u.phase === "ready"
+                  ? `Outpost ${u.version} is downloaded and ready.${u.silent && auto ? " It installs by itself the next time you leave the app." : ""}`
+                  : u.phase === "permission"
+                    ? `Outpost ${u.version} is ready. Android needs you to allow Outpost to install its updates (once).`
+                    : u.phase === "installing"
+                      ? `Installing Outpost ${u.version}…`
+                      : `Outpost ${u.version}: ${u.message}`}
+        </P>
+        {u.phase === "available" && <Button title="Download it" onPress={update.download} />}
+        {(u.phase === "ready" || u.phase === "error") && <Button title="Restart to update" onPress={() => void update.install()} />}
+        {u.phase === "permission" && <Button title="Allow updates" onPress={update.allow} />}
+        <View style={s.row}>
+          <Chip
+            label={auto ? "Install updates automatically: on" : "Install updates automatically: off"}
+            active={auto}
+            onPress={() => {
+              const on = !auto;
+              setAuto(on);
+              void saveAutoUpdate(on);
+            }}
+          />
         </View>
-      )}
+        <P muted>
+          Updates come from Outpost's GitHub releases (about 90 MB) and only install if they're signed with the same key
+          as this app. You stay paired.
+        </P>
+      </View>
       <View style={s.card}>
         <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Troubleshooting</Text>
         <P muted>
@@ -91,15 +128,4 @@ export default function Me({ api, saved, onSignedOut }: { api: Outpost; saved: S
       <ErrorText>{error}</ErrorText>
     </ScrollView>
   );
-}
-
-/** `a` is a newer version than `b` (0.10.0 > 0.9.2). */
-function isNewer(a: string, b: string) {
-  const parts = (v: string) => v.replace(/^v/, "").split("-")[0].split(".").map((n) => parseInt(n, 10) || 0);
-  const x = parts(a);
-  const y = parts(b);
-  for (let i = 0; i < Math.max(x.length, y.length); i++) {
-    if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0);
-  }
-  return false;
 }

@@ -119,8 +119,13 @@ recogniser (on the phone where it can, otherwise the phone's speech service).
 
 The phone talks only to your PC, over an encrypted connection checked against the PC's own
 certificate. Away from home it works over **Tailscale** (Connections › Allow my Tailscale devices). It has
-chat (with voice), Create, the Gallery and the queue. When a newer phone app is out, the
-**You** tab says so.
+chat (with voice), Create, the Gallery and the queue.
+
+**Phone app updates** download by themselves (about 90 MB, from the GitHub release) and
+install when you press **Restart to update**. The first time, Android asks you to allow
+Outpost to install apps and to confirm. After that, updates install by themselves the next
+time you leave the app. Switch this off in **You › Updates**. Android only installs an
+update signed with the same key as the app you have, and you stay paired.
 
 ## Other apps: API, MCP and webhooks
 
