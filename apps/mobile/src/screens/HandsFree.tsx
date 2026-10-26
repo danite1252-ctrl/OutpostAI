@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BackHandler, Modal, ScrollView, Text, View } from "react-native";
 import OutpostNet, { type ConverseEvent } from "../../modules/outpost-net";
 import type { Message, Outpost, Persona } from "../outpost";
+import { loadVoiceCheck } from "../store";
 import { Avatar, Button, C, Chip, s } from "../ui";
 import { allowMicrophone, say, stopSaying } from "../voice";
 import { VoiceWave, type WaveMode } from "../wave";
@@ -64,6 +65,11 @@ export default function HandsFree({
   /** What the microphone hears, for the check line at the bottom. */
   const [meter, setMeter] = useState<{ db: number; room: number; voice: boolean; inSpeech: boolean } | null>(null);
   const [lastStep, setLastStep] = useState("");
+  /** Troubleshooting line (You › Troubleshooting › Voice check line). */
+  const [showCheck, setShowCheck] = useState(false);
+  useEffect(() => {
+    void loadVoiceCheck().then(setShowCheck);
+  }, []);
   const live = useRef(true);
   const phaseRef = useRef<Phase>("starting");
   const queue = useRef<Said[]>([]);
@@ -371,7 +377,7 @@ export default function HandsFree({
           <Text style={{ color: C.muted, fontSize: 12, textAlign: "center" }}>
             Just talk, then pause.{over ? " Talk while it answers to cut in." : ""} Your PC works out what you said.
           </Text>
-          {meter ? (
+          {showCheck && meter ? (
             <Text style={{ color: C.muted, fontSize: 11, textAlign: "center", fontVariant: ["tabular-nums"] }}>
               Mic {Math.round(meter.db)} dB · room {Math.round(meter.room)} dB · {meter.inSpeech ? "hearing you" : meter.voice ? "voice-like" : "quiet"}
               {lastStep ? `\n${lastStep}` : ""}

@@ -28,6 +28,25 @@ export async function forget(): Promise<void> {
   await SecureStore.deleteItemAsync(KEY);
 }
 
+const VOICE_CHECK_KEY = "outpost.voice-check.v1";
+
+/** Troubleshooting: show microphone levels on the hands-free screen. Off unless turned on in You. */
+export async function loadVoiceCheck(): Promise<boolean> {
+  try {
+    return (await SecureStore.getItemAsync(VOICE_CHECK_KEY)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export async function saveVoiceCheck(on: boolean): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(VOICE_CHECK_KEY, on ? "1" : "0");
+  } catch {
+    // Not kept: it goes back to off, which is the default anyway.
+  }
+}
+
 const AWAY_KEY = "outpost.away.v1";
 
 /** Note when the app went to the background (kept across the app being closed). */

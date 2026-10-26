@@ -1,12 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, ScrollView, Text, View } from "react-native";
 import { checkWords } from "../words";
 import type { Outpost } from "../outpost";
-import type { Saved } from "../store";
-import { Avatar, Button, C, ErrorText, H1, P, s } from "../ui";
+import { loadVoiceCheck, saveVoiceCheck, type Saved } from "../store";
+import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
 
 export default function Me({ api, saved, onSignedOut }: { api: Outpost; saved: Saved; onSignedOut: () => void }) {
   const [error, setError] = useState<string | null>(null);
+  const [voiceCheck, setVoiceCheck] = useState(false);
+  useEffect(() => {
+    void loadVoiceCheck().then(setVoiceCheck);
+  }, []);
 
   function unpair() {
     Alert.alert("Unpair this phone?", "It signs out of Outpost. You can pair it again from the PC.", [
@@ -48,6 +52,24 @@ export default function Me({ api, saved, onSignedOut }: { api: Outpost; saved: S
         This phone only talks to that PC, checked by its certificate. Risky things (deleting models, making app keys,
         changing accounts) ask for your PIN again.
       </P>
+      <View style={s.card}>
+        <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Troubleshooting</Text>
+        <P muted>
+          Voice check line: shows the microphone and room levels on the hands-free screen, and what happened to the
+          last thing you said. Useful if hands-free doesn't hear you or doesn't answer.
+        </P>
+        <View style={s.row}>
+          <Chip
+            label={voiceCheck ? "Voice check line: on" : "Voice check line: off"}
+            active={voiceCheck}
+            onPress={() => {
+              const on = !voiceCheck;
+              setVoiceCheck(on);
+              void saveVoiceCheck(on);
+            }}
+          />
+        </View>
+      </View>
       <Button kind="danger" title="Unpair this phone" onPress={unpair} />
       <ErrorText>{error}</ErrorText>
     </ScrollView>
