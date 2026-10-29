@@ -42,6 +42,24 @@ export default function Chat({ api, onError }: { api: Outpost; onError: (e: unkn
     }
   }
 
+  // Long-press a chat to delete it (with its pictures, and what the persona learned from it).
+  const removeChat = (c: ChatT) =>
+    Alert.alert("Delete this chat?", `"${c.title}" goes, with its pictures and anything the persona learned from it.`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () =>
+          void api.json("DELETE", `/api/chats/${c.id}`).then(
+            () => setChats((list) => list.filter((x) => x.id !== c.id)),
+            (e) => {
+              onError(e);
+              setError(e instanceof Error ? e.message : "Couldn't delete that chat.");
+            },
+          ),
+      },
+    ]);
+
   if (open) {
     return (
       <Conversation
@@ -74,7 +92,10 @@ export default function Chat({ api, onError }: { api: Outpost; onError: (e: unkn
           <Pressable
             key={c.id}
             accessibilityRole="button"
+            accessibilityHint="Long-press to delete"
             onPress={() => setOpen(c)}
+            onLongPress={() => removeChat(c)}
+            delayLongPress={450}
             style={({ pressed }) => [s.card, s.row, pressed && { backgroundColor: C.raised }]}
           >
             <Avatar name={p?.name ?? "AI"} color={p?.avatar_color ?? C.amber} />
@@ -87,7 +108,7 @@ export default function Chat({ api, onError }: { api: Outpost; onError: (e: unkn
           </Pressable>
         );
       })}
-      {chats.length === 0 && <P muted>No chats yet. Everything stays on your PC.</P>}
+      {chats.length === 0 ? <P muted>No chats yet. Everything stays on your PC.</P> : <P muted>Long-press a chat to delete it.</P>}
     </ScrollView>
   );
 }

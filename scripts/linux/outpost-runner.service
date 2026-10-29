@@ -1,0 +1,12 @@
+# The Linux test runner as a systemd user service (see scripts/linux/runner.sh).
+[Unit]
+Description=Outpost Linux test runner
+After=network-online.target remote-fs.target
+
+[Service]
+ExecStart=%h/outpost-runner.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
