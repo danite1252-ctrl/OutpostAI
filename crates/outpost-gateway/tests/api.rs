@@ -387,6 +387,13 @@ async fn openapi_lists_every_route() {
         "/api/updates/check",
         "/api/updates/settings",
         "/api/media/import",
+        "/api/helpers",
+        "/api/helpers/poll",
+        "/api/helpers/jobs/{id}/input/{key}",
+        "/api/helpers/jobs/{id}/lora",
+        "/api/helpers/jobs/{id}/progress",
+        "/api/helpers/jobs/{id}/result",
+        "/api/helpers/jobs/{id}/finish",
     ] {
         assert!(paths.contains_key(p), "missing {p} in OpenAPI spec");
     }

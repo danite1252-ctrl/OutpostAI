@@ -103,6 +103,23 @@ If the only owner forgets their PIN, run this on the server:
 It prints a reset code and the check words (valid 24 hours); use it in the desktop or phone app
 like an invite and pick a new PIN.
 
+## Helper PCs: bigger pictures than the server's card can make
+
+A desktop PC using the server can lend its graphics card for Create jobs the server's own card
+is too small for. On that PC (signed in as an owner), open **Settings › Server › Lend this PC's
+graphics card**:
+
+- Tick **Lend this PC for Create jobs**. Install ComfyUI there if it asks, then **Download on
+  this PC** the workflows listed as too big for the server.
+- Create on every device then lists those workflows as **Runs on <that PC>**. Their jobs wait in
+  the server's queue and go to the PC when it's free; the results land in the gallery as usual.
+- Only ComfyUI runs on the helper, and only while there's a job (its models are unloaded after
+  five idle minutes). Chat stays on the server.
+- **Pause** (in Settings, or **Pause lending this PC** in the tray icon's menu) while gaming:
+  ComfyUI stops, and the queue shows "Waiting for <that PC>" until you carry on.
+- Several PCs can lend at once; each job goes to one that has the workflow and fits it. If a
+  helper is switched off mid-job, the job fails after two minutes with a note saying so.
+
 ## Updates
 
 The server checks for a new release a minute after it starts and once a day. When there is one,

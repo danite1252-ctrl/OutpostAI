@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, SERVER, systemApi, waitForServer, type CrashSummary, type Diagnostics, type UpdateStatus } from "../api";
-import { Button, ErrorNote } from "./ui";
+import { Button, ErrorNote, ToggleRow } from "./ui";
 
 function message(err: unknown) {
   if (err instanceof ApiError) return err.message;
@@ -253,7 +253,6 @@ export function UpdatesPanel({ token, canManage }: { token: string; canManage: b
   const u = status.update;
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold">Updates</h2>
       {SERVER && <AppUpdateRow />}
       <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5">
         {SERVER && <h3 className="font-semibold">The server ({SERVER.name})</h3>}
@@ -297,17 +296,18 @@ export function UpdatesPanel({ token, canManage }: { token: string; canManage: b
           {status.checked_at && <span className="text-xs text-muted">Last checked {when(status.checked_at)}</span>}
         </div>
         {canManage && (
-          <label className="flex items-start gap-3 text-sm">
-            <input type="checkbox" className="mt-1" checked={status.enabled} onChange={(e) => void toggle(e.target.checked)} />
-            <span>
-              Check for updates
-              <span className="block text-xs text-muted">
+          <ToggleRow
+            title="Check for updates"
+            hint={
+              <>
                 Once a day Outpost asks github.com/{status.repo} whether there's a newer version. It's the only time Outpost
                 goes on the internet by itself, and nothing about you or your PC is sent. Updates only install when you press
                 Update, and only if they're signed with Outpost's key.
-              </span>
-            </span>
-          </label>
+              </>
+            }
+            checked={status.enabled}
+            onChange={(on) => void toggle(on)}
+          />
         )}
         <ErrorNote>{error}</ErrorNote>
       </div>
@@ -443,7 +443,6 @@ export function DiagnosticsPanel({ token }: { token: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold">Diagnostics</h2>
       <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5">
         <p className="text-sm text-muted">
           If Outpost hits an error it can't recover from, or doesn't close normally, it saves a report here. Reports and logs
@@ -528,18 +527,13 @@ export function WindowPanel() {
   if (tray === null) return null;
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold">This window</h2>
       <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5">
-        <label className="flex items-start gap-3 text-sm">
-          <input type="checkbox" className="mt-1" checked={tray} onChange={(e) => void toggle(e.target.checked)} />
-          <span>
-            Keep Outpost running in the system tray when I close the window
-            <span className="block text-xs text-muted">
-              Phones, apps, Hermes and the picture queue keep working while the window is closed. Click the Outpost icon by
-              the clock to open it again, or right-click it and choose Quit Outpost to stop everything.
-            </span>
-          </span>
-        </label>
+        <ToggleRow
+          title="Keep running in the system tray when I close the window"
+          hint="Phones, apps, Hermes and the picture queue keep working while the window is closed. Click the Outpost icon by the clock to open it again, or right-click it and choose Quit Outpost to stop everything."
+          checked={tray}
+          onChange={(on) => void toggle(on)}
+        />
         <ErrorNote>{error}</ErrorNote>
       </div>
     </div>

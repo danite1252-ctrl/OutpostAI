@@ -216,6 +216,26 @@ pub async fn take_next(pool: &SqlitePool) -> CoreResult<Option<Job>> {
     .await?)
 }
 
+/// The oldest queued job whose pack is one of `packs`, marked running. For running some
+/// jobs here and others on a helper PC.
+pub async fn take_next_of(pool: &SqlitePool, packs: &[String]) -> CoreResult<Option<Job>> {
+    if packs.is_empty() {
+        return Ok(None);
+    }
+    let marks = vec!["?"; packs.len()].join(", ");
+    let sql = format!(
+        "UPDATE jobs SET status = 'running', started_at = ?
+         WHERE id = (SELECT id FROM jobs WHERE status = 'queued' AND pack_id IN ({marks}) ORDER BY {RUN_ORDER} LIMIT 1)
+           AND status = 'queued'
+         RETURNING {COLS}"
+    );
+    let mut q = sqlx::query_as(&sql).bind(now());
+    for p in packs {
+        q = q.bind(p);
+    }
+    Ok(q.fetch_optional(pool).await?)
+}
+
 pub async fn set_seed(pool: &SqlitePool, id: &str, seed: u64) -> CoreResult<()> {
     sqlx::query("UPDATE jobs SET seed = ? WHERE id = ?")
         .bind(seed as i64)

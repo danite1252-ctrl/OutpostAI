@@ -2,6 +2,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
 use crate::error::{ErrorBody, ErrorDetail};
+use crate::helpers;
 use crate::routes::{
     accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, system, training, voice, webhooks,
     SignInResponse,
@@ -101,6 +102,13 @@ use crate::routes::{
         system::crash,
         system::delete_crash,
         system::delete_all_crashes,
+        helpers::list,
+        helpers::poll,
+        helpers::input,
+        helpers::lora,
+        helpers::progress,
+        helpers::result,
+        helpers::finish,
         system::update_status,
         system::check_updates,
         system::install_server_update,
@@ -160,6 +168,7 @@ use crate::routes::{
         (name = "mcp", description = "Outpost as an MCP server: tools for chat, pictures, characters and memory"),
         (name = "training", description = "Training Studio: datasets, captions, LoRA trainings and characters"),
         (name = "pairing", description = "Pairing phones over the encrypted port, and paired phones"),
+        (name = "helpers", description = "Helper PCs: an owner's PC lending its graphics card for Create jobs too big for the server"),
     )
 )]
 pub struct ApiDoc;

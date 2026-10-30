@@ -36,6 +36,18 @@ pub struct PackInfo {
     /// ComfyUI node types this pack needs that the installed ComfyUI lacks: it needs
     /// a newer ComfyUI. Empty when all are there, or ComfyUI hasn't been seen yet.
     pub missing_nodes: Vec<String>,
+    /// The helper PC that runs it, when this server can't (not downloaded here, or too big
+    /// for its card) and a helper has it ready: "Runs on Dan's PC".
+    pub runs_on: Option<String>,
+}
+
+/// The helper PC that would run `pack`, when this server wouldn't run it itself.
+pub fn helper_for(state: &AppState, pack: &Pack, hw: &Hardware) -> Option<String> {
+    let here = state.assets.status(pack).ready && pack_fit(pack.vram_gb, hw) == Fit::Fits;
+    if here {
+        return None;
+    }
+    state.helpers.for_pack(pack).map(|h| h.name)
 }
 
 /// Does a pack needing `vram_gb` at its peak run here? ComfyUI can spill to
@@ -58,7 +70,7 @@ pub struct PacksQuery {
 /// already downloaded (or downloading). Packs that would only run by spilling into system
 /// memory, or not at all, are left out so the choices stay short.
 pub fn worth_showing(info: &PackInfo) -> bool {
-    info.fit == Fit::Fits || info.models.ready || info.models.setup.is_some()
+    info.fit == Fit::Fits || info.models.ready || info.models.setup.is_some() || info.runs_on.is_some()
 }
 
 /// The workflow packs that suit this machine (see [`worth_showing`]; `?all=true` for every
@@ -98,13 +110,18 @@ fn pack_infos(
         .map(|p| p.id.clone())
         .collect();
     all.iter()
-        .map(|pack| PackInfo {
-            models: state.assets.status(pack),
-            fit: pack_fit(pack.vram_gb, hw),
-            task: pack.task(),
-            recommended: picks.contains(&pack.id),
-            missing_nodes: missing(pack),
-            pack: pack.clone(),
+        .map(|pack| {
+            let runs_on = helper_for(state, pack, hw);
+            PackInfo {
+                models: state.assets.status(pack),
+                fit: pack_fit(pack.vram_gb, hw),
+                task: pack.task(),
+                recommended: picks.contains(&pack.id),
+                // A helper PC's own ComfyUI is what matters for those.
+                missing_nodes: if runs_on.is_some() { Vec::new() } else { missing(pack) },
+                runs_on,
+                pack: pack.clone(),
+            }
         })
         .collect()
 }
@@ -412,6 +429,10 @@ pub struct JobView {
     pub progress: Option<outpost_engines::comfy::JobProgress>,
     /// What it made (finished jobs).
     pub media: Vec<Media>,
+    /// The helper PC running it, if not this server.
+    pub on: Option<String>,
+    /// Queued for a helper PC that's off or paused: its name.
+    pub waiting_for: Option<String>,
 }
 
 async fn view(state: &AppState, job: Job) -> ApiResult<JobView> {
@@ -420,7 +441,13 @@ async fn view(state: &AppState, job: Job) -> ApiResult<JobView> {
     } else {
         None
     };
-    let progress = state.queue.running().filter(|r| r.job_id == job.id).map(|r| r.progress);
+    let progress = state.queue.progress_of(&job.id).map(|r| r.progress);
+    let on = state.queue.remote_run(&job.id).map(|r| r.helper);
+    let waiting_for = if job.status == JobStatus::Queued {
+        crate::helpers::waiting_for(state, &crate::helpers::local_packs(state).await, &job.pack_id)
+    } else {
+        None
+    };
     let media = if job.status == JobStatus::Done {
         media::for_job(&state.pool, &job.account_id, &job.id).await?
     } else {
@@ -431,6 +458,8 @@ async fn view(state: &AppState, job: Job) -> ApiResult<JobView> {
         position,
         progress,
         media,
+        on,
+        waiting_for,
     })
 }
 
@@ -445,14 +474,17 @@ pub async fn create_job(
     Json(req): Json<NewJob>,
 ) -> ApiResult<(StatusCode, Json<JobView>)> {
     let pack = pack_or_404(&req.pack)?;
-    if !state.assets.status(&pack).ready {
+    let hw = crate::routes::models::measure_cached(&state).await;
+    let helper = helper_for(&state, &pack, &hw);
+    if helper.is_none() && !state.assets.status(&pack).ready {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "models_missing",
             format!("{}'s models aren't downloaded yet.", pack.name),
         ));
     }
-    if let Some(have) = state.comfy.node_types().await {
+    // (A helper PC's own ComfyUI is checked there.)
+    if let Some(have) = state.comfy.node_types().await.filter(|_| helper.is_none()) {
         let missing = pack.missing_nodes(&have.nodes);
         if !missing.is_empty() {
             return Err(ApiError::new(
@@ -551,6 +583,10 @@ pub struct LineView {
     pub progress: Option<outpost_engines::comfy::JobProgress>,
     /// Seconds left in the running job's current pass, once it can be told.
     pub eta_secs: Option<u64>,
+    /// The helper PC running it, if not this server ("Dan's PC").
+    pub on: Option<String>,
+    /// Queued for a workflow only a helper PC can run, and it's off or paused: its name.
+    pub waiting_for: Option<String>,
 }
 
 /// The line for the graphics card, everyone's jobs in the order they run. Other
@@ -558,14 +594,20 @@ pub struct LineView {
 #[utoipa::path(get, path = "/api/queue", tag = "create", security(("bearer" = [])),
     responses((status = 200, description = "The queue", body = [LineView])))]
 pub async fn queue(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<Vec<LineView>>> {
-    let running = state.queue.running();
+    let here = crate::helpers::local_packs(&state).await;
     let out = jobs::line(&state.pool)
         .await?
         .into_iter()
         .map(|e| {
             let mine = e.account_id == auth.account.id;
-            let live = running.as_ref().filter(|r| r.job_id == e.job_id);
+            let live = state.queue.progress_of(&e.job_id);
+            let live = live.as_ref();
+            let on = state.queue.remote_run(&e.job_id).map(|r| r.helper);
+            let waiting_for =
+                (e.status == JobStatus::Queued).then(|| crate::helpers::waiting_for(&state, &here, &e.pack_id)).flatten();
             LineView {
+                on,
+                waiting_for,
                 mine,
                 job_id: mine.then(|| e.job_id.clone()),
                 pack_id: mine.then(|| e.pack_id.clone()),

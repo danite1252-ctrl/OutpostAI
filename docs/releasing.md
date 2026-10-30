@@ -46,7 +46,20 @@ app (and pair again) to take a new one.
 3. Optional: the **GitHub CLI** to publish from the script: `winget install GitHub.cli`,
    then `gh auth login`.
 
-## Each release
+## Each release: one command
+
+```powershell
+cd C:\dev\Outpost
+powershell -ExecutionPolicy Bypass -File scripts\release\ship.ps1 -Commit "What changed" -Notes "What's new for people."
+```
+
+It commits and pushes any uncommitted changes (with `-Commit`; leave it out when everything is
+committed), builds the next version (0.1.11 → 0.1.12; or say `-Version 0.2.0`), commits and
+pushes the version change, and publishes the release. It asks for both key passwords. If it stops
+part way, fix the problem and run it again with the same `-Version`. The server's runner must be
+running (it builds the Linux part); `-SkipLinux` / `-SkipPhone` leave parts out.
+
+## Each release, step by step
 
 1. Commit and push everything (the script refuses uncommitted changes).
 2. **Build** (about 10–15 minutes; asks for both key passwords):

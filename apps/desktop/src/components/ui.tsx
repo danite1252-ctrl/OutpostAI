@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import { useId, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
 import mark from "../assets/outpost-mark.png";
 
 export function Mark({ size = 40, className = "" }: { size?: number; className?: string }) {
@@ -111,5 +111,146 @@ export function Icon({ d, size = 20 }: { d: string; size?: number }) {
     >
       <path d={d} />
     </svg>
+  );
+}
+
+/** An on/off switch. */
+export function Toggle({
+  checked,
+  onChange,
+  disabled,
+  label,
+  labelledBy,
+}: {
+  checked: boolean;
+  onChange: (on: boolean) => void;
+  disabled?: boolean;
+  /** Read out when there's no visible label (`labelledBy`). */
+  label?: string;
+  labelledBy?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={labelledBy ? undefined : label}
+      aria-labelledby={labelledBy}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ember disabled:cursor-not-allowed disabled:opacity-50 ${
+        checked ? "border-ember bg-ember" : "border-line bg-raised"
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        className={`inline-block size-5 rounded-full shadow transition-transform ${
+          checked ? "translate-x-6 bg-ink" : "translate-x-1 bg-muted"
+        }`}
+      />
+    </button>
+  );
+}
+
+/** A setting that's on or off: what it is (and a hint) on the left, the switch on the right. */
+export function ToggleRow({
+  title,
+  hint,
+  checked,
+  onChange,
+  disabled,
+}: {
+  title: ReactNode;
+  hint?: ReactNode;
+  checked: boolean;
+  onChange: (on: boolean) => void;
+  disabled?: boolean;
+}) {
+  const id = useId();
+  return (
+    <div className="flex items-start gap-4">
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span id={id} className="text-sm font-medium">
+          {title}
+        </span>
+        {hint && <span className="text-xs text-muted">{hint}</span>}
+      </span>
+      <Toggle checked={checked} onChange={onChange} disabled={disabled} labelledBy={id} />
+    </div>
+  );
+}
+
+function rememberedOpen(id: string, fallback: boolean) {
+  try {
+    const v = localStorage.getItem(`outpost.settings.${id}`);
+    return v === null ? fallback : v === "1";
+  } catch {
+    return fallback;
+  }
+}
+
+/** A collapsible group of settings: a header with a one-line summary; opens in place.
+ * Whether it's open is remembered on this PC. */
+export function Section({
+  id,
+  title,
+  summary,
+  defaultOpen = false,
+  children,
+}: {
+  id: string;
+  title: string;
+  summary?: ReactNode;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(() => rememberedOpen(id, defaultOpen));
+  const body = useId();
+  const toggle = () => {
+    setOpen((o) => {
+      try {
+        localStorage.setItem(`outpost.settings.${id}`, o ? "0" : "1");
+      } catch {
+        // Not remembered.
+      }
+      return !o;
+    });
+  };
+  return (
+    <section className="flex flex-col gap-4">
+      <h2>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={body}
+          onClick={toggle}
+          className="flex w-full items-center gap-4 rounded-2xl border border-line bg-surface px-5 py-4 text-left hover:bg-raised"
+        >
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="text-lg font-semibold">{title}</span>
+            {summary && <span className="truncate text-sm text-muted">{summary}</span>}
+          </span>
+          <svg
+            width={20}
+            height={20}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.8}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            className={`shrink-0 text-muted transition-transform ${open ? "rotate-180" : ""}`}
+          >
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </button>
+      </h2>
+      {open && (
+        <div id={body} className="flex flex-col gap-4">
+          {children}
+        </div>
+      )}
+    </section>
   );
 }

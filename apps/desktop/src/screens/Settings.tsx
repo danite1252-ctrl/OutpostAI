@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, SERVER, secretProblem, type Account, type EnginesStatus, type Role, type SignInResponse } from "../api";
 import { EnginesPanel } from "../components/engines";
 import { DiagnosticsPanel, UpdatesPanel, WindowPanel } from "../components/system";
-import { Avatar, Button, ErrorNote, Field } from "../components/ui";
-import { ServerPanel } from "../components/server";
+import { Avatar, Button, ErrorNote, Field, Section, ToggleRow } from "../components/ui";
+import { CopyGallery, ServerPanel } from "../components/server";
+import { HelperPanel } from "../components/helper";
 import { PairDialog } from "./Connections";
 
 const ROLES: { value: Role; label: string; hint: string }[] = [
@@ -35,23 +36,64 @@ export default function Settings({
   onAddPerson?: () => void;
 }) {
   const isOwner = auth.account.role === "owner";
+  const running = engines?.engines.filter((e) => e.state === "running" || e.state === "external").length ?? 0;
   return (
-    <section className="mx-auto flex max-w-4xl flex-col gap-10">
+    <section className="mx-auto flex max-w-4xl flex-col gap-4">
       <h1 className="text-2xl font-semibold">Settings</h1>
-      <div className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold">Engines</h2>
-        <EnginesPanel token={auth.token} canManage={isOwner} status={engines} onChanged={onEnginesChanged} />
-      </div>
-      {isOwner && <AccountsPanel token={auth.token} selfId={auth.account.id} />}
-      <p className="rounded-2xl border border-line bg-surface p-4 text-sm text-muted">
+      <p className="mb-2 text-sm text-muted">
         App keys, paired phones and network access are under <b className="text-ink">Connections</b> in the side bar.
       </p>
-      <ChangeMySecret token={auth.token} onChanged={onSignedOut} />
-      <ServerPanel token={auth.token} isOwner={isOwner} onConnect={onUseServer} onAddPerson={onAddPerson} />
-      <WindowPanel />
-      <UpdatesPanel token={auth.token} canManage={isOwner} />
-      {isOwner && <DiagnosticsPanel token={auth.token} />}
-      <p className="text-xs text-muted">
+
+      <Section
+        id="server"
+        title="Server"
+        defaultOpen
+        summary={SERVER ? `Using ${SERVER.name}` : "Outpost runs on this PC"}
+      >
+        <ServerPanel token={auth.token} isOwner={isOwner} onConnect={onUseServer} onAddPerson={onAddPerson} />
+        {SERVER && <CopyGallery token={auth.token} />}
+      </Section>
+
+      {SERVER && (
+        <Section id="helper" title="Lend this PC's graphics card" summary="Make pictures too big for the server's card here">
+          <HelperPanel token={auth.token} isOwner={isOwner} />
+        </Section>
+      )}
+
+      {isOwner && (
+        <Section id="accounts" title="Accounts" summary="People, invites and PIN resets">
+          <AccountsPanel token={auth.token} selfId={auth.account.id} />
+        </Section>
+      )}
+
+      <Section id="pin" title="My PIN or password" summary={`Signed in as ${auth.account.name}`}>
+        <ChangeMySecret token={auth.token} onChanged={onSignedOut} />
+      </Section>
+
+      <Section
+        id="engines"
+        title="Engines"
+        summary={
+          engines
+            ? `${running} of ${engines.engines.length} running${SERVER ? ` on ${SERVER.name}` : ""}`
+            : "Ollama, ComfyUI and voice"
+        }
+      >
+        <EnginesPanel token={auth.token} canManage={isOwner} status={engines} onChanged={onEnginesChanged} />
+      </Section>
+
+      <Section id="app" title="Updates and this window" summary={`Outpost ${version}`}>
+        <UpdatesPanel token={auth.token} canManage={isOwner} />
+        <WindowPanel />
+      </Section>
+
+      {isOwner && (
+        <Section id="diagnostics" title="Diagnostics" summary="Crash reports and logs, kept on this PC">
+          <DiagnosticsPanel token={auth.token} />
+        </Section>
+      )}
+
+      <p className="mt-4 text-xs text-muted">
         Outpost {version} · MIT licence · {SERVER ? `runs on ${SERVER.name}, your own server` : "runs entirely on this PC"}
       </p>
     </section>
@@ -82,7 +124,6 @@ function AccountsPanel({ token, selfId }: { token: string; selfId: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold">Accounts</h2>
       <ErrorNote>{error}</ErrorNote>
       <ul className="overflow-hidden rounded-2xl border border-line">
         {accounts.map((a) => (
@@ -222,10 +263,12 @@ function AddAccount({
         </div>
       </fieldset>
       {role !== "service" && (
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={byInvite} onChange={(e) => setByInvite(e.target.checked)} className="accent-ember" />
-          Send them an invite, so they pick their own PIN on their phone or PC
-        </label>
+        <ToggleRow
+          title="Send them an invite"
+          hint="They pick their own PIN on their phone or PC."
+          checked={byInvite}
+          onChange={setByInvite}
+        />
       )}
       <ErrorNote>{error}</ErrorNote>
       <Button type="submit" disabled={busy} className="self-start">
@@ -285,8 +328,7 @@ function ChangeMySecret({ token, onChanged }: { token: string; onChanged: () => 
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
-      <h2 className="text-lg font-semibold">My PIN or password</h2>
+    <form onSubmit={submit} className="flex flex-col gap-4 rounded-2xl border border-line bg-surface p-5" noValidate>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Field label="Current" type="password" value={current} onChange={(e) => setCurrent(e.target.value)} />
         <Field label="New" type="password" value={next} onChange={(e) => setNext(e.target.value)} hint="You'll sign in again after changing it." />

@@ -121,6 +121,19 @@ pub(crate) async fn measure(state: &AppState) -> Hardware {
         .unwrap_or_else(|_| hardware::measure(Vec::new(), std::path::Path::new(".")))
 }
 
+/// [`measure`], reused for a minute (the job queue asks often).
+pub(crate) async fn measure_cached(state: &AppState) -> Hardware {
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, Hardware)>> = std::sync::Mutex::new(None);
+    if let Some((at, hw)) = CACHE.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+        if at.elapsed() < std::time::Duration::from_secs(60) {
+            return hw.clone();
+        }
+    }
+    let hw = measure(state).await;
+    *CACHE.lock().unwrap_or_else(|p| p.into_inner()) = Some((std::time::Instant::now(), hw.clone()));
+    hw
+}
+
 /// Graphics cards, memory, free disk and the tier used for recommendations.
 #[utoipa::path(get, path = "/api/hardware", tag = "models", security(("bearer" = [])),
     responses(

@@ -21,9 +21,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use outpost_engines::EngineManager;
+use outpost_gateway::helper_pc::HelperPc;
 use outpost_gateway::{remote, AppState, Config};
 use serde::{Deserialize, Serialize};
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 
@@ -61,8 +62,126 @@ fn get_close_to_tray() -> bool {
 #[tauri::command]
 fn set_close_to_tray(on: bool) -> Result<(), String> {
     CLOSE_TO_TRAY.store(on, Ordering::Relaxed);
-    let body = serde_json::json!({ "close_to_tray": on }).to_string();
-    std::fs::write(settings_file(), body).map_err(|e| e.to_string())
+    save_setting("close_to_tray", on)
+}
+
+fn read_settings() -> serde_json::Value {
+    std::fs::read_to_string(settings_file())
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+/// Change one setting, keeping the others.
+fn save_setting(key: &str, on: bool) -> Result<(), String> {
+    let mut all = read_settings();
+    all[key] = serde_json::Value::Bool(on);
+    std::fs::write(settings_file(), all.to_string()).map_err(|e| e.to_string())
+}
+
+// ------------------------------------------------ lending this PC's graphics card to the server
+
+/// This PC as a helper for the server (only while the app uses one).
+static HELPER: OnceLock<Arc<HelperPc>> = OnceLock::new();
+
+/// The server, as the helper reaches it: through the tunnel, as whoever is signed in here.
+struct ThroughTunnel;
+
+impl outpost_gateway::helper_pc::Server for ThroughTunnel {
+    fn url(&self) -> String {
+        gateway_url()
+    }
+    fn tokens(&self) -> Vec<String> {
+        let Some(server) = load_server() else { return Vec::new() };
+        let mut out: Vec<String> = server.token.into_iter().collect();
+        for p in server.people {
+            if !out.contains(&p.token) {
+                out.push(p.token);
+            }
+        }
+        out
+    }
+}
+
+fn start_helper(app: &AppHandle) {
+    let settings = read_settings();
+    let enabled = settings["helper"].as_bool().unwrap_or(false);
+    let paused = settings["helper_paused"].as_bool().unwrap_or(false);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // This PC's own Outpost folder (its ComfyUI and models), even in a test build.
+        let dir = Config::local_default().data_dir;
+        match HelperPc::new(&dir, enabled, paused).await {
+            Ok(pc) => {
+                let _ = ENGINES.set(pc.engines());
+                let _ = HELPER.set(pc.clone());
+                set_tray_pause(&app, enabled, paused);
+                pc.run(ThroughTunnel).await;
+            }
+            Err(e) => tracing::warn!(error = %e, "couldn't set up this PC as a helper"),
+        }
+    });
+}
+
+fn helper() -> Result<&'static Arc<HelperPc>, String> {
+    HELPER.get().ok_or_else(|| "This PC can lend its graphics card only while Outpost uses a server.".into())
+}
+
+/// The helper's state, or nothing when the app runs Outpost on this PC.
+#[tauri::command]
+fn helper_status() -> Option<outpost_gateway::helper_pc::HelperStatus> {
+    HELPER.get().map(|h| h.status())
+}
+
+/// Lend this PC's graphics card to the server, or not; and pause it (e.g. for gaming).
+#[tauri::command]
+fn set_helper(app: AppHandle, enabled: bool, paused: bool) -> Result<(), String> {
+    helper()?.set(enabled, paused);
+    save_setting("helper", enabled)?;
+    save_setting("helper_paused", paused)?;
+    set_tray_pause(&app, enabled, paused);
+    Ok(())
+}
+
+/// Every workflow, as this PC sees it (downloaded here, fits this card).
+#[tauri::command]
+async fn helper_packs() -> Result<Vec<outpost_gateway::helper_pc::LocalPack>, String> {
+    Ok(helper()?.packs().await)
+}
+
+/// Download a workflow's models onto this PC.
+#[tauri::command]
+fn helper_install_pack(id: String) -> Result<(), String> {
+    helper()?.install_pack(&id).map_err(|e| format!("{e:#}"))
+}
+
+/// Install ComfyUI on this PC.
+#[tauri::command]
+fn helper_install_comfyui() -> Result<(), String> {
+    helper()?.install_comfyui().map_err(|e| format!("{e:#}"))
+}
+
+/// The tray's "Pause lending this PC" item, ticked while paused and shown while lending.
+static TRAY_PAUSE: OnceLock<CheckMenuItem<tauri::Wry>> = OnceLock::new();
+
+fn set_tray_pause(_app: &AppHandle, enabled: bool, paused: bool) {
+    if let Some(item) = TRAY_PAUSE.get() {
+        let _ = item.set_enabled(enabled);
+        let _ = item.set_checked(enabled && paused);
+    }
+}
+
+/// From the tray: pause or carry on lending.
+fn toggle_tray_pause(app: &AppHandle) {
+    let Some(h) = HELPER.get() else { return };
+    let s = h.status();
+    let paused = !s.paused;
+    if s.enabled {
+        let _ = set_helper(app.clone(), true, paused);
+        // Tell the window, so Settings shows it.
+        let _ = tauri::Emitter::emit(app, "helper-changed", paused);
+    }
 }
 
 /// Bring the window back from the tray (or from behind other windows).
@@ -78,13 +197,23 @@ fn show_window(app: &AppHandle) {
 fn tray(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open Outpost", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Outpost", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let menu = if load_server().is_some() {
+        // Using a server: pausing the lent graphics card (for a game) is one click away.
+        let pause = CheckMenuItem::with_id(app, "pause", "Pause lending this PC", false, false, None::<&str>)?;
+        let line = PredefinedMenuItem::separator(app)?;
+        let menu = Menu::with_items(app, &[&open, &pause, &line, &quit])?;
+        let _ = TRAY_PAUSE.set(pause);
+        menu
+    } else {
+        Menu::with_items(app, &[&open, &quit])?
+    };
     let mut builder = TrayIconBuilder::with_id("outpost")
         .tooltip("Outpost")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_window(app),
+            "pause" => toggle_tray_pause(app),
             // Quitting runs the normal exit: engines stop, and it's noted as a clean close.
             "quit" => app.exit(0),
             _ => {}
@@ -101,7 +230,7 @@ fn tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Engines started by the gateway inside this process, if we started one.
+/// Engines started inside this process (by the gateway, or by the helper), if any.
 static ENGINES: OnceLock<Arc<EngineManager>> = OnceLock::new();
 
 /// Where the window's API calls go: this PC's gateway, or the tunnel to the server.
@@ -548,6 +677,7 @@ pub fn run() {
                 if let Err(e) = start_server_tunnel(&server) {
                     tracing::error!(error = %e, "couldn't open the tunnel to the server");
                 }
+                start_helper(app.handle());
                 return Ok(());
             }
             let mut config = Config::local_default();
@@ -600,7 +730,12 @@ pub fn run() {
             local_galleries,
             local_gallery_items,
             local_gallery_file,
-            local_personas
+            local_personas,
+            helper_status,
+            set_helper,
+            helper_packs,
+            helper_install_pack,
+            helper_install_comfyui
         ])
         .build(context)
         .expect("error while building Outpost");

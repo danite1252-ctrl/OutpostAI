@@ -58,12 +58,25 @@ impl Running {
     }
 }
 
+/// A job running on a helper PC.
+#[derive(Debug, Clone)]
+pub struct RemoteRun {
+    pub run: Running,
+    /// The helper's name, e.g. "Dan's gaming PC".
+    pub helper: String,
+    /// The helper's sign-in (only it may report on the job).
+    pub session_id: String,
+    pub last_heard: std::time::Instant,
+}
+
 /// Shared between the worker and the API.
 #[derive(Default)]
 pub struct Queue {
     /// Wakes the worker when a job is added.
     pub wake: Notify,
     running: Mutex<Option<Running>>,
+    /// Jobs running on helper PCs, by job id.
+    remote: Mutex<HashMap<String, RemoteRun>>,
 }
 
 impl Queue {
@@ -71,13 +84,51 @@ impl Queue {
         self.running.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
+    /// A job's progress, wherever it runs (here or on a helper PC).
+    pub fn progress_of(&self, job_id: &str) -> Option<Running> {
+        self.running()
+            .filter(|r| r.job_id == job_id)
+            .or_else(|| self.remote_run(job_id).map(|r| r.run))
+    }
+
+    pub fn remote_run(&self, job_id: &str) -> Option<RemoteRun> {
+        self.remote.lock().unwrap_or_else(|p| p.into_inner()).get(job_id).cloned()
+    }
+
+    pub fn remote_runs(&self) -> Vec<RemoteRun> {
+        self.remote.lock().unwrap_or_else(|p| p.into_inner()).values().cloned().collect()
+    }
+
+    pub(crate) fn remote_start(&self, run: RemoteRun) {
+        self.remote.lock().unwrap_or_else(|p| p.into_inner()).insert(run.run.job_id.clone(), run);
+    }
+
+    /// Progress from the helper; returns whether the job was cancelled.
+    pub(crate) fn remote_update(&self, job_id: &str, progress: JobProgress) -> Option<bool> {
+        let mut map = self.remote.lock().unwrap_or_else(|p| p.into_inner());
+        let r = map.get_mut(job_id)?;
+        r.run.track(&progress);
+        r.run.progress = progress;
+        r.last_heard = std::time::Instant::now();
+        Some(r.run.cancelled)
+    }
+
+    pub(crate) fn remote_end(&self, job_id: &str) -> Option<RemoteRun> {
+        self.remote.lock().unwrap_or_else(|p| p.into_inner()).remove(job_id)
+    }
+
     fn set_running(&self, r: Option<Running>) {
         *self.running.lock().unwrap_or_else(|p| p.into_inner()) = r;
     }
 
     /// Ask the running job to stop. Returns its ComfyUI prompt id if it has one
-    /// (the caller interrupts ComfyUI); otherwise it stops before reaching ComfyUI.
+    /// (the caller interrupts ComfyUI); otherwise it stops before reaching ComfyUI. A job
+    /// on a helper PC is told to stop the next time the helper reports.
     pub fn cancel(&self, job_id: &str) -> Option<String> {
+        if let Some(r) = self.remote.lock().unwrap_or_else(|p| p.into_inner()).get_mut(job_id) {
+            r.run.cancelled = true;
+            return None;
+        }
         let mut guard = self.running.lock().unwrap_or_else(|p| p.into_inner());
         let r = guard.as_mut().filter(|r| r.job_id == job_id)?;
         r.cancelled = true;
@@ -110,7 +161,9 @@ pub async fn worker(state: AppState) {
     // Copies left in ComfyUI by jobs before a restart.
     clear_comfy_copies(&state).await;
     loop {
-        let job = match jobs::take_next(&state.pool).await {
+        // Only what runs here; jobs only a helper PC can run wait for it.
+        let here = crate::helpers::local_packs(&state).await;
+        let job = match jobs::take_next_of(&state.pool, &here).await {
             Ok(Some(job)) => job,
             Ok(None) => {
                 // Sleep until a job arrives (or check again in a while anyway).
@@ -172,7 +225,7 @@ pub async fn worker(state: AppState) {
 }
 
 /// Delete the pictures a job was given once it has finished with them.
-async fn remove_inputs(state: &AppState, job: &Job) {
+pub(crate) async fn remove_inputs(state: &AppState, job: &Job) {
     let values: serde_json::Map<String, Value> = serde_json::from_str(&job.inputs).unwrap_or_default();
     let files: Vec<_> = values
         .values()
@@ -312,7 +365,7 @@ async fn run(state: AppState, job: Job) -> Result<(), ComfyError> {
 }
 
 /// ComfyUI must be answering. Start it if Outpost installed it and it's stopped.
-async fn ensure_comfyui(state: &AppState) -> Result<(), ComfyError> {
+pub(crate) async fn ensure_comfyui(state: &AppState) -> Result<(), ComfyError> {
     if state.comfy.is_up().await {
         return Ok(());
     }

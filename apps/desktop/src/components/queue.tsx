@@ -193,20 +193,23 @@ export function QueueButton({ token, onOpenCreate, onOpenGallery }: { token: str
               const title = e.mine
                 ? promptOf(jobOf(e)) || (e.pack_id && names[e.pack_id]) || "Your job"
                 : isRunning
-                  ? `${e.by_name} is creating`
+                  ? `${e.by_name} is creating${e.on ? ` on ${e.on}` : ""}`
                   : `${e.by_name}'s job`;
+              const ahead = line.slice(0, i).filter((x) => x.status === "queued").length;
               const detail = isRunning
                 ? [
-                    e.mine ? (p?.phase ?? "Running") : null,
+                    e.mine ? `${p?.phase ?? "Running"}${e.on ? ` on ${e.on}` : ""}` : null,
                     p && p.steps > 0 ? `step ${p.step} of ${p.steps}` : !e.mine ? (p?.phase ?? "Running") : null,
                     f != null ? `${Math.round(f * 100)}%` : null,
                     e.eta_secs != null ? formatEta(e.eta_secs) : null,
                   ]
                     .filter(Boolean)
                     .join(" · ")
-                : i === (running ? 1 : 0)
-                  ? "Next up"
-                  : `${i - (running ? 1 : 0)} ahead`;
+                : e.waiting_for
+                  ? `Waiting for ${e.waiting_for} (paused or switched off)`
+                  : ahead === 0
+                    ? "Next up"
+                    : `${ahead} ahead`;
               return (
                 <li key={e.job_id ?? `${e.by_name}-${i}`} className="flex flex-col gap-1.5 px-4 py-3" aria-live={isRunning ? "polite" : undefined}>
                   <div className="flex items-start gap-2.5">

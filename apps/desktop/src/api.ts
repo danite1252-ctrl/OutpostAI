@@ -763,6 +763,8 @@ export interface Pack {
   recommended: boolean;
   /** ComfyUI node types it needs that this ComfyUI lacks: update ComfyUI to use it. */
   missing_nodes: string[];
+  /** The helper PC that runs it (this server can't): "Runs on Dan's PC". */
+  runs_on?: string | null;
 }
 
 export interface Download {
@@ -819,6 +821,10 @@ export interface Job {
   position: number | null;
   progress: { phase: string; step: number; steps: number; percent: number | null } | null;
   media: Media[];
+  /** The helper PC running it, if not the server. */
+  on?: string | null;
+  /** Queued for a helper PC that's off or paused: its name. */
+  waiting_for?: string | null;
 }
 
 export const downloadsApi = {
@@ -835,6 +841,10 @@ export interface LineEntry {
   status: JobStatus;
   progress: Job["progress"];
   eta_secs: number | null;
+  /** The helper PC running it, if not the server. */
+  on?: string | null;
+  /** Queued for a helper PC that's off or paused: its name. */
+  waiting_for?: string | null;
 }
 
 export interface LoraUploaded {
@@ -881,6 +891,8 @@ export function uploadLora(
 export const createApi = {
   queue: (token: string) => request<LineEntry[]>("GET", "/api/queue", { token }),
   packs: (token: string) => request<Pack[]>("GET", "/api/packs", { token }),
+  /** Every workflow, including ones too big for the server's card. */
+  packsAll: (token: string) => request<Pack[]>("GET", "/api/packs?all=true", { token }),
   installPack: (token: string, id: string) =>
     request<void>("POST", `/api/packs/${encodeURIComponent(id)}/install`, { token }),
   loras: (token: string) =>

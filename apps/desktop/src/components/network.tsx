@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, type NetworkStatus } from "../api";
-import { Button, ErrorNote, StatusDot } from "./ui";
+import { ErrorNote, StatusDot, Toggle } from "./ui";
 
 /** Owner switch: let other machines on the network (e.g. Hermes) use app keys. */
 export function NetworkPanel({ token }: { token: string }) {
@@ -69,7 +69,7 @@ export function NetworkPanel({ token }: { token: string }) {
           this PC. Ollama and ComfyUI are never exposed.
         </p>
       </div>
-      <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-line bg-surface p-5">
+      <div className="flex items-center gap-4 rounded-2xl border border-line bg-surface p-5">
         <span className="flex flex-1 flex-col gap-1">
           <span className="flex items-center gap-2 font-medium">
             <StatusDot on={open} />
@@ -80,11 +80,14 @@ export function NetworkPanel({ token }: { token: string }) {
             {status?.lan_address ? ` · this PC is ${status.lan_address}` : ""}
           </span>
         </span>
-        <Button variant={status?.lan_access ? "ghost" : "primary"} disabled={!status || busy} onClick={() => void toggle()}>
-          {status?.lan_access ? "Turn off" : "Turn on"}
-        </Button>
+        <Toggle
+          label="Allow other devices on my network"
+          checked={!!status?.lan_access}
+          disabled={!status || busy}
+          onChange={() => void toggle()}
+        />
       </div>
-      <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-line bg-surface p-5">
+      <div className="flex items-center gap-4 rounded-2xl border border-line bg-surface p-5">
         <span className="flex flex-1 flex-col gap-1">
           <span className="flex items-center gap-2 font-medium">
             <StatusDot on={!!status?.tailscale_running} />
@@ -100,13 +103,12 @@ export function NetworkPanel({ token }: { token: string }) {
                 : "Tailscale isn't running on this PC. Install it and sign in, then reopen this page."}
           </span>
         </span>
-        <Button
-          variant={status?.tailscale_access ? "ghost" : "primary"}
+        <Toggle
+          label="Allow my Tailscale devices"
+          checked={!!status?.tailscale_access}
           disabled={!status || busy || (!status.tailscale && !status.tailscale_access)}
-          onClick={() => void toggleTailscale()}
-        >
-          {status?.tailscale_access ? "Turn off" : "Turn on"}
-        </Button>
+          onChange={() => void toggleTailscale()}
+        />
       </div>
       {status && status.phone_hosts.length > 0 && (
         <p className="text-xs text-muted">

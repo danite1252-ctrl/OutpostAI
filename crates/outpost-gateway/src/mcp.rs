@@ -416,7 +416,7 @@ async fn job_result(state: &AppState, account: &str, job: &jobs::Job) -> Value {
                 line.push_str(&format!(", {n} ahead"));
             }
         }
-        if let Some(r) = state.queue.running().filter(|r| r.job_id == job.id) {
+        if let Some(r) = state.queue.progress_of(&job.id) {
             if r.progress.steps > 0 {
                 line.push_str(&format!(", step {} of {}", r.progress.step, r.progress.steps));
             }

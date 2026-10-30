@@ -26,7 +26,7 @@ import {
   type ServerProbe,
   type SignInResponse,
 } from "../api";
-import { Avatar, Button, ErrorNote, Field } from "./ui";
+import { Avatar, Button, ErrorNote, Field, ToggleRow } from "./ui";
 
 function message(err: unknown) {
   if (err instanceof ApiError) return err.message;
@@ -537,124 +537,112 @@ export function ServerPanel({
   const [confirming, setConfirming] = useState(false);
   const [restarting, setRestarting] = useState<string | null>(null);
   const [forgotten, setForgotten] = useState(false);
+  // Switching on: back to the saved server (no pairing), or connect to one.
+  const switchOn = () => {
+    setError(null);
+    if (SAVED_SERVER && !forgotten) void serverSetup.goBack().catch((e) => setError(message(e)));
+    else onConnect();
+  };
   return (
-    <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold">Server</h2>
-      <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5">
-        {SERVER ? (
-          <>
-            <p>
-              This app uses <b>{SERVER.name}</b> at {SERVER.host}
-              {SERVER.port === 7421 ? "" : `:${SERVER.port}`}. Nothing runs on this PC.
-            </p>
-            <p className="text-sm text-muted">
-              Its check words: <span className="font-mono text-ink">{SERVER.words.join(" ")}</span>
-            </p>
-            {SERVER.hosts.length > 1 && (
-              <p className="text-sm text-muted">
-                Reached at <span className="font-mono text-ink">{SERVER.hosts[0]}</span> at home, and{" "}
-                {SERVER.hosts.slice(1).map((h, i) => (
-                  <span key={h}>
-                    {i > 0 ? " or " : ""}
-                    <span className="font-mono text-ink">{h}</span>
-                  </span>
-                ))}{" "}
-                when that doesn't answer (Tailscale, away from home).
-              </p>
-            )}
-            <p className="text-sm text-muted">
+    <div className="flex flex-col gap-4 rounded-2xl border border-line bg-surface p-5">
+      <ToggleRow
+        title={SERVER ? `Using ${SERVER.name}` : "Use an Outpost server"}
+        hint={
+          SERVER
+            ? "Chats, pictures, models and the graphics card are the server's. Switch off to run Outpost on this PC again."
+            : SAVED_SERVER && !forgotten
+              ? `Switch on to go back to ${SAVED_SERVER.name} (${SAVED_SERVER.host}). It's still paired, so no code is needed.`
+              : "A home server running Outpost, instead of Outpost on this PC. This PC's own data stays here, untouched."
+        }
+        checked={SERVER ? !confirming : false}
+        disabled={!SERVER && !isOwner && !(SAVED_SERVER && !forgotten)}
+        onChange={(on) => (SERVER ? setConfirming(!on) : on && switchOn())}
+      />
+      {SERVER && confirming && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-ember p-3">
+          <span className="flex-1 text-sm">
+            Run Outpost on this PC again? The server stays saved here, so you can come back without pairing.
+          </span>
+          <Button onClick={() => void serverSetup.useThisPc().catch((e) => setError(message(e)))}>Yes, restart</Button>
+          <Button variant="ghost" onClick={() => setConfirming(false)}>
+            Cancel
+          </Button>
+        </div>
+      )}
+      {SERVER ? (
+        <>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+            <dt className="text-muted">Address</dt>
+            <dd className="font-mono">
+              {SERVER.hosts.length > 1 ? SERVER.hosts.join(", then ") : SERVER.host}
+              {SERVER.port === 7421 ? "" : `:${SERVER.port}`}
+            </dd>
+            <dt className="text-muted">Check words</dt>
+            <dd className="font-mono">{SERVER.words.join(" ")}</dd>
+            <dt className="text-muted">On this PC</dt>
+            <dd>
               {SERVER.people.length > 1
-                ? `Shared by ${SERVER.people.map((p) => p.name).join(", ")}: it opens on "Who's using Outpost?" and asks each person's PIN.`
-                : "Only you are signed in on this PC, so it stays signed in. Add someone (from the lock button, or below) and it asks who's using it."}
-            </p>
-            <div className="flex flex-wrap gap-3">
-              {onAddPerson && (
-                <Button variant="ghost" onClick={onAddPerson}>
-                  Add someone to this PC
-                </Button>
-              )}
-              {isOwner && (
-                <Button
-                  variant="ghost"
-                  disabled={!!restarting}
-                  title="E.g. after changing network or Tailscale access"
-                  onClick={() => {
-                    setError(null);
-                    setRestarting("Restarting the server…");
-                    systemApi
-                      .restartServer(token)
-                      .then(() => waitForServer())
-                      .then((back) => setRestarting(back ? "The server is back." : "The server hasn't come back yet."))
-                      .catch((e) => {
-                        setRestarting(null);
-                        setError(message(e));
-                      });
-                  }}
-                >
-                  {restarting ?? "Restart the server"}
-                </Button>
-              )}
-            </div>
-            {confirming ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="text-sm">
-                  Run Outpost on this PC again? The server stays saved here, so you can come back without pairing.
-                </span>
-                <Button onClick={() => void serverSetup.useThisPc().catch((e) => setError(message(e)))}>Yes, restart</Button>
-                <Button variant="ghost" onClick={() => setConfirming(false)}>
-                  Cancel
-                </Button>
-              </div>
-            ) : (
-              <div>
-                <Button variant="ghost" onClick={() => setConfirming(true)}>
-                  Use Outpost on this PC instead
-                </Button>
-              </div>
-            )}
-          </>
-        ) : (
-          <>
-            <p className="text-sm text-muted">
-              Outpost runs on this PC. If you have a home server running Outpost, this app can use that instead:
-              its chats, pictures, models and graphics card. Outpost on this PC stops while it does, and this PC's
-              own data stays here, untouched.
-            </p>
-            {SAVED_SERVER && !forgotten && (
-              <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line p-3">
-                <span className="flex-1 text-sm">
-                  This app used <b>{SAVED_SERVER.name}</b> ({SAVED_SERVER.host}) before. It's still paired, so going
-                  back needs no code.
-                </span>
-                <Button onClick={() => void serverSetup.goBack().catch((e) => setError(message(e)))}>
-                  Go back to {SAVED_SERVER.name}
-                </Button>
-                <Button
-                  variant="ghost"
-                  title="Connecting again would then need pairing"
-                  onClick={() =>
-                    void serverSetup
-                      .forgetSaved()
-                      .then(() => setForgotten(true))
-                      .catch((e) => setError(message(e)))
-                  }
-                >
-                  Forget it
-                </Button>
-              </div>
+                ? `${SERVER.people.map((p) => p.name).join(", ")} (asks who's using it)`
+                : "Only you, so it stays signed in"}
+            </dd>
+          </dl>
+          <div className="flex flex-wrap gap-3">
+            {onAddPerson && (
+              <Button variant="ghost" onClick={onAddPerson}>
+                Add someone to this PC
+              </Button>
             )}
             {isOwner && (
-              <div>
-                <Button variant="ghost" onClick={onConnect}>
-                  Connect to an Outpost server
-                </Button>
-              </div>
+              <Button
+                variant="ghost"
+                disabled={!!restarting}
+                title="E.g. after changing network or Tailscale access"
+                onClick={() => {
+                  setError(null);
+                  setRestarting("Restarting the server…");
+                  systemApi
+                    .restartServer(token)
+                    .then(() => waitForServer())
+                    .then((back) => setRestarting(back ? "The server is back." : "The server hasn't come back yet."))
+                    .catch((e) => {
+                      setRestarting(null);
+                      setError(message(e));
+                    });
+                }}
+              >
+                {restarting ?? "Restart the server"}
+              </Button>
             )}
-          </>
-        )}
-        <ErrorNote>{error}</ErrorNote>
-      </div>
-      {SERVER && <CopyGallery token={token} />}
+          </div>
+        </>
+      ) : (
+        <>
+          {SAVED_SERVER && !forgotten && (
+            <button
+              type="button"
+              className="self-start text-xs text-muted underline hover:text-ink"
+              title="Connecting again would then need pairing"
+              onClick={() =>
+                void serverSetup
+                  .forgetSaved()
+                  .then(() => setForgotten(true))
+                  .catch((e) => setError(message(e)))
+              }
+            >
+              Forget {SAVED_SERVER.name}
+            </button>
+          )}
+          {SAVED_SERVER && !forgotten && isOwner && (
+            <button type="button" className="self-start text-xs text-muted underline hover:text-ink" onClick={onConnect}>
+              Connect to a different server
+            </button>
+          )}
+          {!isOwner && !(SAVED_SERVER && !forgotten) && (
+            <p className="text-xs text-muted">Only an owner can connect this PC to a server.</p>
+          )}
+        </>
+      )}
+      <ErrorNote>{error}</ErrorNote>
     </div>
   );
 }
@@ -697,7 +685,7 @@ const mb = (b: number) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` :
 type Tally = { what: string; done: number; total: number; added: number; skipped: number; failed: number };
 
 /** Copy pictures, videos and personas from this PC's own Outpost to my account on the server. */
-function CopyGallery({ token }: { token: string }) {
+export function CopyGallery({ token }: { token: string }) {
   const [galleries, setGalleries] = useState<LocalGallery[] | null>(null);
   const [picked, setPicked] = useState<LocalGallery | null>(null);
   const [pin, setPin] = useState("");

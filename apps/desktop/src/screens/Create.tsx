@@ -26,6 +26,7 @@ const TASKS: { id: Task; label: string; blurb: string }[] = [
 
 /** How a workflow fits this PC, in the same colours as the Models page. */
 function fitBadge(p: Pack) {
+  if (p.runs_on) return { text: `Runs on ${p.runs_on}`, style: "text-ok", dot: "bg-ok" };
   if (p.missing_nodes.length > 0) return { text: "Needs a newer ComfyUI", style: "text-muted", dot: "bg-line" };
   if (p.fit === "too_large") return { text: "Too big for your machine", style: "text-danger", dot: "bg-danger" };
   if (p.fit === "partial") return { text: "Bigger than your card: runs slowly", style: "text-warn", dot: "bg-warn" };
@@ -68,7 +69,8 @@ function defaults(pack: Pack): Values {
 
 /** A task's workflows, Outpost's pick first, then best first; ones that can't run last. */
 function packsOf(packs: Pack[], task: Task) {
-  const order = (p: Pack) => (p.fit === "too_large" || p.missing_nodes.length ? 2 : p.fit === "partial" ? 1 : 0);
+  const order = (p: Pack) =>
+    p.runs_on ? 0 : p.fit === "too_large" || p.missing_nodes.length ? 2 : p.fit === "partial" ? 1 : 0;
   return packs
     .filter((p) => p.task === task)
     .sort((a, b) => Number(b.recommended) - Number(a.recommended) || order(a) - order(b) || b.rank - a.rank);
@@ -396,7 +398,8 @@ export default function Create({
             <div>
               <p className="text-sm text-soft">{pack.description}</p>
               <p className={`mt-1 text-xs ${fitBadge(pack).style}`}>
-                {fitBadge(pack).text} · needs about {pack.vram_gb} GB of video memory
+                {fitBadge(pack).text}
+                {pack.runs_on ? " (lent for bigger jobs)" : ""} · needs about {pack.vram_gb} GB of video memory
                 {pack.license ? ` · ${pack.license} licence` : ""}
               </p>
             </div>
@@ -407,7 +410,7 @@ export default function Create({
                 canManage={canManage}
                 onUpdate={() => void updateComfy()}
               />
-            ) : pack.models.ready ? (
+            ) : pack.models.ready || pack.runs_on ? (
               <PackForm
                 token={token}
                 pack={pack}
@@ -554,7 +557,7 @@ function ModelPicker({ options, current, onChoose }: { options: Pack[]; current:
                 <span className="text-sm font-semibold">{p.name}</span>
                 <span className={`text-xs ${badge.style}`}>
                   {badge.text}
-                  {p.models.ready ? "" : ` · ${p.models.missing_gb.toFixed(1)} GB to download`}
+                  {p.models.ready || p.runs_on ? "" : ` · ${p.models.missing_gb.toFixed(1)} GB to download`}
                 </span>
               </span>
             </button>
@@ -985,11 +988,13 @@ function JobRow({ job: j, packs, onCancel }: { job: Job; packs: Pack[]; onCancel
           <span className="text-xs text-muted">
             {name} ·{" "}
             {j.status === "queued"
-              ? j.position
-                ? `${j.position} ahead`
-                : "Next up"
+              ? j.waiting_for
+                ? `Waiting for ${j.waiting_for} (paused or switched off)`
+                : j.position
+                  ? `${j.position} ahead`
+                  : "Next up"
               : j.status === "running"
-                ? (p?.phase ?? "Running")
+                ? `${p?.phase ?? "Running"}${j.on ? ` on ${j.on}` : ""}`
                 : j.status === "failed"
                   ? "Failed"
                   : j.status}

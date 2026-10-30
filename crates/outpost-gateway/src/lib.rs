@@ -9,6 +9,8 @@ pub mod diagnostics;
 pub mod discovery;
 pub mod error;
 pub mod extract;
+pub mod helper_pc;
+pub mod helpers;
 pub mod llm;
 pub mod mcp;
 pub mod memory;
@@ -73,6 +75,8 @@ pub struct AppState {
     pub updates: updates::Updates,
     /// The one-time code for setting up a server from another device (while there's no owner).
     pub setup: setup_code::SetupCodes,
+    /// Helper PCs lending their graphics card for Create jobs.
+    pub helpers: helpers::Helpers,
 }
 
 impl AppState {
@@ -112,6 +116,7 @@ impl AppState {
             captions: Default::default(),
             updates: Default::default(),
             setup: Default::default(),
+            helpers: Default::default(),
         }
     }
 
@@ -305,6 +310,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/diagnostics/log", get(system::recent_log))
         .route("/api/diagnostics/crashes", delete(system::delete_all_crashes))
         .route("/api/diagnostics/crashes/{id}", get(system::crash).delete(system::delete_crash))
+        .route("/api/helpers", get(helpers::list))
+        .route("/api/helpers/poll", post(helpers::poll))
+        .route("/api/helpers/jobs/{id}/input/{key}", get(helpers::input))
+        .route("/api/helpers/jobs/{id}/lora", get(helpers::lora))
+        .route("/api/helpers/jobs/{id}/progress", post(helpers::progress))
+        .route(
+            "/api/helpers/jobs/{id}/result",
+            post(helpers::result).layer(DefaultBodyLimit::max(create::MAX_IMPORT_BYTES)),
+        )
+        .route("/api/helpers/jobs/{id}/finish", post(helpers::finish))
         .route("/api/updates", get(system::update_status))
         .route("/api/updates/check", post(system::check_updates))
         .route("/api/updates/install", post(system::install_server_update))
@@ -348,6 +363,7 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     // LoRAs are per account now: move the ones with a known owner out of the shared folder.
     routes::create::claim_shared_loras(&state).await;
     tokio::spawn(create::worker(state.clone()));
+    tokio::spawn(helpers::watchdog(state.clone()));
     // The one call to the internet: a daily look for a newer release (can be switched off).
     tokio::spawn(updates::background(state.clone()));
     // With network access on, phones get the encrypted port next door, and the
