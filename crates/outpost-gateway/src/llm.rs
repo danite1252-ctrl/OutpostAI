@@ -187,6 +187,28 @@ pub fn clock_line(now: i64, clock: Option<&UserClock>) -> String {
     )
 }
 
+/// `{name}` (any case, e.g. `{Name}`) becomes the person's name.
+pub fn fill_name(text: &str, name: &str) -> String {
+    if name.is_empty() || !text.contains('{') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find('{') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i..];
+        if after.len() >= 6 && after[..6].eq_ignore_ascii_case("{name}") {
+            out.push_str(name);
+            rest = &after[6..];
+        } else {
+            out.push('{');
+            rest = &after[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// The persona's prompt plus memories, if it uses them, and the user's date and time.
 /// `query` (the user's message) picks which learned memories are relevant.
 pub async fn system_prompt(
@@ -202,7 +224,11 @@ pub async fn system_prompt(
     } else {
         Vec::new()
     };
-    let prompt = outpost_core::memory::compose_system_prompt(&p.system_prompt, &memories);
+    // `{name}` in a prompt or memory is whoever is chatting, so one shared persona (and
+    // one family description) suits everyone it's sent to.
+    let name = outpost_core::accounts::get(&state.pool, account_id).await.map(|a| a.name).unwrap_or_default();
+    let memories: Vec<String> = memories.iter().map(|m| fill_name(m, &name)).collect();
+    let prompt = outpost_core::memory::compose_system_prompt(&fill_name(&p.system_prompt, &name), &memories);
     Ok(if prompt.is_empty() { clock } else { format!("{prompt}\n\n{clock}") })
 }
 
@@ -432,6 +458,15 @@ mod tests {
             created_at: 0,
             attachments: Vec::new(),
         }
+    }
+
+    #[test]
+    fn name_fills_in_for_whoever_is_chatting() {
+        assert_eq!(fill_name("I am talking with {name}.", "Sam"), "I am talking with Sam.");
+        assert_eq!(fill_name("{Name} and {NAME}", "Kat"), "Kat and Kat");
+        assert_eq!(fill_name("{not a name} {nam", "Kat"), "{not a name} {nam");
+        assert_eq!(fill_name("no braces", "Kat"), "no braces");
+        assert_eq!(fill_name("{name}", ""), "{name}");
     }
 
     #[test]

@@ -295,22 +295,28 @@ struct LocalGallery {
     avatar_color: String,
     items: usize,
     bytes: i64,
+    personas: usize,
 }
 
-/// The accounts on this PC's own Outpost, with how many gallery items each has.
+/// The accounts on this PC's own Outpost, with how many gallery items and personas each has.
 #[tauri::command]
 async fn local_galleries() -> Result<Vec<LocalGallery>, String> {
     let (db, _) = this_pc_db()?;
     let pool = outpost_core::db::open_read_only(&db).await.map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for a in outpost_core::accounts::list(&pool).await.map_err(|e| e.to_string())? {
+        if a.role == outpost_core::accounts::Role::Service {
+            continue;
+        }
         let items = outpost_core::media::all(&pool, &a.id).await.map_err(|e| e.to_string())?;
-        if items.is_empty() {
+        let personas = outpost_core::personas::list_existing(&pool, &a.id).await.map(|p| p.len()).unwrap_or(0);
+        if items.is_empty() && personas == 0 {
             continue;
         }
         out.push(LocalGallery {
             bytes: items.iter().map(|m| m.bytes).sum(),
             items: items.len(),
+            personas,
             account_id: a.id,
             name: a.name,
             avatar_color: a.avatar_color,
@@ -318,6 +324,31 @@ async fn local_galleries() -> Result<Vec<LocalGallery>, String> {
     }
     pool.close().await;
     Ok(out)
+}
+
+/// An account's personas on this PC, with the memories they were given by hand.
+#[derive(Debug, Serialize)]
+struct LocalPersonas {
+    personas: Vec<outpost_core::personas::Persona>,
+    /// Manual memories: each one's persona (`None` for every persona) and text.
+    memories: Vec<outpost_core::memory::Memory>,
+}
+
+/// One account's personas and hand-added memories on this PC (after its PIN was given).
+#[tauri::command]
+async fn local_personas(account_id: String) -> Result<LocalPersonas, String> {
+    if !UNLOCKED.lock().map(|u| u.contains(&account_id)).unwrap_or(false) {
+        return Err("Enter that account's PIN first.".into());
+    }
+    let (db, _) = this_pc_db()?;
+    let pool = outpost_core::db::open_read_only(&db).await.map_err(|e| e.to_string())?;
+    let personas = outpost_core::personas::list_existing(&pool, &account_id).await.map_err(|e| e.to_string());
+    let memories = outpost_core::memory::list(&pool, &account_id).await.map_err(|e| e.to_string());
+    pool.close().await;
+    Ok(LocalPersonas {
+        personas: personas?,
+        memories: memories?.into_iter().filter(|m| m.source == "manual").collect(),
+    })
 }
 
 /// Accounts whose PIN was given in this run of the app (so copying asks once).
@@ -476,7 +507,8 @@ pub fn run() {
             forget_server,
             local_galleries,
             local_gallery_items,
-            local_gallery_file
+            local_gallery_file,
+            local_personas
         ])
         .build(context)
         .expect("error while building Outpost");

@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, ApiError, voiceApi, type InstalledModel, type Memory, type MemorySettings, type Persona, type VoiceStatus } from "../api";
+import {
+  api,
+  ApiError,
+  voiceApi,
+  type DirectoryEntry,
+  type InstalledModel,
+  type Memory,
+  type MemorySettings,
+  type Persona,
+  type VoiceStatus,
+} from "../api";
 import { Avatar, Button, ErrorNote, Field } from "../components/ui";
 
 export default function Personas({ token }: { token: string }) {
@@ -56,14 +66,31 @@ export default function Personas({ token }: { token: string }) {
               <Avatar name={p.name} color={p.avatar_color} size={36} />
               <span className="flex min-w-0 flex-col">
                 <span className="font-medium">{p.name}</span>
-                <span className="truncate font-mono text-xs text-muted">persona:{p.slug}</span>
+                {p.owner_name ? (
+                  <span className="truncate text-xs text-pick">Shared by {p.owner_name}</span>
+                ) : (
+                  <span className="truncate font-mono text-xs text-muted">
+                    persona:{p.slug}
+                    {p.shared ? <span className="ml-1 font-sans text-pick">· shared</span> : null}
+                  </span>
+                )}
                 <span className="truncate text-xs text-muted">{p.model ?? "default model"}</span>
               </span>
             </button>
           ))}
         </section>
 
-        {selected && (
+        {selected?.owner_name && (
+          <SharedPersona
+            token={token}
+            persona={selected}
+            onCopied={(p) => {
+              setPersonas((ps) => [...ps, p]);
+              setSelectedId(p.id);
+            }}
+          />
+        )}
+        {selected && !selected.owner_name && (
           <PersonaEditor
             key={selected.id}
             token={token}
@@ -102,6 +129,7 @@ function PersonaEditor({
   const placeholder = /^new-persona(-\d+)?$/.test(persona.slug);
   const shownSlug = !slugTouched && placeholder ? toSlug(name) || persona.slug : slug;
   const [prompt, setPrompt] = useState(persona.system_prompt);
+  const [sending, setSending] = useState(false);
   const [model, setModel] = useState(persona.model ?? "");
   const [temperature, setTemperature] = useState(persona.temperature ?? 0.7);
   const [useTemp, setUseTemp] = useState(persona.temperature !== null);
@@ -109,6 +137,7 @@ function PersonaEditor({
   const [useMemory, setUseMemory] = useState(persona.use_memory);
   const [voice, setVoice] = useState(persona.voice ?? "");
   const [speakReplies, setSpeakReplies] = useState(persona.speak_replies);
+  const [shared, setShared] = useState(persona.shared ?? false);
   const [voices, setVoices] = useState<VoiceStatus | null>(null);
   const [trying, setTrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -151,6 +180,7 @@ function PersonaEditor({
         ...(useTemp ? { temperature } : {}),
         think,
         use_memory: useMemory,
+        shared,
         voice,
         speak_replies: speakReplies,
       });
@@ -184,11 +214,15 @@ function PersonaEditor({
             API model id <code className="font-mono text-soft">persona:{persona.slug}</code>
           </p>
         </div>
+        <Button variant="ghost" onClick={() => setSending(true)} title="Give someone their own copy">
+          Send a copy
+        </Button>
         <Button variant="danger" onClick={() => void remove()}>
           Delete
         </Button>
         <Button type="submit">{saved ? "Saved" : "Save"}</Button>
       </div>
+      {sending && <SendCopy token={token} persona={persona} onClose={() => setSending(false)} />}
       <Field label="Name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} />
       <label className="flex flex-col gap-1.5 text-sm text-muted">
         API model id
@@ -218,6 +252,20 @@ function PersonaEditor({
           placeholder="Who is this persona? How should it talk? What should it always or never do?"
           className="rounded-xl border border-line bg-surface p-3.5 text-[15px] leading-relaxed text-ink focus:border-ember focus:outline-none"
         />
+        <label className="mt-2 flex items-start gap-2 text-sm text-ink">
+          <input type="checkbox" className="mt-1 accent-ember" checked={shared} onChange={(e) => setShared(e.target.checked)} />
+          <span>
+            Share with everyone on this Outpost
+            <span className="block text-xs text-muted">
+              They can chat with it (their chats and memories stay theirs) and make their own copy. Only you can change it.
+            </span>
+          </span>
+        </label>
+        <span className="text-xs">
+          <code className="font-mono text-soft">{"{name}"}</code> becomes the name of whoever is chatting, e.g. "I am
+          talking with {"{name}"}." That makes one persona (and one description of your family) right for everyone
+          you send it to. It works in memories too.
+        </span>
       </label>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <label className="flex flex-col gap-1.5 text-sm text-muted">
@@ -316,6 +364,142 @@ function PersonaEditor({
       </div>
       <ErrorNote>{error}</ErrorNote>
     </form>
+  );
+}
+
+/** Someone else's shared persona: what it is, and a button to make my own copy. */
+function SharedPersona({ token, persona, onCopied }: { token: string; persona: Persona; onCopied: (p: Persona) => void }) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <section className="flex min-w-0 flex-1 flex-col gap-5">
+      <div className="flex flex-wrap items-center gap-4">
+        <Avatar name={persona.name} color={persona.avatar_color} size={56} />
+        <div className="flex-1">
+          <h2 className="text-xl font-semibold">{persona.name}</h2>
+          <p className="text-sm text-muted">
+            Shared by {persona.owner_name}. Chat with it any time; your chats and memories with it are yours.
+          </p>
+        </div>
+        <Button
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setError(null);
+            api.copyPersona(token, persona.id).then(onCopied, (e) => {
+              setError(e instanceof ApiError ? e.message : "Couldn't copy it.");
+              setBusy(false);
+            });
+          }}
+        >
+          Make my own copy
+        </Button>
+      </div>
+      <ErrorNote>{error}</ErrorNote>
+      <div className="flex flex-col gap-1.5 text-sm text-muted">
+        System prompt
+        <p className="rounded-xl border border-line bg-surface p-3.5 text-[15px] leading-relaxed whitespace-pre-wrap text-soft">
+          {persona.system_prompt || "(none)"}
+        </p>
+      </div>
+      <p className="text-sm text-muted">
+        Model: <span className="text-ink">{persona.model ?? "the default model"}</span>
+        {persona.voice ? (
+          <>
+            {" "}· Voice: <span className="text-ink">{persona.voice}</span>
+          </>
+        ) : null}
+      </p>
+      <p className="text-xs text-muted">Only {persona.owner_name} can change it. Make your own copy to change yours.</p>
+    </section>
+  );
+}
+
+/** Give other people their own copy of a persona (not my memories). */
+function SendCopy({ token, persona, onClose }: { token: string; persona: Persona; onClose: () => void }) {
+  const [people, setPeople] = useState<DirectoryEntry[] | null>(null);
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.people(token).then(
+      (all) => setPeople(all.filter((p) => p.id !== persona.account_id)),
+      (e) => setError(e instanceof ApiError ? e.message : "Can't load the people list."),
+    );
+  }, [token, persona.account_id]);
+
+  async function send() {
+    setBusy(true);
+    setError(null);
+    try {
+      const sent = await api.sendPersona(token, persona.id, chosen);
+      setDone(
+        sent.length
+          ? `Sent: ${sent.map((s) => (s.persona_name === persona.name ? s.account_name : `${s.account_name} (as “${s.persona_name}”)`)).join(", ")}.`
+          : "Nobody was picked.",
+      );
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Couldn't send it.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div role="dialog" aria-modal="true" aria-label={`Send ${persona.name}`} className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6" onClick={onClose}>
+      <div className="flex w-full max-w-md flex-col gap-4 rounded-2xl border border-line bg-night p-6" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold">Send a copy of {persona.name}</h2>
+        <p className="text-sm text-muted">
+          They each get their own copy: its prompt, model, voice and settings, ready to change. Your memories stay
+          with you. Save your changes first: the copy is made from what's saved.
+        </p>
+        {done ? (
+          <>
+            <p className="text-sm" role="status">
+              {done}
+            </p>
+            <Button onClick={onClose} className="self-start">
+              Done
+            </Button>
+          </>
+        ) : (
+          <>
+            {people === null ? (
+              <p className="text-sm text-muted">Loading…</p>
+            ) : people.length === 0 ? (
+              <p className="text-sm text-muted">There's nobody else on this Outpost yet. Invite someone in Settings › Accounts.</p>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {people.map((p) => (
+                  <li key={p.id}>
+                    <label className="flex items-center gap-3 rounded-xl border border-line px-3 py-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="accent-ember"
+                        checked={chosen.includes(p.id)}
+                        onChange={(e) => setChosen((c) => (e.target.checked ? [...c, p.id] : c.filter((x) => x !== p.id)))}
+                      />
+                      <Avatar name={p.name} color={p.avatar_color} size={28} />
+                      {p.name}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <ErrorNote>{error}</ErrorNote>
+            <div className="flex gap-3">
+              <Button onClick={() => void send()} disabled={busy || chosen.length === 0}>
+                {busy ? "Sending…" : "Send"}
+              </Button>
+              <Button variant="ghost" onClick={onClose}>
+                Cancel
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

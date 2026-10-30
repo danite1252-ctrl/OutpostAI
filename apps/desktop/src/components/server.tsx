@@ -21,6 +21,7 @@ import {
   type DirectoryEntry,
   type PairHello,
   type Person,
+  type Persona,
   type ServerProbe,
   type SignInResponse,
 } from "../api";
@@ -625,6 +626,7 @@ interface LocalGallery {
   avatar_color: string;
   items: number;
   bytes: number;
+  personas: number;
 }
 
 interface LocalItem {
@@ -635,6 +637,11 @@ interface LocalItem {
   pack_id: string | null;
   seed: number | null;
   created_at: number;
+}
+
+interface LocalPersonas {
+  personas: Persona[];
+  memories: { id: string; persona_id: string | null; text: string }[];
 }
 
 const EXT: Record<string, string> = {
@@ -648,14 +655,18 @@ const EXT: Record<string, string> = {
 
 const mb = (b: number) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1024 ** 2))} MB`);
 
-/** Copy pictures and videos from this PC's own Outpost into my gallery on the server. */
+type Tally = { what: string; done: number; total: number; added: number; skipped: number; failed: number };
+
+/** Copy pictures, videos and personas from this PC's own Outpost to my account on the server. */
 function CopyGallery({ token }: { token: string }) {
   const [galleries, setGalleries] = useState<LocalGallery[] | null>(null);
   const [picked, setPicked] = useState<LocalGallery | null>(null);
   const [pin, setPin] = useState("");
-  const [run, setRun] = useState<{ done: number; total: number; added: number; skipped: number; failed: number } | null>(null);
+  const [items, setItems] = useState<LocalItem[] | null>(null);
+  const [run, setRun] = useState<Tally | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const stop = useRef(false);
 
   useEffect(() => {
@@ -664,21 +675,27 @@ function CopyGallery({ token }: { token: string }) {
       .then(setGalleries, () => setGalleries([]));
   }, []);
 
-  async function copy(e: FormEvent) {
+  async function unlock(e: FormEvent) {
     e.preventDefault();
     if (!picked) return;
     setError(null);
     const { invoke } = await import("@tauri-apps/api/core");
-    let items: LocalItem[];
     try {
-      items = await invoke<LocalItem[]>("local_gallery_items", { accountId: picked.account_id, pin });
+      setItems(await invoke<LocalItem[]>("local_gallery_items", { accountId: picked.account_id, pin }));
+      setPin("");
     } catch (err) {
-      return setError(message(err));
+      setError(message(err));
     }
-    setPin("");
+  }
+
+  async function copyPictures() {
+    if (!picked || !items) return;
+    setError(null);
+    setNote(null);
+    const { invoke } = await import("@tauri-apps/api/core");
     stop.current = false;
     setRunning(true);
-    const tally = { done: 0, total: items.length, added: 0, skipped: 0, failed: 0 };
+    const tally: Tally = { what: "pictures", done: 0, total: items.length, added: 0, skipped: 0, failed: 0 };
     setRun({ ...tally });
     for (const item of items) {
       if (stop.current) break;
@@ -707,72 +724,155 @@ function CopyGallery({ token }: { token: string }) {
     setRunning(false);
   }
 
+  /** Personas (by name: ones already on the server are kept as they are) and the memories
+   * added to them by hand. */
+  async function copyPersonas() {
+    if (!picked) return;
+    setError(null);
+    setNote(null);
+    setRunning(true);
+    const { invoke } = await import("@tauri-apps/api/core");
+    try {
+      const local = await invoke<LocalPersonas>("local_personas", { accountId: picked.account_id });
+      const there = (await api.personas(token)).filter((q) => !q.owner_name);
+      const tally: Tally = { what: "personas", done: 0, total: local.personas.length, added: 0, skipped: 0, failed: 0 };
+      setRun({ ...tally });
+      const idOnServer = new Map<string, string>();
+      const missingModels = new Set<string>();
+      const installed = new Set((await api.models(token).catch(() => ({ data: [] as { id: string }[] }))).data.map((m) => m.id));
+      for (const p of local.personas) {
+        const same = there.find((q) => q.name.trim().toLowerCase() === p.name.trim().toLowerCase());
+        try {
+          if (same) {
+            idOnServer.set(p.id, same.id);
+            tally.skipped += 1;
+          } else {
+            const made = await api.createPersona(token, {
+              name: p.name,
+              system_prompt: p.system_prompt,
+              model: p.model ?? "",
+              temperature: p.temperature ?? undefined,
+              think: p.think,
+              use_memory: p.use_memory,
+              voice: p.voice ?? "",
+              speak_replies: p.speak_replies,
+              avatar_color: p.avatar_color,
+            });
+            idOnServer.set(p.id, made.id);
+            tally.added += 1;
+            if (p.model && !installed.has(p.model)) missingModels.add(p.model);
+          }
+        } catch (err) {
+          tally.failed += 1;
+          setError(message(err));
+        }
+        tally.done += 1;
+        setRun({ ...tally });
+      }
+      // Their hand-added memories (skipping any the server already has).
+      const known = new Set((await api.memory(token)).map((m) => `${m.persona_id ?? ""}|${m.text.trim()}`));
+      let memories = 0;
+      for (const m of local.memories) {
+        const persona = m.persona_id ? idOnServer.get(m.persona_id) : undefined;
+        if (m.persona_id && !persona) continue;
+        if (known.has(`${persona ?? ""}|${m.text.trim()}`)) continue;
+        await api.addMemory(token, m.text, persona).then(() => (memories += 1), () => undefined);
+      }
+      setNote(
+        [
+          memories ? `${memories} ${memories === 1 ? "memory" : "memories"} came with them.` : "",
+          missingModels.size
+            ? `Not on the server yet: ${[...missingModels].join(", ")}. Download them in Models, or pick another model for those personas.`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+    } catch (err) {
+      setError(message(err));
+    }
+    setRunning(false);
+  }
+
   if (!galleries || galleries.length === 0) return null;
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5">
-      <h3 className="font-semibold">Copy pictures from this PC</h3>
+      <h3 className="font-semibold">Copy from this PC</h3>
       <p className="text-sm text-muted">
-        Bring the gallery from Outpost on this PC into your gallery on {SERVER?.name}, with prompts, seeds and dates.
-        Nothing on this PC changes, and anything already copied is skipped, so it's safe to run again.
+        Bring your gallery (with prompts, seeds and dates) and your personas (with the memories you added to them) from
+        Outpost on this PC to your account on {SERVER?.name}. Nothing on this PC changes, and things already copied are
+        skipped, so it's safe to run again.
       </p>
-      <form onSubmit={(e) => void copy(e)} className="flex flex-col gap-3" noValidate>
-        <div className="flex flex-wrap gap-2">
-          {galleries.map((g) => (
-            <button
-              key={g.account_id}
-              type="button"
-              disabled={running}
-              onClick={() => {
-                setPicked(g);
-                setRun(null);
-                setError(null);
-              }}
-              className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
-                picked?.account_id === g.account_id ? "border-ember bg-raised" : "border-line hover:bg-raised"
-              }`}
-            >
-              <Avatar name={g.name} color={g.avatar_color} size={24} />
-              {g.name} · {g.items} {g.items === 1 ? "item" : "items"}, {mb(g.bytes)}
-            </button>
-          ))}
-        </div>
-        {picked && !running && (
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="w-56">
-              <Field
-                label={`${picked.name}'s PIN on this PC`}
-                type="password"
-                value={pin}
-                onChange={(e) => setPin(e.target.value)}
-                autoComplete="off"
-              />
-            </div>
-            <Button type="submit" disabled={!pin}>
-              Copy {picked.items} to my gallery
+      <div className="flex flex-wrap gap-2">
+        {galleries.map((g) => (
+          <button
+            key={g.account_id}
+            type="button"
+            disabled={running}
+            onClick={() => {
+              setPicked(g);
+              setItems(null);
+              setRun(null);
+              setError(null);
+              setNote(null);
+            }}
+            className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
+              picked?.account_id === g.account_id ? "border-ember bg-raised" : "border-line hover:bg-raised"
+            }`}
+          >
+            <Avatar name={g.name} color={g.avatar_color} size={24} />
+            {g.name} · {g.items} {g.items === 1 ? "item" : "items"}
+            {g.items ? ` (${mb(g.bytes)})` : ""}, {g.personas} {g.personas === 1 ? "persona" : "personas"}
+          </button>
+        ))}
+      </div>
+      {picked && !items && (
+        <form onSubmit={(e) => void unlock(e)} className="flex flex-wrap items-end gap-3" noValidate>
+          <div className="w-56">
+            <Field
+              label={`${picked.name}'s PIN on this PC`}
+              type="password"
+              value={pin}
+              onChange={(e) => setPin(e.target.value)}
+              autoComplete="off"
+            />
+          </div>
+          <Button type="submit" disabled={!pin}>
+            Continue
+          </Button>
+        </form>
+      )}
+      {picked && items && !running && (
+        <div className="flex flex-wrap gap-3">
+          {items.length > 0 && <Button onClick={() => void copyPictures()}>Copy {items.length} pictures and videos</Button>}
+          {picked.personas > 0 && (
+            <Button variant={items.length > 0 ? "ghost" : "primary"} onClick={() => void copyPersonas()}>
+              Copy {picked.personas} {picked.personas === 1 ? "persona" : "personas"}
             </Button>
+          )}
+        </div>
+      )}
+      {run && (
+        <div className="flex flex-col gap-1" aria-live="polite">
+          <div className="h-2 overflow-hidden rounded-full bg-night">
+            <div className="h-full bg-ember transition-[width]" style={{ width: `${run.total ? (run.done / run.total) * 100 : 100}%` }} />
           </div>
-        )}
-        {run && (
-          <div className="flex flex-col gap-1" aria-live="polite">
-            <div className="h-2 overflow-hidden rounded-full bg-night">
-              <div className="h-full bg-ember transition-[width]" style={{ width: `${run.total ? (run.done / run.total) * 100 : 100}%` }} />
+          <span className="text-xs text-muted">
+            {running ? `Copying ${run.what}: ${run.done} of ${run.total}…` : `Done.`} {run.added} copied
+            {run.skipped ? `, ${run.skipped} already there` : ""}
+            {run.failed ? `, ${run.failed} couldn't be copied` : ""}.
+          </span>
+          {running && run.what === "pictures" && (
+            <div>
+              <Button variant="ghost" onClick={() => (stop.current = true)}>
+                Stop
+              </Button>
             </div>
-            <span className="text-xs text-muted">
-              {running ? `Copying ${run.done} of ${run.total}…` : "Done."} {run.added} copied
-              {run.skipped ? `, ${run.skipped} already there` : ""}
-              {run.failed ? `, ${run.failed} couldn't be copied` : ""}.
-            </span>
-            {running && (
-              <div>
-                <Button variant="ghost" onClick={() => (stop.current = true)}>
-                  Stop
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-        <ErrorNote>{error}</ErrorNote>
-      </form>
+          )}
+        </div>
+      )}
+      {note && <p className="text-sm text-muted">{note}</p>}
+      <ErrorNote>{error}</ErrorNote>
     </div>
   );
 }

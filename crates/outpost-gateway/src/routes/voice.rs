@@ -336,7 +336,7 @@ fn wav(bytes: Vec<u8>) -> ApiResult<Response> {
     responses((status = 200, description = "WAV audio", content_type = "audio/wav"), (status = 503, description = "Voice isn't running", body = ErrorBody)))]
 pub async fn speak(State(state): State<AppState>, auth: Auth, Json(req): Json<SpeakRequest>) -> ApiResult<Response> {
     let persona_voice = match &req.persona_id {
-        Some(id) => personas::get(&state.pool, &auth.account.id, id).await.ok().and_then(|p| p.voice),
+        Some(id) => personas::get_usable(&state.pool, &auth.account.id, id).await.ok().and_then(|p| p.voice),
         None => None,
     };
     let voice = clean_voice(req.voice.as_deref())

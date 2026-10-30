@@ -1706,3 +1706,68 @@ async fn a_shared_pc_checks_each_persons_pin() {
     let (status, _) = call(&app, "POST", "/api/me/check-pin", Some(&owner), None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn personas_are_sent_as_copies_without_my_memories() {
+    let app = app().await;
+    let (owner, _) = setup_owner(&app).await;
+    let (_, sam) = call(&app, "POST", "/api/accounts", Some(&owner), Some(json!({"name": "Sam", "role": "member", "secret": "2468"}))).await;
+    let sam_id = sam["id"].as_str().unwrap().to_string();
+    // Dan's list starts with the default Assistant.
+    let (_, _) = call(&app, "GET", "/api/personas", Some(&owner), None).await;
+    let (status, family) = call(
+        &app,
+        "POST",
+        "/api/personas",
+        Some(&owner),
+        Some(json!({"name": "Family helper", "system_prompt": "I am talking with {name}. Our family: Dan, Sam.", "voice": "af_heart"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{family}");
+    let fid = family["id"].as_str().unwrap();
+    let (_, _) = call(&app, "POST", "/api/memory", Some(&owner), Some(json!({"text": "Dan's secret", "persona_id": fid}))).await;
+
+    // Everyone's names, for choosing who gets it.
+    let (status, people) = call(&app, "GET", "/api/people", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(people.as_array().unwrap().len(), 2);
+
+    let (status, sent) = call(&app, "POST", &format!("/api/personas/{fid}/send"), Some(&owner), Some(json!({"account_ids": [sam_id]}))).await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert_eq!(sent[0]["persona_name"], "Family helper");
+    // Sending the Assistant again: Sam already has one called that.
+    let (_, mine) = call(&app, "GET", "/api/personas", Some(&owner), None).await;
+    let assistant = mine.as_array().unwrap().iter().find(|p| p["name"] == "Assistant").unwrap()["id"].as_str().unwrap().to_string();
+    let (_, sent) = call(&app, "POST", &format!("/api/personas/{assistant}/send"), Some(&owner), Some(json!({"account_ids": [sam_id]}))).await;
+    assert_eq!(sent[0]["persona_name"], "Assistant (from Dan)");
+
+    // Sam's copy has the prompt and voice, and none of Dan's memories.
+    let (_, signed) = call(&app, "POST", "/api/auth/sign-in", None, Some(json!({"account_id": sam_id, "secret": "2468"}))).await;
+    let sam_token = signed["token"].as_str().unwrap();
+    let (_, theirs) = call(&app, "GET", "/api/personas", Some(sam_token), None).await;
+    let copy = theirs.as_array().unwrap().iter().find(|p| p["name"] == "Family helper").unwrap();
+    assert_eq!(copy["voice"], "af_heart");
+    assert!(copy["system_prompt"].as_str().unwrap().contains("{name}"));
+    let (_, memories) = call(&app, "GET", "/api/memory", Some(sam_token), None).await;
+    assert!(memories.as_array().unwrap().iter().all(|m| m["text"] != "Dan's secret"));
+
+    // Sharing: Dan shares a persona with everyone; Sam sees it (as Dan's), chats with it,
+    // can't change it, and can make his own copy.
+    let (_, tutor) = call(&app, "POST", "/api/personas", Some(&owner), Some(json!({"name": "Tutor", "shared": true}))).await;
+    let tid = tutor["id"].as_str().unwrap().to_string();
+    let (_, theirs) = call(&app, "GET", "/api/personas", Some(sam_token), None).await;
+    let shared = theirs.as_array().unwrap().iter().find(|p| p["id"] == tid.as_str()).expect("Sam sees it");
+    assert_eq!(shared["owner_name"], "Dan");
+    let (status, chat) = call(&app, "POST", "/api/chats", Some(sam_token), Some(json!({"persona_id": tid}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{chat}");
+    let (status, _) = call(&app, "PATCH", &format!("/api/personas/{tid}"), Some(sam_token), Some(json!({"name": "Mine now"}))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, mine) = call(&app, "POST", &format!("/api/personas/{tid}/copy"), Some(sam_token), None).await;
+    assert_eq!(status, StatusCode::CREATED, "{mine}");
+    assert_eq!(mine["account_id"], sam_id.as_str());
+    assert_eq!(mine["shared"], false);
+    // Unshared: it's gone from Sam's list.
+    let (_, _) = call(&app, "PATCH", &format!("/api/personas/{tid}"), Some(&owner), Some(json!({"shared": false}))).await;
+    let (_, theirs) = call(&app, "GET", "/api/personas", Some(sam_token), None).await;
+    assert!(theirs.as_array().unwrap().iter().all(|p| p["id"] != tid.as_str()));
+}

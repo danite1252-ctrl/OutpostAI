@@ -23,11 +23,14 @@ use crate::{llm, AppState};
 
 // ---------------------------------------------------------------- personas
 
-/// My personas. Every account starts with "Assistant".
+/// My personas (every account starts with "Assistant"), then ones others shared with
+/// everyone (`owner_name` set: theirs to edit, mine to chat with or copy).
 #[utoipa::path(get, path = "/api/personas", tag = "chat", security(("bearer" = [])),
     responses((status = 200, description = "Personas", body = [Persona]), (status = 401, description = "Not signed in", body = ErrorBody)))]
 pub async fn list_personas(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<Vec<Persona>>> {
-    Ok(Json(personas::list(&state.pool, &auth.account.id).await?))
+    let mut all = personas::list(&state.pool, &auth.account.id).await?;
+    all.extend(personas::shared_with_me(&state.pool, &auth.account.id).await?);
+    Ok(Json(all))
 }
 
 /// Create a persona.
@@ -68,6 +71,117 @@ pub async fn delete_persona(
 ) -> ApiResult<StatusCode> {
     personas::delete(&state.pool, &auth.account.id, &id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Who else uses this Outpost (names only), e.g. to send someone a persona.
+#[utoipa::path(get, path = "/api/people", tag = "chat", security(("bearer" = [])),
+    responses((status = 200, description = "People", body = [super::auth::DirectoryEntry])))]
+pub async fn people(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<Vec<super::auth::DirectoryEntry>>> {
+    auth.require_person("The list of people")?;
+    Ok(Json(
+        outpost_core::accounts::list(&state.pool)
+            .await?
+            .into_iter()
+            .filter(|a| a.role != outpost_core::accounts::Role::Service)
+            .map(|a| super::auth::DirectoryEntry { id: a.id, name: a.name, role: a.role, avatar_color: a.avatar_color })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SendPersonaRequest {
+    /// Who gets a copy.
+    pub account_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SentPersona {
+    pub account_name: String,
+    /// The copy's name in their list (with "from ..." if they had one called the same).
+    pub persona_name: String,
+}
+
+/// Send copies of one of my personas: its prompt, model, voice and settings, but none of
+/// my memories. Each copy is theirs to change. (`{name}` in the prompt becomes theirs.)
+#[utoipa::path(post, path = "/api/personas/{id}/send", tag = "chat", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Persona id")),
+    request_body = SendPersonaRequest,
+    responses((status = 200, description = "Sent", body = [SentPersona]), (status = 404, description = "Not found", body = ErrorBody)))]
+pub async fn send_persona(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(id): Path<String>,
+    Json(req): Json<SendPersonaRequest>,
+) -> ApiResult<Json<Vec<SentPersona>>> {
+    auth.require_person("Sending a persona")?;
+    let p = personas::get(&state.pool, &auth.account.id, &id).await?;
+    let mut sent = Vec::new();
+    for target in req.account_ids.iter().filter(|t| **t != auth.account.id) {
+        let account = outpost_core::accounts::get(&state.pool, target).await?;
+        if account.role == outpost_core::accounts::Role::Service {
+            continue;
+        }
+        let copy = copy_persona(&state, &p, &account.id, &auth.account.name).await?;
+        outpost_core::audit::log_quiet(
+            &state.pool,
+            Some(&auth.account.id),
+            Some(&auth.session.id),
+            "persona_sent",
+            Some(&format!("{} to {}", p.name, account.name)),
+        )
+        .await;
+        sent.push(SentPersona { account_name: account.name, persona_name: copy.name });
+    }
+    Ok(Json(sent))
+}
+
+/// A copy of `p` in `account_id`'s personas: settings and prompt, no memories, not shared.
+/// "(from <who>)" is added when they already have one with that name.
+async fn copy_persona(state: &AppState, p: &Persona, account_id: &str, from: &str) -> ApiResult<Persona> {
+    let theirs = personas::list(&state.pool, account_id).await?;
+    let taken = |n: &str| theirs.iter().any(|q| q.name.eq_ignore_ascii_case(n));
+    let mut name = p.name.clone();
+    if taken(&name) {
+        name = format!("{} (from {from})", p.name);
+        let mut n = 2;
+        while taken(&name) {
+            name = format!("{} (from {from}) {n}", p.name);
+            n += 1;
+        }
+    }
+    Ok(personas::create(
+        &state.pool,
+        account_id,
+        personas::PersonaInput {
+            name: Some(name),
+            system_prompt: Some(p.system_prompt.clone()),
+            model: p.model.clone(),
+            temperature: p.temperature,
+            think: Some(p.think),
+            use_memory: Some(p.use_memory),
+            voice: p.voice.clone(),
+            speak_replies: Some(p.speak_replies),
+            shared: Some(false),
+            avatar_color: Some(p.avatar_color.clone()),
+            slug: None,
+        },
+    )
+    .await?)
+}
+
+/// Make my own copy of a persona someone shared (or of one of mine), to change as I like.
+#[utoipa::path(post, path = "/api/personas/{id}/copy", tag = "chat", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Persona id")),
+    responses((status = 201, description = "My copy", body = Persona), (status = 404, description = "Not found", body = ErrorBody)))]
+pub async fn copy_persona_for_me(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(id): Path<String>,
+) -> ApiResult<(StatusCode, Json<Persona>)> {
+    let p = personas::get_usable(&state.pool, &auth.account.id, &id).await?;
+    let from = p.owner_name.clone().unwrap_or_else(|| auth.account.name.clone());
+    let copy = copy_persona(&state, &p, &auth.account.id, &from).await?;
+    Ok((StatusCode::CREATED, Json(copy)))
 }
 
 // ---------------------------------------------------------------- chats
@@ -291,7 +405,7 @@ pub async fn send_message(
         return Ok(Sse::new(stream).keep_alive(KeepAlive::default()));
     }
     let persona = match &chat.persona_id {
-        Some(pid) => personas::get(&state.pool, &account_id, pid).await.ok(),
+        Some(pid) => personas::get_usable(&state.pool, &account_id, pid).await.ok(),
         None => None,
     };
     let resolved = llm::resolve_model(&state, chat.model.as_deref(), persona.as_ref()).await?;

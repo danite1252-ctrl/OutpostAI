@@ -239,6 +239,10 @@ export interface Persona {
   voice: string | null;
   /** Read replies aloud in chat. */
   speak_replies: boolean;
+  /** Shared with everyone on this Outpost. */
+  shared?: boolean;
+  /** Someone else's shared persona: whose it is (theirs to edit). */
+  owner_name?: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -256,6 +260,8 @@ export type PersonaInput = Partial<{
   /** Speaking voice; "" for the default. */
   voice: string;
   speak_replies: boolean;
+  /** Share it with everyone on this Outpost. */
+  shared: boolean;
 }>;
 
 export interface Chat {
@@ -527,6 +533,16 @@ export const api = {
     request<void>("POST", "/api/models/remove", { token, body: { model } }),
   personas: (token: string) => request<Persona[]>("GET", "/api/personas", { token }),
   createPersona: (token: string, body: PersonaInput) => request<Persona>("POST", "/api/personas", { token, body }),
+  /** My own copy of a persona (one someone shared, or mine). */
+  copyPersona: (token: string, id: string) => request<Persona>("POST", `/api/personas/${encodeURIComponent(id)}/copy`, { token }),
+  /** Everyone using this Outpost (names only). */
+  people: (token: string) => request<DirectoryEntry[]>("GET", "/api/people", { token }),
+  /** Send copies of a persona (prompt and settings; none of my memories). */
+  sendPersona: (token: string, id: string, accountIds: string[]) =>
+    request<{ account_name: string; persona_name: string }[]>("POST", `/api/personas/${encodeURIComponent(id)}/send`, {
+      token,
+      body: { account_ids: accountIds },
+    }),
   updatePersona: (token: string, id: string, body: PersonaInput) =>
     request<Persona>("PATCH", `/api/personas/${id}`, { token, body }),
   deletePersona: (token: string, id: string) => request<void>("DELETE", `/api/personas/${id}`, { token }),

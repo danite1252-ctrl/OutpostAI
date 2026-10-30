@@ -80,8 +80,8 @@ pub async fn create(
     title: Option<&str>,
 ) -> CoreResult<Chat> {
     if let Some(pid) = persona_id {
-        // Only your own personas.
-        crate::personas::get(pool, account_id, pid).await?;
+        // Your own personas, or ones shared with everyone.
+        crate::personas::get_usable(pool, account_id, pid).await?;
     }
     let t = now();
     let chat = Chat {
@@ -126,7 +126,7 @@ pub async fn update(
         chat.title = t.to_string();
     }
     if let Some(pid) = persona_id {
-        crate::personas::get(pool, account_id, pid).await?;
+        crate::personas::get_usable(pool, account_id, pid).await?;
         chat.persona_id = Some(pid.to_string());
     }
     if let Some(m) = model {

@@ -28,6 +28,12 @@ pub struct Persona {
     pub voice: Option<String>,
     /// Read replies aloud in chat.
     pub speak_replies: bool,
+    /// Shared with everyone on this Outpost (they can chat with it and copy it).
+    #[serde(default)]
+    pub shared: bool,
+    /// For someone else's shared persona: whose it is (it's theirs to edit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_name: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -45,6 +51,8 @@ pub struct PersonaInput {
     /// Speaking voice; send an empty string for the default.
     pub voice: Option<String>,
     pub speak_replies: Option<bool>,
+    /// Share it with everyone on this Outpost.
+    pub shared: Option<bool>,
     pub avatar_color: Option<String>,
     /// The id apps use, as in `persona:<slug>`. Normally made from the name; set it to
     /// rename the id (apps using the old one then need updating).
@@ -97,6 +105,7 @@ struct Row {
     use_memory: bool,
     voice: Option<String>,
     speak_replies: bool,
+    shared: bool,
     created_at: i64,
     updated_at: i64,
 }
@@ -116,13 +125,15 @@ impl From<Row> for Persona {
             use_memory: r.use_memory,
             voice: r.voice,
             speak_replies: r.speak_replies,
+            shared: r.shared,
+            owner_name: None,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
     }
 }
 
-const SELECT: &str = "SELECT id, account_id, slug, name, avatar_color, system_prompt, model, temperature, think, use_memory, voice, speak_replies, created_at, updated_at FROM personas";
+const SELECT: &str = "SELECT id, account_id, slug, name, avatar_color, system_prompt, model, temperature, think, use_memory, voice, speak_replies, shared, created_at, updated_at FROM personas";
 
 const COLORS: [&str; 6] = ["#FFB547", "#FF6A3D", "#9CB4FF", "#7BD88F", "#C9B8FF", "#6FD3FF"];
 
@@ -202,6 +213,15 @@ pub async fn list(pool: &SqlitePool, account_id: &str) -> CoreResult<Vec<Persona
     Ok(rows.into_iter().map(Persona::from).collect())
 }
 
+/// My personas as they are (no default added): for reading another Outpost's database.
+pub async fn list_existing(pool: &SqlitePool, account_id: &str) -> CoreResult<Vec<Persona>> {
+    let rows: Vec<Row> = sqlx::query_as(&format!("{SELECT} WHERE account_id = ? ORDER BY created_at, name"))
+        .bind(account_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(Persona::from).collect())
+}
+
 /// Every account starts with an "Assistant" persona so chat works straight away.
 pub async fn ensure_default(pool: &SqlitePool, account_id: &str) -> CoreResult<()> {
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM personas WHERE account_id = ?")
@@ -230,6 +250,43 @@ pub async fn get(pool: &SqlitePool, account_id: &str, id: &str) -> CoreResult<Pe
         .fetch_optional(pool)
         .await?;
     row.map(Persona::from).ok_or(CoreError::NotFound)
+}
+
+/// A persona I may chat with: one of mine, or one someone shared with everyone.
+pub async fn get_usable(pool: &SqlitePool, account_id: &str, id: &str) -> CoreResult<Persona> {
+    let row: Option<Row> = sqlx::query_as(&format!("{SELECT} WHERE id = ? AND (account_id = ? OR shared = 1)"))
+        .bind(id)
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await?;
+    let mut p = row.map(Persona::from).ok_or(CoreError::NotFound)?;
+    if p.account_id != account_id {
+        p.owner_name = sqlx::query_scalar("SELECT name FROM accounts WHERE id = ?")
+            .bind(&p.account_id)
+            .fetch_optional(pool)
+            .await?;
+    }
+    Ok(p)
+}
+
+/// Other people's personas shared with everyone, with whose each is.
+pub async fn shared_with_me(pool: &SqlitePool, account_id: &str) -> CoreResult<Vec<Persona>> {
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        "{SELECT} WHERE shared = 1 AND account_id != ? ORDER BY name"
+    ))
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+    let mut out = Vec::new();
+    for r in rows {
+        let mut p = Persona::from(r);
+        p.owner_name = sqlx::query_scalar("SELECT name FROM accounts WHERE id = ?")
+            .bind(&p.account_id)
+            .fetch_optional(pool)
+            .await?;
+        out.push(p);
+    }
+    Ok(out)
 }
 
 pub async fn get_by_slug(pool: &SqlitePool, account_id: &str, slug: &str) -> CoreResult<Persona> {
@@ -275,12 +332,14 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: PersonaInput) ->
         use_memory: input.use_memory.unwrap_or(true),
         voice: input.voice.filter(|v| !v.is_empty()),
         speak_replies: input.speak_replies.unwrap_or(false),
+        shared: input.shared.unwrap_or(false),
+        owner_name: None,
         created_at: t,
         updated_at: t,
     };
     sqlx::query(
-        "INSERT INTO personas (id, account_id, slug, name, avatar_color, system_prompt, model, temperature, think, use_memory, voice, speak_replies, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO personas (id, account_id, slug, name, avatar_color, system_prompt, model, temperature, think, use_memory, voice, speak_replies, shared, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&persona.id)
     .bind(&persona.account_id)
@@ -294,6 +353,7 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: PersonaInput) ->
     .bind(persona.use_memory)
     .bind(&persona.voice)
     .bind(persona.speak_replies)
+    .bind(persona.shared)
     .bind(t)
     .bind(t)
     .execute(pool)
@@ -358,9 +418,12 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Person
     if let Some(c) = input.avatar_color {
         p.avatar_color = c;
     }
+    if let Some(sh) = input.shared {
+        p.shared = sh;
+    }
     p.updated_at = now();
     sqlx::query(
-        "UPDATE personas SET name = ?, slug = ?, system_prompt = ?, model = ?, temperature = ?, think = ?, use_memory = ?, avatar_color = ?, voice = ?, speak_replies = ?, updated_at = ?
+        "UPDATE personas SET name = ?, slug = ?, system_prompt = ?, model = ?, temperature = ?, think = ?, use_memory = ?, avatar_color = ?, voice = ?, speak_replies = ?, shared = ?, updated_at = ?
          WHERE id = ? AND account_id = ?",
     )
     .bind(&p.name)
@@ -373,6 +436,7 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Person
     .bind(&p.avatar_color)
     .bind(&p.voice)
     .bind(p.speak_replies)
+    .bind(p.shared)
     .bind(p.updated_at)
     .bind(id)
     .bind(account_id)

@@ -331,7 +331,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
             >
               {personas.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name}
+                  {p.owner_name ? `${p.name} (shared by ${p.owner_name})` : p.name}
                 </option>
               ))}
             </select>

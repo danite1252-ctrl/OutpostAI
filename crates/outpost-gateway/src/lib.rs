@@ -188,6 +188,9 @@ pub fn router(state: AppState) -> Router {
             post(openai::chat_completions).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
         )
         .route("/api/personas", get(chat::list_personas).post(chat::create_persona))
+        .route("/api/personas/{id}/send", post(chat::send_persona))
+        .route("/api/personas/{id}/copy", post(chat::copy_persona_for_me))
+        .route("/api/people", get(chat::people))
         .route(
             "/api/personas/{id}",
             patch(chat::update_persona).delete(chat::delete_persona),
