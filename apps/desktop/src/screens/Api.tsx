@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   api,
   GATEWAY,
+  SERVER,
   integrationsApi,
   type McpTool,
   type NetworkStatus,
@@ -85,7 +86,7 @@ export default function Api({ auth, onOpenConnections }: { auth: SignInResponse;
 
   // Where other apps reach Outpost: this PC, the home network, Tailscale.
   const bases = useMemo(() => {
-    const out: { where: string; url: string }[] = [{ where: "Apps on this PC", url: `http://127.0.0.1:${port}` }];
+    const out: { where: string; url: string }[] = [{ where: SERVER ? "Apps on the server itself" : "Apps on this PC", url: `http://127.0.0.1:${port}` }];
     if (network?.lan_access && network.lan_address) out.push({ where: "Your home network", url: `http://${network.lan_address}:${port}` });
     if (network?.tailscale_running && network.tailscale)
       out.push({ where: "Your Tailscale devices", url: `http://${network.tailscale.dns_name ?? network.tailscale.ip}:${port}` });
@@ -212,7 +213,7 @@ export default function Api({ auth, onOpenConnections }: { auth: SignInResponse;
         )}
       </Section>
 
-      <Section title="Every endpoint" blurb={`From the live OpenAPI document at ${GATEWAY}/openapi.json.`}>
+      <Section title="Every endpoint" blurb={`From the live OpenAPI document at ${SERVER ? `${SERVER.name}'s /openapi.json` : `${GATEWAY}/openapi.json`}.`}>
         <input
           aria-label="Find an endpoint"
           value={filter}

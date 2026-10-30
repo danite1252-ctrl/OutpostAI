@@ -7,9 +7,11 @@ const roleLabel = { owner: "Owner", member: "Member", restricted: "Restricted", 
 export default function Picker({
   machineName,
   onPick,
+  onUseServer,
 }: {
   machineName?: string;
   onPick: (account: DirectoryEntry) => void;
+  onUseServer: () => void;
 }) {
   const [accounts, setAccounts] = useState<DirectoryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,6 +46,9 @@ export default function Picker({
         ))}
       </ul>
       {machineName && <p className="text-xs text-muted">Running on {machineName}</p>}
+      <button type="button" onClick={onUseServer} className="text-xs text-muted underline-offset-2 hover:text-ink hover:underline">
+        Connect to an Outpost server instead
+      </button>
     </main>
   );
 }

@@ -1,12 +1,13 @@
 # Outpost on a Linux server, as a systemd user service (installed by the runner's "deploy").
-# Starts at boot (with `loginctl enable-linger`), restarts if it stops.
+# Starts at boot (with `loginctl enable-linger`), restarts if it stops. `--server`: network
+# access is on (until the owner turns it off), so other devices can set it up and use it.
 [Unit]
 Description=Outpost (local AI server)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=%h/.local/lib/outpost/outpost-gateway
+ExecStart=%h/.local/lib/outpost/outpost-gateway --server
 Restart=on-failure
 RestartSec=5
 Environment=RUST_LOG=outpost_gateway=info,outpost_core=info,outpost_engines=info

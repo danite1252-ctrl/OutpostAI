@@ -51,6 +51,16 @@ struct Args {
     /// Print the OpenAPI spec as JSON and exit.
     #[arg(long)]
     print_openapi: bool,
+
+    /// Run as a server with no screen (a home server): network access is on unless the
+    /// owner turns it off, so other devices can set it up and use it.
+    #[arg(long, env = "OUTPOST_SERVER")]
+    server: bool,
+
+    /// Show the one-time setup code for creating the first owner from another device
+    /// (only while Outpost has no owner), then exit.
+    #[arg(long)]
+    setup_code: bool,
 }
 
 #[tokio::main]
@@ -58,6 +68,18 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     if args.print_openapi {
         println!("{}", outpost_gateway::openapi::spec_json());
+        return Ok(());
+    }
+
+    if args.setup_code {
+        let data_dir = args.data_dir.clone().unwrap_or_else(default_data_dir);
+        match std::fs::read_to_string(outpost_gateway::setup_code::file(&data_dir)) {
+            Ok(text) => print!("{text}"),
+            Err(_) => println!(
+                "There's no setup code: Outpost already has an owner, or it isn't running yet \
+                 (start it, wait a few seconds, and try again)."
+            ),
+        }
         return Ok(());
     }
 
@@ -81,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
     let mut config = Config::local_default();
     config.data_dir = args.data_dir.unwrap_or_else(default_data_dir);
     config.ollama_url = args.ollama_url;
+    config.server = args.server;
     if let Some(bind) = args.bind {
         config.bind = bind;
     }
@@ -92,9 +115,10 @@ async fn main() -> anyhow::Result<()> {
 
     let bind = state.config.bind;
     if !bind.ip().is_loopback() {
-        tracing::warn!(
+        tracing::info!(
             %bind,
-            "listening on the network: app keys work from other devices, PIN sign-in stays on this PC. Plain HTTP, so use a network you trust"
+            secure_port = outpost_gateway::secure_port(bind.port()),
+            "listening on the network: paired devices use the encrypted port; app keys work on the plain one, so use a network you trust"
         );
     }
 

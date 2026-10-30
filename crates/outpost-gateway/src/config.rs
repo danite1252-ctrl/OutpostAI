@@ -13,6 +13,9 @@ pub struct Config {
     pub bind: SocketAddr,
     /// Ollama's HTTP address.
     pub ollama_url: String,
+    /// A server with no screen (`outpost-gateway --server`): other devices are its only way
+    /// in, so network access is on unless the owner has turned it off.
+    pub server: bool,
 }
 
 impl Config {
@@ -23,6 +26,7 @@ impl Config {
             data_dir: default_data_dir(),
             bind: SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT)),
             ollama_url: DEFAULT_OLLAMA_URL.to_string(),
+            server: false,
         }
     }
 

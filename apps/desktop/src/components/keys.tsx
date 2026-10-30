@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, ApiError, GATEWAY, type Account, type NetworkStatus, type Session, type SignInResponse } from "../api";
+import { api, ApiError, GATEWAY, SERVER, type Account, type NetworkStatus, type Session, type SignInResponse } from "../api";
 import { Button, ErrorNote, Field } from "./ui";
 
 /** App keys for Hermes and other OpenAI-compatible apps. */
@@ -59,7 +59,7 @@ export function AppKeysPanel({ auth }: { auth: SignInResponse }) {
         </p>
       </div>
       <div className="rounded-2xl border border-line bg-surface p-5 font-mono text-sm leading-relaxed text-soft">
-        Base URL on this PC: {GATEWAY}/v1
+        {SERVER ? <>Apps on the server itself: http://127.0.0.1:7420/v1</> : <>Base URL on this PC: {GATEWAY}/v1</>}
         <br />
         {network?.base_url ? (
           <>

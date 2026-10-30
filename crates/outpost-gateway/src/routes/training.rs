@@ -84,9 +84,9 @@ pub async fn status(State(state): State<AppState>, _auth: Auth) -> Json<Training
     let dir = train_job::toolkit_dir(&state).await;
     let caption_models = vision_models(&state).await;
     let hw = crate::routes::models::measure(&state).await;
-    let character_pack_ready = outpost_engines::packs::find("character_z_image")
-        .map(|p| state.assets.status(&p).ready)
-        .unwrap_or(false);
+    let character_pack_ready = outpost_engines::packs::built_in()
+        .iter()
+        .any(|p| p.task() == outpost_engines::packs::Task::Character && state.assets.status(p).ready);
     Json(TrainingStatus {
         toolkit_problem: trainer::check_install(&dir).err(),
         toolkit_dir: dir.to_string_lossy().to_string(),

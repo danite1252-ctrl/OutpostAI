@@ -53,14 +53,20 @@ fn encode(s: &str) -> String {
         .collect()
 }
 
-/// Make a pairing code (desktop app only). Needs network access on, so the encrypted
-/// port is running.
+/// Make a pairing code: in the desktop app on the Outpost PC, or on a paired device with
+/// the PIN again (`X-Outpost-Pin`), e.g. a desktop app using a server. Needs network
+/// access on, so the encrypted port is running.
 #[utoipa::path(post, path = "/api/pairing", tag = "pairing", security(("bearer" = [])),
     responses((status = 201, description = "A new code", body = PairingView),
-        (status = 403, description = "Not from the desktop app", body = ErrorBody),
+        (status = 403, description = "An app key, or no PIN from a paired device", body = ErrorBody),
         (status = 409, description = "Network access is off", body = ErrorBody)))]
-pub async fn create_code(State(state): State<AppState>, auth: Auth) -> ApiResult<(StatusCode, Json<PairingView>)> {
-    auth.require_desktop("Pairing a phone")?;
+pub async fn create_code(
+    State(state): State<AppState>,
+    auth: Auth,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<(StatusCode, Json<PairingView>)> {
+    auth.require_person("Pairing a device")?;
+    auth.require_fresh_pin(&state, &headers).await?;
     let tls = state.tls.get().cloned().ok_or_else(|| {
         ApiError::conflict(
             "Turn on \"Allow other devices on my network\" in Settings and restart Outpost, then pair the phone.",
@@ -118,12 +124,12 @@ pub struct PairingStatus {
     pub account_name: Option<String>,
 }
 
-/// Has my pairing code been used yet? (desktop app only)
+/// Has my pairing code been used yet?
 #[utoipa::path(get, path = "/api/pairing/{id}", tag = "pairing", security(("bearer" = [])),
     params(("id" = String, Path, description = "Pairing id")),
     responses((status = 200, description = "Status", body = PairingStatus), (status = 404, description = "Not found", body = ErrorBody)))]
 pub async fn code_status(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<PairingStatus>> {
-    auth.require_desktop("Pairing a phone")?;
+    auth.require_person("Pairing a device")?;
     let row = pairing::get(&state.pool, &id).await?;
     if row.created_by != auth.account.id {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "not_found", "Not found."));

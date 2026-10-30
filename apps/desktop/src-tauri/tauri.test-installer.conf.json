@@ -1,4 +1,6 @@
 {
+  "productName": "Outpost Test",
+  "identifier": "app.outpost.desktop.test",
   "bundle": {
     "createUpdaterArtifacts": false,
     "externalBin": [

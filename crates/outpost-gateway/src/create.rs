@@ -107,6 +107,8 @@ pub async fn worker(state: AppState) {
         Ok(_) => {}
         Err(e) => tracing::warn!(error = %e, "could not tidy the job queue"),
     }
+    // Copies left in ComfyUI by jobs before a restart.
+    clear_comfy_copies(&state).await;
     loop {
         let job = match jobs::take_next(&state.pool).await {
             Ok(Some(job)) => job,
@@ -161,6 +163,7 @@ pub async fn worker(state: AppState) {
         crate::webhooks::job_finished(&state, &job.id).await;
         state.queue.set_running(None);
         remove_inputs(&state, &job).await;
+        clear_comfy_copies(&state).await;
         // Queue empty: give the GPU back to chat.
         if matches!(jobs::queued_count(&state.pool).await, Ok(0)) {
             state.comfy.free().await;
@@ -178,6 +181,23 @@ async fn remove_inputs(state: &AppState, job: &Job) {
         .map(|rel| state.config.files_dir().join(rel))
         .collect();
     attachments::remove_files(&files).await;
+}
+
+/// ComfyUI keeps its own copy of every result (`output/outpost`) and of every picture it
+/// was given (`input/outpost`). Outpost has already copied results into the gallery (where
+/// deleting really deletes) and keeps job pictures itself, so these copies are only clutter
+/// that would fill the disk. One job runs at a time, so between jobs nothing is using them.
+/// Only Outpost's own subfolders of the ComfyUI it installed are touched.
+pub async fn clear_comfy_copies(state: &AppState) {
+    let app = state.engines.comfyui_app_dir();
+    for sub in ["output", "input"] {
+        let dir = app.join(sub).join("outpost");
+        match tokio::fs::remove_dir_all(&dir).await {
+            Ok(()) => tracing::debug!(dir = %dir.display(), "cleared ComfyUI's copies"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(dir = %dir.display(), error = %e, "couldn't clear ComfyUI's copies"),
+        }
+    }
 }
 
 /// How long a job may run before Outpost gives up on it.

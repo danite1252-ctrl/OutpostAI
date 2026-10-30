@@ -66,6 +66,21 @@ app (and pair again) to take a new one.
 Within a day every installed Outpost shows "Outpost 0.2.0 is ready" (or straight away with
 **Settings › Updates › Check now**), and paired phones show the new app under **You**.
 
+## Android developer registration
+
+Google requires apps installed outside the Play Store to come from a registered developer
+(from 30 Sep 2026 in Brazil, Indonesia, Singapore and Thailand; everywhere in 2027). Outpost
+is registered in the Android Developer Console (free **limited distribution** account: up to
+20 devices, which suits a household; switching to a full account, US$25 with ID, lifts that) with:
+
+| | |
+| --- | --- |
+| Package name | `app.outpost.mobile` |
+| Release key certificate (SHA-256) | `B4:91:A4:EE:B5:41:8C:99:49:AF:89:B6:87:66:53:CE:08:F0:B2:BF:5D:5D:FE:DE:9A:72:16:9C:B2:6E:D3:4C` |
+
+The fingerprint is public (it identifies the key without revealing it). Every release must be
+signed with this same key (`%USERPROFILE%\.outpost\outpost-release.keystore`).
+
 ## Notes
 
 - The installer isn't Authenticode-signed (no paid certificate yet), so Windows SmartScreen

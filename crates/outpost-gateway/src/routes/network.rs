@@ -5,13 +5,15 @@
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 
 use axum::extract::{ConnectInfo, State};
+use axum::http::HeaderMap;
 use axum::Json;
+use outpost_core::sessions::SessionKind;
 use outpost_core::settings;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::require_loopback;
-use crate::error::{ApiResult, ErrorBody};
+use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::Auth;
 use crate::AppState;
 
@@ -82,7 +84,11 @@ pub fn lan_ip() -> Option<IpAddr> {
 }
 
 async fn status(state: &AppState) -> ApiResult<NetworkStatus> {
-    let lan_access = settings::get_bool(&state.pool, settings::NETWORK_ACCESS).await?;
+    let lan_access = match settings::get(&state.pool, settings::NETWORK_ACCESS).await?.as_deref() {
+        Some(v) => v == "on",
+        // A server has it on until the owner turns it off.
+        None => state.config.server,
+    };
     let listening = state.listening.get().copied();
     let open_now = listening.is_some_and(|a: SocketAddr| !a.ip().is_loopback());
     let lan = lan_ip();
@@ -121,7 +127,9 @@ pub async fn get_network(State(state): State<AppState>, _auth: Auth) -> ApiResul
     Ok(Json(status(&state).await?))
 }
 
-/// Turn network access on or off (owner, on this PC). Takes effect when Outpost restarts.
+/// Turn network access on or off (owner). Takes effect when Outpost restarts. On the
+/// Outpost PC, or from an owner's paired device with the PIN again (`X-Outpost-Pin`); a
+/// paired device can't turn network access off, since that would cut it off.
 #[utoipa::path(put, path = "/api/settings/network", tag = "system", security(("bearer" = [])),
     request_body = NetworkRequest,
     responses((status = 200, description = "Saved", body = NetworkStatus), (status = 403, description = "Not allowed", body = ErrorBody)))]
@@ -129,10 +137,24 @@ pub async fn set_network(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Auth,
+    headers: HeaderMap,
     Json(req): Json<NetworkRequest>,
 ) -> ApiResult<Json<NetworkStatus>> {
-    require_loopback(&addr, "Changing network access")?;
     auth.require_owner()?;
+    if require_loopback(&addr, "Changing network access").is_err() {
+        if auth.session.kind != SessionKind::Device {
+            return Err(ApiError::forbidden(
+                "Network access is changed on the Outpost PC, or from an owner's paired device.",
+            ));
+        }
+        auth.require_fresh_pin(&state, &headers).await?;
+        if !req.lan_access {
+            return Err(ApiError::forbidden(
+                "Turning network access off from another device would cut that device off. \
+                 Do it on the server itself.",
+            ));
+        }
+    }
     settings::set_bool(&state.pool, settings::NETWORK_ACCESS, req.lan_access).await?;
     if let Some(on) = req.tailscale_access {
         settings::set_bool(&state.pool, settings::TAILSCALE_ACCESS, on).await?;

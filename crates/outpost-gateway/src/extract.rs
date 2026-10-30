@@ -66,6 +66,15 @@ impl Auth {
         }
     }
 
+    /// A person's sign-in (the desktop app or a paired device), not an app key.
+    pub fn require_person(&self, what: &str) -> Result<(), ApiError> {
+        if self.session.kind == SessionKind::App {
+            Err(ApiError::forbidden(format!("{what} needs the Outpost app, not an app key.")))
+        } else {
+            Ok(())
+        }
+    }
+
     /// High-risk actions (accounts, app keys, deleting models, installing engines and
     /// workflows) are for a person: the desktop app, or a phone that sends the account's
     /// PIN again as the `X-Outpost-Pin` header. App keys can't do them, since they may
@@ -89,7 +98,7 @@ impl Auth {
                 ApiError::new(
                     axum::http::StatusCode::FORBIDDEN,
                     "pin_required",
-                    "Enter your PIN again to do this from a phone.",
+                    "Enter your PIN again to do this on a paired device.",
                 )
             })?;
         outpost_core::auth::check_secret(&state.pool, &self.account.id, pin, "device_confirm").await?;

@@ -204,9 +204,12 @@ const BUILT_IN: &[(&str, &str)] = &[
     pack!("z_image_turbo"),
     pack!("qwen_image_21_turbo"),
     pack!("qwen_image"),
+    pack!("z_image_turbo_8gb"),
     pack!("character_z_image", "z_image_turbo"),
+    pack!("character_z_image_8gb", "z_image_turbo_8gb"),
     pack!("qwen_image_21_edit"),
     pack!("qwen_image_edit"),
+    pack!("flux2_klein_edit"),
     pack!("wan22_t2v"),
     pack!("wan22_i2v"),
 ];
@@ -870,9 +873,14 @@ mod tests {
         assert_eq!(pick_on(16.0, 64.0, Task::Character).as_deref(), Some("character_z_image"));
         // 12 GB: Z-Image (14 GB) no longer fits, so the 11 GB Qwen 2.1 Turbo wins.
         assert_eq!(pick_on(12.0, 32.0, Task::Picture).as_deref(), Some("qwen_image_21_turbo"));
-        // 8 GB laptop: nothing fits, so the smallest that runs.
-        assert_eq!(pick_on(8.0, 16.0, Task::Picture).as_deref(), Some("qwen_image_21_turbo"));
-        assert_eq!(pick_on(8.0, 16.0, Task::Character).as_deref(), Some("character_z_image"));
+        // 8 GB (the home server's 3060): the small-file versions fit.
+        assert_eq!(pick_on(8.0, 10.0, Task::Picture).as_deref(), Some("z_image_turbo_8gb"));
+        assert_eq!(pick_on(8.0, 10.0, Task::Character).as_deref(), Some("character_z_image_8gb"));
+        assert_eq!(pick_on(8.0, 10.0, Task::Edit).as_deref(), Some("flux2_klein_edit"));
+        // ...but a bigger card still gets the full ones.
+        assert_eq!(pick_on(16.0, 64.0, Task::Edit).as_deref(), Some("qwen_image_21_edit"));
+        // 6 GB: nothing fits, so the smallest that runs.
+        assert_eq!(pick_on(6.0, 16.0, Task::Picture).as_deref(), Some("z_image_turbo_8gb"));
         // 48 GB: still the best-ranked, not merely the biggest.
         assert_eq!(pick_on(48.0, 128.0, Task::Edit).as_deref(), Some("qwen_image_21_edit"));
         // No GPU and little memory: nothing.

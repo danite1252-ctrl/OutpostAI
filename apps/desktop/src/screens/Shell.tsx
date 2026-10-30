@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { SignInResponse } from "../api";
+import { SERVER, type SignInResponse } from "../api";
 import { engineReady, useEngines } from "../components/engines";
 import { Avatar, Icon, icons, Mark, StatusDot, Wordmark } from "../components/ui";
 import Settings from "./Settings";
@@ -35,11 +35,14 @@ export default function Shell({
   version,
   onLock,
   onSignedOutElsewhere,
+  onUseServer,
 }: {
   auth: SignInResponse;
   version: string;
-  onLock: () => void;
+  /** Left out when using a server: this app then stays signed in, like a phone. */
+  onLock?: () => void;
   onSignedOutElsewhere: () => void;
+  onUseServer: () => void;
 }) {
   const [section, setSection] = useState<Section>("chat");
   const [createRequest, setCreateRequest] = useState<CreateRequest | null>(null);
@@ -69,15 +72,17 @@ export default function Shell({
           </button>
         ))}
         <div className="flex-1" />
-        <button
-          type="button"
-          aria-label="Lock Outpost"
-          title="Lock"
-          onClick={onLock}
-          className="flex size-12 items-center justify-center rounded-xl text-muted hover:bg-surface hover:text-ink"
-        >
-          <Icon d={icons.lock} size={22} />
-        </button>
+        {onLock && (
+          <button
+            type="button"
+            aria-label="Lock Outpost"
+            title="Lock"
+            onClick={onLock}
+            className="flex size-12 items-center justify-center rounded-xl text-muted hover:bg-surface hover:text-ink"
+          >
+            <Icon d={icons.lock} size={22} />
+          </button>
+        )}
       </nav>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -87,7 +92,7 @@ export default function Shell({
           <div className="flex flex-wrap items-center gap-4 text-sm text-muted">
             <span className="flex items-center gap-2">
               <StatusDot on />
-              Gateway :7420
+              {SERVER ? SERVER.name : "Gateway :7420"}
             </span>
             <span className="flex items-center gap-2">
               <StatusDot on={ollamaUp} />
@@ -173,6 +178,7 @@ export default function Shell({
               engines={engines}
               onEnginesChanged={() => void refreshEngines()}
               onSignedOut={onSignedOutElsewhere}
+              onUseServer={onUseServer}
             />
           )}
           {section === "connections" && <Connections auth={auth} />}

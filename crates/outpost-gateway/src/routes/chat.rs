@@ -706,6 +706,17 @@ pub async fn plan_pictures(state: &AppState, account_id: &str, prompt: &str) -> 
             .or(ready.first())
             .cloned()
     };
+    // The same for characters (a full-size and an 8 GB version share the LoRAs).
+    let character_pack = {
+        let hw = crate::routes::models::measure(state).await;
+        let ready: Vec<packs::Pack> = packs::built_in()
+            .into_iter()
+            .filter(|p| p.task() == packs::Task::Character && state.assets.status(p).ready)
+            .collect();
+        packs::pick(&ready, packs::Task::Character, |p| crate::routes::create::pack_fit(p.vram_gb, &hw))
+            .or(ready.first())
+            .cloned()
+    };
     // Plan every picture first, so a problem stops them all before any is queued.
     let mut planned: Vec<PlannedPicture> = Vec::new();
     let mut carried: Option<outpost_core::training::Character> = None;
@@ -716,8 +727,8 @@ pub async fn plan_pictures(state: &AppState, account_id: &str, prompt: &str) -> 
         let (pack, inputs, what) = if let Some(mut c) = character {
             // Older characters learn what they are from their captions now.
             outpost_core::training::fill_subject(&state.pool, &mut c).await?;
-            let pack = packs::find("character_z_image")
-                .filter(|p| state.assets.status(p).ready)
+            let pack = character_pack
+                .clone()
                 .ok_or_else(|| {
                     ApiError::conflict("Z-Image Turbo (for characters) isn't downloaded yet. Get it in Create › Characters first.")
                 })?;

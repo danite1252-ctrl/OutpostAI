@@ -13,6 +13,7 @@ import { downloadsChanged, formatBytes, formatEta, formatSpeed } from "../compon
 import { GalleryGrid, GalleryPicker, mediaAsInput, Viewer, type CreateRequest } from "../components/gallery";
 import { dropCached, prepareImage } from "../components/images";
 import { jobsChanged } from "../components/queue";
+import { AddLora } from "../components/loras";
 import { Button, ErrorNote } from "../components/ui";
 
 const TASKS: { id: Task; label: string; blurb: string }[] = [
@@ -148,6 +149,15 @@ export default function Create({
     }, fail);
   }, [token, loadPacks, loadLoras, loadGallery, fail]);
 
+  // Only tabs with a workflow that suits this machine (the server leaves out ones too big).
+  const shownTasks = useMemo(
+    () => (packs.length ? TASKS.filter((t) => packs.some((p) => p.task === t.id)) : TASKS),
+    [packs],
+  );
+  const hiddenTasks = TASKS.filter((t) => !shownTasks.includes(t));
+  useEffect(() => {
+    if (shownTasks.length && !shownTasks.some((t) => t.id === task)) setTask(shownTasks[0].id);
+  }, [shownTasks, task]);
   const options = useMemo(() => packsOf(packs, task), [packs, task]);
   const pack = options.find((p) => p.id === choices[task]) ?? options[0] ?? null;
 
@@ -356,7 +366,7 @@ export default function Create({
       )}
 
       <div className="flex flex-wrap gap-2" role="tablist" aria-label="What to make">
-        {TASKS.map((t) => (
+        {shownTasks.map((t) => (
           <button
             key={t.id}
             type="button"
@@ -373,6 +383,12 @@ export default function Create({
         ))}
       </div>
 
+      {hiddenTasks.length > 0 && (
+        <p className="-mt-3 text-xs text-muted">
+          {hiddenTasks.map((t) => t.label).join(" and ")} {hiddenTasks.length === 1 ? "isn't" : "aren't"} shown: none of
+          {hiddenTasks.length === 1 ? " its" : " their"} workflows fit this graphics card yet.
+        </p>
+      )}
       {pack && (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="flex flex-col gap-4 rounded-2xl border border-line bg-surface p-5">
@@ -688,6 +704,7 @@ function InputField({
   onRefreshLoras: () => void;
   onSubmit: () => void;
 }) {
+  const [adding, setAdding] = useState(false);
   const id = `in-${i.key}`;
   const label = (
     <label htmlFor={id} className="text-sm text-muted">
@@ -817,15 +834,28 @@ function InputField({
                   ))}
               </optgroup>
             </select>
+            <Button variant="ghost" onClick={() => setAdding(true)} title="Upload a LoRA you already have">
+              Add LoRA
+            </Button>
             <Button variant="ghost" onClick={onRefreshLoras} title="Look for new LoRA files">
               Refresh
             </Button>
           </div>
           <span className="text-xs text-muted">
-            {i.help} Train one in Train, or copy its <span className="font-mono">.safetensors</span> file into{" "}
-            <span className="font-mono break-all">{loras.folder || "the LoRA folder"}</span>, then Refresh. Start the
-            prompt with its trigger word.
+            {i.help} Train one in Train, or use <b className="text-ink">Add LoRA</b> to upload a{" "}
+            <span className="font-mono">.safetensors</span> file you already have. Start the prompt with its trigger word.
           </span>
+          {adding && (
+            <AddLora
+              token={token}
+              onClose={() => setAdding(false)}
+              onAdded={(added) => {
+                setAdding(false);
+                onRefreshLoras();
+                onChange(i.key, added.file);
+              }}
+            />
+          )}
         </div>
       );
     case "image":

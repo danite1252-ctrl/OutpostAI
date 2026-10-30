@@ -163,7 +163,7 @@ function Find({
     <View style={s.screen}>
       <ScrollView contentContainerStyle={s.pad}>
         <H1>Pair with your Outpost</H1>
-        <P muted>On the PC open Outpost › Connections › Pair a phone. Keep the phone on the same Wi-Fi.</P>
+        <P muted>On the Outpost PC, or any paired device, open Connections › Pair a device. Keep the phone on the same Wi-Fi.</P>
         <Button title="Scan the code on the PC" onPress={onScan} />
         <Text style={[s.label, { marginTop: 8 }]}>On this network</Text>
         {found.length === 0 ? (
@@ -223,7 +223,7 @@ function Scan({ onScanned, onCancel }: { onScanned: (data: string) => void; onCa
         }
       />
       <View style={s.pad}>
-        <P muted>Point the camera at the QR code in the Pair a phone window.</P>
+        <P muted>Point the camera at the QR code in the Pair a device window.</P>
         <Button kind="ghost" title="Cancel" onPress={onCancel} />
       </View>
     </View>
@@ -246,7 +246,7 @@ function Manual({
   return (
     <View style={[s.screen, s.pad]}>
       <H1>Type the address</H1>
-      <P muted>It's under the code in the Pair a phone window, e.g. 192.168.1.20:7421.</P>
+      <P muted>It's under the code in the Pair a device window, e.g. 192.168.1.20:7421.</P>
       <Field label="PC address" value={host} onChangeText={setHost} autoCapitalize="none" autoCorrect={false} keyboardType="url" placeholder="192.168.1.20" />
       <Field label="Port" value={port} onChangeText={setPort} keyboardType="number-pad" />
       <Button title="Connect" busy={busy} disabled={!host.trim()} onPress={() => onReach(host.trim(), Number(port) || 7421)} />
@@ -280,7 +280,7 @@ function Verify({ target, onBack, onHello }: { target: Target; onBack: () => voi
   return (
     <View style={[s.screen, s.pad]}>
       <H1>Check the words</H1>
-      <P muted>The Pair a phone window on your PC shows three words. They must be exactly these:</P>
+      <P muted>The Pair a device window on your PC shows three words. They must be exactly these:</P>
       <View style={[s.card, { alignItems: "center" }]}>
         <Text style={{ color: C.amber, fontSize: 24, fontWeight: "700", letterSpacing: 1 }}>{words.join(" · ")}</Text>
       </View>

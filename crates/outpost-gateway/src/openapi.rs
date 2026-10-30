@@ -59,6 +59,7 @@ use crate::routes::{
         engines::stop,
         network::get_network,
         create::list_packs,
+        create::upload_lora,
         create::install_pack,
         create::list_loras,
         create::create_job,

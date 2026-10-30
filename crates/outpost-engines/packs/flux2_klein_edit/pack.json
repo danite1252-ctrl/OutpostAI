@@ -1,0 +1,127 @@
+{
+  "id": "flux2_klein_edit",
+  "name": "FLUX.2 Klein Edit (8 GB)",
+  "lane": "edit_image",
+  "task": "edit",
+  "rank": 22,
+  "description": "Change a picture by asking, in 4 steps. Small enough for 8 GB graphics cards.",
+  "license": "Apache-2.0",
+  "vram_gb": 7.5,
+  "output": {
+    "node": "19",
+    "kind": "image"
+  },
+  "models": [
+    {
+      "file": "flux-2-klein-4b-fp8.safetensors",
+      "folder": "diffusion_models",
+      "size_gb": 4.07,
+      "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/resolve/main/flux-2-klein-4b-fp8.safetensors",
+      "sha256": "97ed34fe0567e436200f2faee3939b88f2b5d99f8af2a4dc16532c4245c0ccb6",
+      "bytes": 4070624520
+    },
+    {
+      "file": "qwen_3_4b_fp8_mixed.safetensors",
+      "folder": "text_encoders",
+      "size_gb": 5.63,
+      "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors",
+      "sha256": "72450b19758172c5a7273cf7de729d1c17e7f434a104a00167624cba94f68f15",
+      "bytes": 5631994051
+    },
+    {
+      "file": "flux2-vae.safetensors",
+      "folder": "vae",
+      "size_gb": 0.34,
+      "url": "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
+      "sha256": "d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5",
+      "bytes": 336213556
+    }
+  ],
+  "inputs": [
+    {
+      "key": "image",
+      "label": "Picture to edit",
+      "kind": "image",
+      "required": true,
+      "default": null,
+      "targets": [
+        [
+          "4",
+          "image"
+        ]
+      ]
+    },
+    {
+      "key": "prompt",
+      "label": "What to change",
+      "kind": "text",
+      "required": true,
+      "default": "",
+      "help": "e.g. \"Make the jacket red and add snow in the background\".",
+      "targets": [
+        [
+          "7",
+          "text"
+        ]
+      ]
+    },
+    {
+      "key": "detail",
+      "label": "Output size",
+      "kind": "choice",
+      "default": "Standard (about 1 MP)",
+      "options": [
+        "Small (about 0.5 MP)",
+        "Standard (about 1 MP)"
+      ],
+      "advanced": true,
+      "targets": [],
+      "help": "Small is quicker and lighter on memory.",
+      "presets": {
+        "Small (about 0.5 MP)": [
+          [
+            "5",
+            "megapixels",
+            0.5
+          ]
+        ],
+        "Standard (about 1 MP)": [
+          [
+            "5",
+            "megapixels",
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "key": "steps",
+      "label": "Steps",
+      "kind": "integer",
+      "default": 4,
+      "min": 2,
+      "max": 8,
+      "advanced": true,
+      "targets": [
+        [
+          "14",
+          "steps"
+        ]
+      ]
+    },
+    {
+      "key": "seed",
+      "label": "Seed",
+      "kind": "seed",
+      "default": null,
+      "advanced": true,
+      "help": "Leave empty for a new result each time; reuse a seed to repeat one.",
+      "targets": [
+        [
+          "16",
+          "noise_seed"
+        ]
+      ]
+    }
+  ]
+}

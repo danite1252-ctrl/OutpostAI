@@ -171,6 +171,11 @@ impl EngineManager {
         })
     }
 
+    /// The ComfyUI that Outpost installed (its `app` folder, holding `input` and `output`).
+    pub fn comfyui_app_dir(&self) -> PathBuf {
+        self.engines_root.join(EngineId::Comfyui.as_str()).join("app")
+    }
+
     /// Detect GPUs and start every engine Outpost installed, unless a copy is
     /// already running outside Outpost.
     pub async fn init(self: &Arc<Self>) {

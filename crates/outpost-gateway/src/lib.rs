@@ -13,7 +13,9 @@ pub mod llm;
 pub mod mcp;
 pub mod memory;
 pub mod openapi;
+pub mod remote;
 pub mod routes;
+pub mod setup_code;
 pub mod tailscale;
 pub mod tls;
 pub mod train;
@@ -69,6 +71,8 @@ pub struct AppState {
     pub captions: routes::training::Captions,
     /// What the last update check found.
     pub updates: updates::Updates,
+    /// The one-time code for setting up a server from another device (while there's no owner).
+    pub setup: setup_code::SetupCodes,
 }
 
 impl AppState {
@@ -107,13 +111,19 @@ impl AppState {
             tailnet: Arc::new(OnceLock::new()),
             captions: Default::default(),
             updates: Default::default(),
+            setup: Default::default(),
         }
     }
 
     /// Apply the saved "Allow other devices on my network" setting: listen on every
     /// network interface (same port) when it is on, this PC only when it is off.
+    /// A server (`config.server`) has it on until the owner turns it off.
     pub async fn apply_network_setting(&mut self) -> anyhow::Result<()> {
-        let open = outpost_core::settings::get_bool(&self.pool, outpost_core::settings::NETWORK_ACCESS).await?;
+        let saved = outpost_core::settings::get(&self.pool, outpost_core::settings::NETWORK_ACCESS).await?;
+        let open = match saved.as_deref() {
+            Some(v) => v == "on",
+            None => self.config.server,
+        };
         let port = self.config.bind.port();
         let ip = if open {
             IpAddr::V4(Ipv4Addr::UNSPECIFIED)
@@ -208,7 +218,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/packs", get(create::list_packs))
         .route("/api/packs/{id}/install", post(create::install_pack))
-        .route("/api/loras", get(create::list_loras))
+        .route(
+            "/api/loras",
+            // A LoRA can be a couple of GB; the handler streams it to disk and caps it.
+            get(create::list_loras).post(create::upload_lora).layer(DefaultBodyLimit::disable()),
+        )
         .route(
             "/api/jobs",
             get(create::list_jobs)
@@ -325,6 +339,8 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     // With network access on, phones get the encrypted port next door, and the
     // Outpost announces itself on the network.
     let background = start_remote_access(&state).await;
+    // No owner yet (a server set up from another device): keep a setup code ready.
+    tokio::spawn(setup_code::keep_fresh(state.clone()));
     let result = axum::serve(
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),

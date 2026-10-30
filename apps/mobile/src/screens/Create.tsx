@@ -71,6 +71,15 @@ export default function Create({
   }, [api, onError]);
   useEffect(load, [load]);
 
+  // Only tabs with a workflow that suits the Outpost's graphics card.
+  const shownTasks = useMemo(
+    () => (packs.length ? TASKS.filter((t) => packs.some((p) => p.task === t.id)) : TASKS),
+    [packs],
+  );
+  useEffect(() => {
+    if (shownTasks.length && !shownTasks.some((t) => t.id === task)) setTask(shownTasks[0].id);
+  }, [shownTasks, task]);
+
   const options = useMemo(
     () =>
       packs
@@ -142,7 +151,7 @@ export default function Create({
     <ScrollView style={s.screen} contentContainerStyle={s.pad} keyboardShouldPersistTaps="handled">
       <H1>Create</H1>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-        {TASKS.map((t) => (
+        {shownTasks.map((t) => (
           <Chip key={t.id} label={t.label} active={t.id === task} onPress={() => setTask(t.id)} />
         ))}
       </ScrollView>

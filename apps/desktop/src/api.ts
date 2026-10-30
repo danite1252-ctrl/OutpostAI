@@ -1,7 +1,46 @@
 // Typed client for the Outpost gateway. Mirrors /openapi.json; when the API grows
 // (phase 1) this is replaced by a client generated from that spec.
 
-export const GATEWAY = "http://127.0.0.1:7420";
+/** Where API calls go: this PC's gateway, or (when the app uses a server) the encrypted
+ * tunnel to it on 127.0.0.1. Set by `initGateway` before the window renders. */
+export let GATEWAY = "http://127.0.0.1:7420";
+
+/** The Outpost server this app uses instead of its own, or null. */
+export interface ServerInfo {
+  host: string;
+  port: number;
+  name: string;
+  words: string[];
+  fingerprint: string;
+  token: string | null;
+}
+export let SERVER: ServerInfo | null = null;
+
+const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+/** Ask the app shell where the gateway is (and whether it's a server). */
+export async function initGateway() {
+  if (!inTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  GATEWAY = await invoke<string>("gateway_url");
+  SERVER = await invoke<ServerInfo | null>("server_status");
+}
+
+/** Keep (or forget) this app's sign-in on its server. */
+export async function saveServerToken(token: string | null) {
+  if (!inTauri() || !SERVER) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("save_server_token", { token });
+  SERVER = { ...SERVER, token };
+}
+
+/** Asks for the PIN when the server wants it again for a risky action (a paired device,
+ * e.g. this app using a server). Resolves null if the person cancels. */
+type PinPrompter = (reason: string) => Promise<string | null>;
+let pinPrompter: PinPrompter | null = null;
+export function setPinPrompter(p: PinPrompter | null) {
+  pinPrompter = p;
+}
 
 export type Role = "owner" | "member" | "restricted" | "service";
 
@@ -291,21 +330,39 @@ export class ApiError extends Error {
 async function request<T>(
   method: string,
   path: string,
-  opts: { token?: string; body?: unknown } = {},
+  opts: { token?: string; body?: unknown; pin?: string; base?: string } = {},
+): Promise<T> {
+  try {
+    return await send<T>(method, path, opts);
+  } catch (e) {
+    // A paired device is asked for its PIN again before risky actions: ask, then retry.
+    if (e instanceof ApiError && e.code === "pin_required" && pinPrompter && opts.pin === undefined) {
+      const pin = await pinPrompter(e.message);
+      if (pin) return request<T>(method, path, { ...opts, pin });
+    }
+    throw e;
+  }
+}
+
+async function send<T>(
+  method: string,
+  path: string,
+  opts: { token?: string; body?: unknown; pin?: string; base?: string } = {},
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+  if (opts.pin) headers["X-Outpost-Pin"] = opts.pin;
 
   let res: Response;
   try {
-    res = await fetch(GATEWAY + path, {
+    res = await fetch((opts.base ?? GATEWAY) + path, {
       method,
       headers,
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     });
   } catch {
-    throw new ApiError(0, "offline", "Can't reach the Outpost service.");
+    throw new ApiError(0, "offline", SERVER ? `Can't reach ${SERVER.name}.` : "Can't reach the Outpost service.");
   }
 
   if (res.status === 204) return undefined as T;
@@ -323,8 +380,59 @@ async function request<T>(
   return data as T;
 }
 
+/** What the first look at a server found (from the app shell). */
+export interface ServerProbe {
+  host: string;
+  port: number;
+  fingerprint: string;
+  words: string[];
+  health: Health;
+}
+
+export interface PairHello {
+  name: string;
+  version: string;
+  accounts: DirectoryEntry[];
+}
+
+/** Connecting this app to a server: calls go through a trial tunnel (`base`) until it
+ * switches over. */
+export const serverSetup = {
+  async probe(address: string): Promise<ServerProbe> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<ServerProbe>("probe_server", { address });
+  },
+  async open(p: { host: string; port: number; fingerprint: string }): Promise<string> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<string>("try_server", { host: p.host, port: p.port, fingerprint: p.fingerprint });
+  },
+  health: (base: string) => request<Health>("GET", "/api/health", { base }),
+  setupOwner: (base: string, body: { name: string; secret: string; setup_code: string; device: string }) =>
+    request<SignInResponse>("POST", "/api/setup/owner", { base, body }),
+  hello: (base: string, code: string) => request<PairHello>("POST", "/api/pair/hello", { base, body: { code } }),
+  complete: (base: string, body: { code: string; account_id: string; secret: string; device_name: string }) =>
+    request<SignInResponse>("POST", "/api/pair/complete", { base, body }),
+  me: (base: string, token: string) =>
+    request<{ account: Account; session: Session }>("GET", "/api/me", { base, token }),
+  /** Use this server from now on; the app restarts into it. */
+  async switchTo(p: { host: string; port: number; fingerprint: string; name: string; token: string | null }) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("save_server", p);
+    const { relaunch } = await import("@tauri-apps/plugin-process");
+    await relaunch();
+  },
+  /** Go back to running Outpost on this PC; the app restarts. */
+  async useThisPc() {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("forget_server");
+    const { relaunch } = await import("@tauri-apps/plugin-process");
+    await relaunch();
+  },
+};
+
 export const api = {
   health: () => request<Health>("GET", "/api/health"),
+  me: (token: string) => request<{ account: Account; session: Session }>("GET", "/api/me", { token }),
   directory: () => request<DirectoryEntry[]>("GET", "/api/accounts/directory"),
   setupOwner: (name: string, secret: string) =>
     request<SignInResponse>("POST", "/api/setup/owner", { body: { name, secret } }),
@@ -610,6 +718,47 @@ export interface LineEntry {
   status: JobStatus;
   progress: Job["progress"];
   eta_secs: number | null;
+}
+
+export interface LoraUploaded {
+  file: string;
+  bytes: number;
+  character: Character | null;
+}
+
+/** Upload a LoRA file (with progress, which fetch can't report). */
+export function uploadLora(
+  token: string,
+  file: File,
+  opts: { replace?: boolean; character?: string; trigger?: string; subject?: string },
+  onProgress: (fraction: number) => void,
+): Promise<LoraUploaded> {
+  const q = new URLSearchParams({ name: file.name });
+  if (opts.replace) q.set("replace", "true");
+  if (opts.character) q.set("character", opts.character);
+  if (opts.trigger) q.set("trigger", opts.trigger);
+  if (opts.subject) q.set("subject", opts.subject);
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${GATEWAY}/api/loras?${q}`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    };
+    xhr.onerror = () => reject(new ApiError(0, "offline", "The upload stopped: Outpost couldn't be reached."));
+    xhr.onload = () => {
+      let data: { error?: { code?: string; message?: string } } | null = null;
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        data = null;
+      }
+      if (xhr.status === 201) resolve(data as unknown as LoraUploaded);
+      else reject(new ApiError(xhr.status, data?.error?.code ?? "unknown", data?.error?.message ?? `Upload failed (${xhr.status}).`));
+    };
+    xhr.send(file);
+  });
 }
 
 export const createApi = {

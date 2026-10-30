@@ -23,6 +23,12 @@ BIN="$HOME/.local/lib/outpost"
 export CARGO_TARGET_DIR="$HOME/outpost-target"
 export PATH="$HOME/.cargo/bin:$PATH"
 export NO_COLOR=1
+# Gentle on a small server: two compile jobs at a time and no debug info, which roughly
+# halves the memory a build needs (a full-speed build can exhaust a 16 GB Proxmox host).
+export CARGO_BUILD_JOBS="${OUTPOST_BUILD_JOBS:-2}"
+export CARGO_PROFILE_DEV_DEBUG=0
+export CARGO_PROFILE_TEST_DEBUG=0
+export CARGO_PROFILE_RELEASE_DEBUG=0
 
 mkdir -p "$FLAGS" "$BIN"
 log() { echo "$*" >>"$OUT"; }

@@ -3,7 +3,13 @@ import { api, ApiError, secretProblem, type SignInResponse } from "../api";
 import { Button, ErrorNote, Field } from "../components/ui";
 import logo from "../assets/outpost-logo.jpg";
 
-export default function Setup({ onDone }: { onDone: (auth: SignInResponse) => void }) {
+export default function Setup({
+  onDone,
+  onUseServer,
+}: {
+  onDone: (auth: SignInResponse) => void;
+  onUseServer: () => void;
+}) {
   const [name, setName] = useState("");
   const [secret, setSecret] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -50,6 +56,12 @@ export default function Setup({ onDone }: { onDone: (auth: SignInResponse) => vo
           {busy ? "Creating…" : "Create owner account"}
         </Button>
         <p className="text-xs text-muted">Everything stays on this PC. Nothing is sent to the cloud.</p>
+        <p className="text-sm text-muted">
+          Have a home server running Outpost?{" "}
+          <button type="button" onClick={onUseServer} className="text-ember underline-offset-2 hover:underline">
+            Connect to an Outpost server
+          </button>
+        </p>
       </form>
     </main>
   );

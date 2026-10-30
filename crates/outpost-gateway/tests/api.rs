@@ -934,8 +934,18 @@ async fn create_lists_packs_and_checks_jobs() {
     let app = app().await;
     let (owner, _) = setup_owner(&app).await;
 
-    let (status, packs) = call(&app, "GET", "/api/packs", Some(&owner), None).await;
+    // By default only what suits this machine's card is listed; `all` lists everything.
+    let (status, suited) = call(&app, "GET", "/api/packs", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::OK, "{suited}");
+    let (status, packs) = call(&app, "GET", "/api/packs?all=true", Some(&owner), None).await;
     assert_eq!(status, StatusCode::OK, "{packs}");
+    let every = packs.as_array().unwrap();
+    assert!(suited.as_array().unwrap().len() <= every.len());
+    // Nothing downloaded here, so what's listed is exactly what fits the card.
+    for p in every {
+        let listed = suited.as_array().unwrap().iter().any(|s| s["id"] == p["id"]);
+        assert_eq!(listed, p["fit"] == "fits", "{}", p["id"]);
+    }
     let z = packs
         .as_array()
         .unwrap()
@@ -1175,8 +1185,27 @@ async fn a_phone_pairs_over_the_secure_port_only() {
     assert!(conn["hosts"].is_array());
     let (status, _) = call(&phone_plain, "GET", "/api/me", Some(&device), None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    // A phone can't make pairing codes.
-    let (status, _) = call(&phone, "POST", "/api/pairing", Some(&device), None).await;
+    // A paired device can pair another one (a server with no screen has no other way),
+    // but only with the PIN again.
+    let (status, body) = call(&phone, "POST", "/api/pairing", Some(&device), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"]["code"], "pin_required");
+    let (status, second) = call_with(&phone, "POST", "/api/pairing", Some(&device), &[("x-outpost-pin", "4821")], None).await;
+    assert_eq!(status, StatusCode::CREATED, "{second}");
+    let second_id = second["id"].as_str().unwrap();
+    let (status, _) = call(&phone, "GET", &format!("/api/pairing/{second_id}"), Some(&device), None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // An owner's paired device may change network access with the PIN, but not turn it
+    // off (that would cut it off); app keys can't at all.
+    let net = |on: bool| json!({"lan_access": on});
+    let (status, _) = call(&phone, "PUT", "/api/settings/network", Some(&device), Some(net(true))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let pin = [("x-outpost-pin", "4821")];
+    let (status, body) = call_with(&phone, "PUT", "/api/settings/network", Some(&device), &pin, Some(net(true))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["lan_access"], true);
+    let (status, _) = call_with(&phone, "PUT", "/api/settings/network", Some(&device), &pin, Some(net(false))).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
     // Risky actions from a phone ask for the PIN again.
@@ -1449,4 +1478,95 @@ async fn diagnostics_and_update_settings() {
     let (status, u) = call(&app, "PUT", "/api/updates/settings", t, Some(json!({"enabled": false}))).await;
     assert_eq!(status, StatusCode::OK, "{u}");
     assert_eq!(u["enabled"], false);
+}
+
+#[tokio::test]
+async fn a_server_is_set_up_from_another_device_with_its_setup_code() {
+    let pool = outpost_core::db::open_in_memory().await.unwrap();
+    let mut config = Config::local_default();
+    config.data_dir = temp_data_dir();
+    std::fs::create_dir_all(&config.data_dir).unwrap();
+    config.ollama_url = "http://127.0.0.1:9".into();
+    let state = AppState::with_pool(pool, config);
+    let remote = router(state.clone()).layer(MockConnectInfo(SocketAddr::from(([192, 168, 1, 77], 50000))));
+
+    // No code, or a wrong one: refused.
+    let body = |code: &str| json!({"name": "Dan", "secret": "4826", "setup_code": code, "device": "Dan's desktop"});
+    let (status, _) = call(&remote, "POST", "/api/setup/owner", None, Some(json!({"name": "Dan", "secret": "4826"}))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    state.setup.refresh(&state).await;
+    let text = std::fs::read_to_string(outpost_gateway::setup_code::file(&state.config.data_dir)).unwrap();
+    let code = text.lines().next().unwrap().trim_start_matches("Outpost setup code: ").to_string();
+    assert_eq!(code.len(), 9, "{text}");
+    let (status, _) = call(&remote, "POST", "/api/setup/owner", None, Some(body("0000-0000"))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // The right code makes the owner, signed in as a paired device; the code is used up.
+    let (status, v) = call(&remote, "POST", "/api/setup/owner", None, Some(body(&code))).await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    assert_eq!(v["session"]["kind"], "device");
+    assert_eq!(v["session"]["label"], "Dan's desktop");
+    assert!(!outpost_gateway::setup_code::file(&state.config.data_dir).exists());
+    let (status, _) = call(&remote, "POST", "/api/setup/owner", None, Some(body(&code))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+async fn upload(app: &Router, uri: &str, token: &str, bytes: Vec<u8>) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .body(Body::from(bytes))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+#[tokio::test]
+async fn loras_i_already_have_can_be_uploaded() {
+    let app = app().await;
+    let (owner, _) = setup_owner(&app).await;
+    // A tiny but well-formed safetensors file: header length, then a JSON header.
+    let header = br#"{"__metadata__":{"ss_network_module":"lora"}}"#;
+    let mut lora = (header.len() as u64).to_le_bytes().to_vec();
+    lora.extend_from_slice(header);
+    lora.extend_from_slice(&[0u8; 64]);
+
+    let (status, body) = upload(
+        &app,
+        "/api/loras?name=Kat%20v2.safetensors&character=Kat&trigger=k4tt&subject=woman",
+        &owner,
+        lora.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["file"], "Kat_v2.safetensors");
+    assert_eq!(body["character"]["trigger_word"], "k4tt");
+
+    let (_, list) = call(&app, "GET", "/api/loras", Some(&owner), None).await;
+    assert!(list["loras"].as_array().unwrap().iter().any(|l| l == "Kat_v2.safetensors"), "{list}");
+    assert!(list["characters"].as_array().unwrap().iter().any(|c| c["name"] == "Kat"));
+    // No half-finished files are left behind or listed.
+    assert_eq!(list["loras"].as_array().unwrap().len(), 1);
+
+    // Same name again: asks first; replace=true overwrites.
+    let (status, body) = upload(&app, "/api/loras?name=Kat_v2.safetensors", &owner, lora.clone()).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "exists");
+    let (status, _) = upload(&app, "/api/loras?name=Kat_v2.safetensors&replace=true", &owner, lora.clone()).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Not a safetensors file, or not named like one.
+    let (status, _) = upload(&app, "/api/loras?name=fake.safetensors", &owner, b"PK\x03\x04 a zip file".to_vec()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = upload(&app, "/api/loras?name=kat.ckpt", &owner, lora.clone()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // A character needs its trigger word.
+    let (status, _) = upload(&app, "/api/loras?name=b.safetensors&character=Bob", &owner, lora).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, list) = call(&app, "GET", "/api/loras", Some(&owner), None).await;
+    assert_eq!(list["loras"].as_array().unwrap().len(), 1, "{list}");
 }

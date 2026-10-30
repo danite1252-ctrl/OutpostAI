@@ -41,20 +41,20 @@ export default function Connections({ auth }: { auth: SignInResponse }) {
     <section className="mx-auto flex max-w-4xl flex-col gap-10">
       <div>
         <h1 className="text-2xl font-semibold">Connections</h1>
-        <p className="text-sm text-muted">Phones, apps like Hermes, and who can reach this Outpost from the network.</p>
+        <p className="text-sm text-muted">Paired devices, apps like Hermes, and who can reach this Outpost from the network.</p>
       </div>
 
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex-1">
-            <h2 className="text-lg font-semibold">Phones</h2>
+            <h2 className="text-lg font-semibold">Paired devices</h2>
             <p className="text-sm text-muted">
-              A paired phone stays signed in to its account over Outpost's encrypted port. It asks for the PIN again
+              Phones, and desktop apps using this Outpost as their server. Each stays signed in to its account over Outpost's encrypted port, and asks for the PIN again
               before risky things like deleting models or making app keys.
             </p>
           </div>
           <Button onClick={() => setPairing(true)} disabled={!ready}>
-            Pair a phone
+            Pair a device
           </Button>
         </div>
         {!ready && network && (
@@ -76,7 +76,7 @@ export default function Connections({ auth }: { auth: SignInResponse }) {
         {isOwner && (
           <label className="flex items-center gap-2 self-start text-sm text-muted">
             <input type="checkbox" checked={everyone} onChange={(e) => setEveryone(e.target.checked)} className="accent-ember" />
-            Show everyone's phones
+            Show everyone's devices
           </label>
         )}
         <ErrorNote>{error}</ErrorNote>
@@ -155,10 +155,10 @@ function PairDialog({ token, onClose }: { token: string; onClose: () => void }) 
   const expired = status?.expired || (view != null && left === 0 && !status?.used);
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Pair a phone" className="fixed inset-0 z-40 flex items-center justify-center bg-black/80 p-6" onClick={onClose}>
+    <div role="dialog" aria-modal="true" aria-label="Pair a device" className="fixed inset-0 z-40 flex items-center justify-center bg-black/80 p-6" onClick={onClose}>
       <div className="flex w-full max-w-2xl flex-col gap-5 rounded-2xl border border-line bg-surface p-6" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center">
-          <h2 className="flex-1 text-xl font-semibold">Pair a phone</h2>
+          <h2 className="flex-1 text-xl font-semibold">Pair a device</h2>
           <button
             type="button"
             aria-label="Close"

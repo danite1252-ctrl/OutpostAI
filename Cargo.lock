@@ -3164,12 +3164,14 @@ version = "0.1.7"
 dependencies = [
  "outpost-engines",
  "outpost-gateway",
+ "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

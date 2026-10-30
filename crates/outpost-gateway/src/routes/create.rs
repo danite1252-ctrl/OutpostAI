@@ -48,13 +48,32 @@ fn pack_or_404(id: &str) -> Result<Pack, ApiError> {
     packs::find(id).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", format!("No pack called {id}.")))
 }
 
-/// The workflow packs, with whether their models are downloaded and how they fit this PC.
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct PacksQuery {
+    /// Every pack, including ones too big for this graphics card.
+    pub all: Option<bool>,
+}
+
+/// Worth listing in Create: it runs within the graphics card's memory, or its models are
+/// already downloaded (or downloading). Packs that would only run by spilling into system
+/// memory, or not at all, are left out so the choices stay short.
+pub fn worth_showing(info: &PackInfo) -> bool {
+    info.fit == Fit::Fits || info.models.ready || info.models.setup.is_some()
+}
+
+/// The workflow packs that suit this machine (see [`worth_showing`]; `?all=true` for every
+/// one), with whether their models are downloaded and how they fit.
 #[utoipa::path(get, path = "/api/packs", tag = "create", security(("bearer" = [])),
+    params(PacksQuery),
     responses((status = 200, description = "Packs", body = [PackInfo])))]
-pub async fn list_packs(State(state): State<AppState>, _auth: Auth) -> Json<Vec<PackInfo>> {
+pub async fn list_packs(State(state): State<AppState>, _auth: Auth, Query(q): Query<PacksQuery>) -> Json<Vec<PackInfo>> {
     let hw = crate::routes::models::measure(&state).await;
     let nodes = state.comfy.node_types().await;
-    Json(pack_infos(&state, &hw, nodes.as_ref().map(|n| &n.nodes)))
+    let mut infos = pack_infos(&state, &hw, nodes.as_ref().map(|n| &n.nodes));
+    if !q.all.unwrap_or(false) {
+        infos.retain(worth_showing);
+    }
+    Json(infos)
 }
 
 fn pack_infos(
@@ -143,6 +162,169 @@ pub async fn list_loras(State(state): State<AppState>, auth: Auth) -> Json<LoraL
         folder: state.assets.loras_dir().to_string_lossy().to_string(),
         characters,
     })
+}
+
+/// The largest LoRA Outpost takes (big ones are around 1–2 GB).
+pub const MAX_LORA_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct LoraUpload {
+    /// The file name, e.g. `kat.safetensors`.
+    pub name: String,
+    /// Overwrite a LoRA with the same name.
+    pub replace: Option<bool>,
+    /// Also make it one of my characters, with this name (needs `trigger`).
+    pub character: Option<String>,
+    /// The character's trigger word, as it was trained.
+    pub trigger: Option<String>,
+    /// What it is, e.g. "woman" or "dog" (helps pictures of it).
+    pub subject: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct LoraUploaded {
+    pub file: String,
+    pub bytes: u64,
+    pub character: Option<outpost_core::training::Character>,
+}
+
+/// `Kat v2.safetensors` → `Kat_v2.safetensors`; refuses anything that isn't a plain
+/// `.safetensors` name.
+pub fn lora_file_name(name: &str) -> Result<String, ApiError> {
+    let name = name.trim();
+    let stem = name
+        .strip_suffix(".safetensors")
+        .or_else(|| name.strip_suffix(".SAFETENSORS"))
+        .ok_or_else(|| ApiError::bad_request("A LoRA must be a .safetensors file."))?;
+    let stem: String = stem
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
+        .collect();
+    let stem = stem.trim_matches(['.', '_']);
+    if stem.is_empty() || stem.len() > 100 {
+        return Err(ApiError::bad_request("Give the LoRA a name of up to 100 letters."));
+    }
+    Ok(format!("{stem}.safetensors"))
+}
+
+/// A safetensors file starts with the length of its JSON header, then the header.
+fn looks_like_safetensors(start: &[u8], total: u64) -> bool {
+    if start.len() < 9 {
+        return false;
+    }
+    let n = u64::from_le_bytes(start[..8].try_into().unwrap_or_default());
+    n >= 2 && n < 100 * 1024 * 1024 && 8 + n <= total && start[8] == b'{'
+}
+
+/// Upload a LoRA you already have (trained elsewhere, or on another Outpost) into the LoRA
+/// folder, and optionally make it one of your characters. The body is the file itself.
+#[utoipa::path(post, path = "/api/loras", tag = "create", security(("bearer" = [])),
+    params(LoraUpload),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "The .safetensors file"),
+    responses((status = 201, description = "Saved", body = LoraUploaded),
+        (status = 400, description = "Not a safetensors file, or a bad name", body = ErrorBody),
+        (status = 403, description = "An app key", body = ErrorBody),
+        (status = 409, description = "A LoRA with that name exists (send replace=true)", body = ErrorBody),
+        (status = 413, description = "Bigger than 4 GB", body = ErrorBody)))]
+pub async fn upload_lora(
+    State(state): State<AppState>,
+    auth: Auth,
+    Query(q): Query<LoraUpload>,
+    body: Body,
+) -> ApiResult<(StatusCode, Json<LoraUploaded>)> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
+    auth.require_person("Adding a LoRA")?;
+    let file = lora_file_name(&q.name)?;
+    // Check the character first, so a mistake there doesn't waste a long upload.
+    let character = match (q.character.as_deref().map(str::trim).filter(|c| !c.is_empty()), q.trigger.as_deref()) {
+        (Some(name), Some(trigger)) => {
+            let t = trigger.trim();
+            if !(2..=40).contains(&t.chars().count()) || name.chars().count() > 60 {
+                return Err(ApiError::bad_request(
+                    "Give the character a name of up to 60 letters and a trigger word of 2 to 40.",
+                ));
+            }
+            Some((name.to_string(), t.to_string()))
+        }
+        (Some(_), None) => return Err(ApiError::bad_request("A character needs its trigger word.")),
+        _ => None,
+    };
+    let dir = state.assets.loras_dir();
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| ApiError::conflict(format!("Couldn't make the LoRA folder: {e}")))?;
+    let target = dir.join(&file);
+    if target.exists() && !q.replace.unwrap_or(false) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "exists",
+            format!("There's already a LoRA called {file}. Replace it, or rename yours."),
+        ));
+    }
+    // Into a hidden part file first, so a half-finished upload never shows up as a LoRA.
+    let part = dir.join(format!(".upload-{}.part", uuid::Uuid::new_v4()));
+    let result: Result<u64, ApiError> = async {
+        let mut out = tokio::fs::File::create(&part)
+            .await
+            .map_err(|e| ApiError::conflict(format!("Couldn't save the LoRA: {e}")))?;
+        let mut stream = body.into_data_stream();
+        let mut written: u64 = 0;
+        let mut start: Vec<u8> = Vec::with_capacity(16);
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| ApiError::bad_request("The upload was interrupted."))?;
+            written += chunk.len() as u64;
+            if written > MAX_LORA_BYTES {
+                return Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "too_large", "That's bigger than 4 GB, which no LoRA should be."));
+            }
+            if start.len() < 16 {
+                start.extend(chunk.iter().take(16 - start.len()));
+            }
+            out.write_all(&chunk)
+                .await
+                .map_err(|e| ApiError::conflict(format!("Couldn't save the LoRA (is the disk full?): {e}")))?;
+        }
+        out.flush().await.ok();
+        if !looks_like_safetensors(&start, written) {
+            return Err(ApiError::bad_request("That isn't a .safetensors file (or it's damaged)."));
+        }
+        Ok(written)
+    }
+    .await;
+    let bytes = match result {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(e);
+        }
+    };
+    if let Err(e) = tokio::fs::rename(&part, &target).await {
+        let _ = tokio::fs::remove_file(&part).await;
+        return Err(ApiError::conflict(format!("Couldn't save the LoRA: {e}")));
+    }
+    tracing::info!(%file, bytes, account = %auth.account.name, "added a LoRA");
+    let character = match character {
+        Some((name, trigger)) => Some(
+            outpost_core::training::save_character(
+                &state.pool,
+                &auth.account.id,
+                outpost_core::training::NewCharacter {
+                    name: &name,
+                    trigger_word: &trigger,
+                    lora_file: &file,
+                    training_id: None,
+                    step: None,
+                    subject: q.subject.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+                    style: None,
+                },
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    outpost_core::audit::log_quiet(&state.pool, Some(&auth.account.id), Some(&auth.session.id), "lora_upload", Some(&file)).await;
+    Ok((StatusCode::CREATED, Json(LoraUploaded { file, bytes, character })))
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -481,6 +663,20 @@ pub async fn delete_media(State(state): State<AppState>, auth: Auth, Path(id): P
 mod tests {
     use super::*;
     use outpost_engines::hardware::Tier;
+
+    #[test]
+    fn lora_names_and_files() {
+        assert_eq!(lora_file_name("kat.safetensors").unwrap(), "kat.safetensors");
+        assert_eq!(lora_file_name(" Kat v2.safetensors ").unwrap(), "Kat_v2.safetensors");
+        assert_eq!(lora_file_name("../../etc/x.safetensors").unwrap(), "etc_x.safetensors");
+        assert!(lora_file_name("kat.ckpt").is_err());
+        assert!(lora_file_name(".safetensors").is_err());
+        let mut good = 2u64.to_le_bytes().to_vec();
+        good.extend(b"{}");
+        assert!(looks_like_safetensors(&good, 10));
+        assert!(!looks_like_safetensors(b"PK\x03\x04 not a lora", 100));
+        assert!(!looks_like_safetensors(&good, 5));
+    }
 
     #[test]
     fn packs_fit_by_peak_vram() {

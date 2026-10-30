@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, ApiError, secretProblem, type Account, type EnginesStatus, type Role, type SignInResponse } from "../api";
+import { api, ApiError, SERVER, secretProblem, type Account, type EnginesStatus, type Role, type SignInResponse } from "../api";
 import { EnginesPanel } from "../components/engines";
 import { DiagnosticsPanel, UpdatesPanel, WindowPanel } from "../components/system";
 import { Avatar, Button, ErrorNote, Field } from "../components/ui";
+import { ServerPanel } from "../components/server";
 
 const ROLES: { value: Role; label: string; hint: string }[] = [
   { value: "member", label: "Member", hint: "Full use; can't manage the Outpost" },
@@ -21,12 +22,14 @@ export default function Settings({
   engines,
   onEnginesChanged,
   onSignedOut,
+  onUseServer,
 }: {
   auth: SignInResponse;
   version: string;
   engines: EnginesStatus | null;
   onEnginesChanged: () => void;
   onSignedOut: () => void;
+  onUseServer: () => void;
 }) {
   const isOwner = auth.account.role === "owner";
   return (
@@ -41,10 +44,13 @@ export default function Settings({
         App keys, paired phones and network access are under <b className="text-ink">Connections</b> in the side bar.
       </p>
       <ChangeMySecret token={auth.token} onChanged={onSignedOut} />
+      <ServerPanel isOwner={isOwner} onConnect={onUseServer} />
       <WindowPanel />
       <UpdatesPanel token={auth.token} canManage={isOwner} />
       {isOwner && <DiagnosticsPanel token={auth.token} />}
-      <p className="text-xs text-muted">Outpost {version} · MIT licence · runs entirely on this PC</p>
+      <p className="text-xs text-muted">
+        Outpost {version} · MIT licence · {SERVER ? `runs on ${SERVER.name}, your own server` : "runs entirely on this PC"}
+      </p>
     </section>
   );
 }
