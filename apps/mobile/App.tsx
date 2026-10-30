@@ -10,6 +10,8 @@ import Gallery from "./src/screens/Gallery";
 import Me from "./src/screens/Me";
 import { UpdateBar, usePhoneUpdate } from "./src/updater";
 import Pair from "./src/screens/Pair";
+import Share, { type ChatStart } from "./src/screens/Share";
+import OutpostNet, { type Shared } from "./modules/outpost-net";
 import Queue, { useLine } from "./src/screens/Queue";
 import { awayFor, forget, load, markAway, save, type Saved } from "./src/store";
 
@@ -27,9 +29,26 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "me", label: "You" },
 ];
 
+/** What other apps share with Outpost (and Outpost links opened), as it arrives. */
+function useShared(): [Shared | null, () => void] {
+  const [shared, setShared] = useState<Shared | null>(null);
+  useEffect(() => {
+    const take = () =>
+      void OutpostNet.takeShared().then(
+        (x) => x && setShared(x),
+        () => undefined,
+      );
+    take();
+    const sub = OutpostNet.addListener("onShare", take);
+    return () => sub.remove();
+  }, []);
+  return [shared, useCallback(() => setShared(null), [])];
+}
+
 export default function App() {
   const [saved, setSaved] = useState<Saved | null | undefined>(undefined);
   const [unlocked, setUnlocked] = useState(false);
+  const [shared, clearShared] = useShared();
 
   useEffect(() => {
     void Promise.all([load(), awayFor()]).then(([sv, ms]) => {
@@ -67,9 +86,28 @@ export default function App() {
 
   let body;
   if (saved === undefined) body = <View style={s.screen} />;
-  else if (saved === null) body = <Pair onPaired={(x) => void paired(x)} />;
+  else if (saved === null)
+    body = (
+      <Pair
+        link={shared?.link ?? null}
+        onPaired={(x) => {
+          clearShared();
+          void paired(x);
+        }}
+      />
+    );
   else if (!unlocked) body = <Unlock saved={saved} onUnlocked={() => setUnlocked(true)} />;
-  else body = <Main saved={saved} onSaved={(x) => void save(x)} onSignedOut={() => void signOut()} />;
+  else
+    body = (
+      <Main
+        saved={saved}
+        onSaved={(x) => void save(x)}
+        onSignedOut={() => void signOut()}
+        // A pairing link on a phone that's already paired: nothing to do.
+        shared={shared && !shared.link ? shared : null}
+        onSharedDone={clearShared}
+      />
+    );
 
   return (
     <SafeAreaProvider>
@@ -111,8 +149,22 @@ function Unlock({ saved, onUnlocked }: { saved: Saved; onUnlocked: () => void })
   );
 }
 
-function Main({ saved, onSaved, onSignedOut }: { saved: Saved; onSaved: (s: Saved) => void; onSignedOut: () => void }) {
+function Main({
+  saved,
+  onSaved,
+  onSignedOut,
+  shared,
+  onSharedDone,
+}: {
+  saved: Saved;
+  onSaved: (s: Saved) => void;
+  onSignedOut: () => void;
+  shared: Shared | null;
+  onSharedDone: () => void;
+}) {
   const [tab, setTab] = useState<Tab>("chat");
+  const [chatStart, setChatStart] = useState<ChatStart | null>(null);
+  const clearChatStart = useCallback(() => setChatStart(null), []);
   const api = useMemo(() => new Outpost({ ...saved }), [saved]);
   const update = usePhoneUpdate(api);
   const [revoked, setRevoked] = useState(false);
@@ -176,13 +228,34 @@ function Main({ saved, onSaved, onSignedOut }: { saved: Saved; onSaved: (s: Save
     );
   }
 
+  if (shared) {
+    return (
+      <Share
+        api={api}
+        shared={shared}
+        onDone={onSharedDone}
+        onChat={(start) => {
+          setChatStart(start);
+          setTab("chat");
+          onSharedDone();
+        }}
+        onCreate={(dataUri, task) => {
+          setEditImage({ dataUri, task });
+          setTab("create");
+          OutpostNet.clearShared();
+          onSharedDone();
+        }}
+      />
+    );
+  }
+
   const mine = line.filter((e) => e.mine).length;
   return (
     <View style={s.screen}>
       <Connection api={api} />
       <UpdateBar update={update} />
       <View style={{ flex: 1 }} key={reconnects}>
-        {tab === "chat" && <Chat api={api} onError={onError} />}
+        {tab === "chat" && <Chat api={api} onError={onError} incoming={chatStart} onIncomingUsed={clearChatStart} />}
         {tab === "create" && (
           <Create api={api} onError={onError} incoming={editImage} onIncomingUsed={() => setEditImage(null)} onQueued={() => setTab("queue")} />
         )}

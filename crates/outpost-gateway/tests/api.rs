@@ -1161,7 +1161,9 @@ async fn a_phone_pairs_over_the_secure_port_only() {
     let code = pairing["code"].as_str().unwrap().to_string();
     assert_eq!(pairing["words"].as_array().unwrap().len(), 3);
     assert!(pairing["qr_svg"].as_str().unwrap().contains("<svg"));
-    assert!(pairing["link"].as_str().unwrap().starts_with("outpost://pair?v=1&"));
+    let link = pairing["link"].as_str().unwrap();
+    assert!(link.starts_with("https://danite1252-ctrl.github.io/OutpostAI/pair/#v=1&"), "{link}");
+    assert!(!link.split('#').next().unwrap().contains("code="), "the code stays after the #");
     assert!(pairing["link"].as_str().unwrap().contains(&format!("code={code}")));
 
     // Plain HTTP from the network is refused; the secure port takes it.

@@ -55,7 +55,8 @@
           }
         }
       ],
-      "./plugins/release-signing"
+      "./plugins/release-signing",
+      "./plugins/share-intent"
     ]
   }
 }

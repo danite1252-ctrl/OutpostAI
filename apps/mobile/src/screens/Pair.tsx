@@ -29,10 +29,15 @@ function message(e: unknown) {
 }
 
 /** Find the Outpost, check it's the real one, pick an account, enter its PIN. */
-export default function Pair({ onPaired }: { onPaired: (s: Saved) => void }) {
+export default function Pair({ onPaired, link }: { onPaired: (s: Saved) => void; link?: string | null }) {
   const [step, setStep] = useState<Step>({ kind: "find" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Opened from a pairing QR scanned with the camera: carry on as if scanned here.
+  useEffect(() => {
+    if (link) void scanned(link);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link]);
 
   const go = (next: Step) => {
     setError(null);

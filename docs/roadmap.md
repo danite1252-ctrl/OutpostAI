@@ -3,14 +3,15 @@
 Done most recently: the Linux server (phase 6), helper PCs for Create, tidier Settings, the
 one-command release (`scripts/release/ship.ps1`), picture tools (upscale and background removal,
 from the gallery's picture viewer), the Install ai-toolkit button in Train, and chat with your
-documents (PDF, Word, text: attached to a chat or a persona, with sources under each reply).
+documents (PDF, Word, text: attached to a chat or a persona, with sources under each reply),
+share to Outpost from any Android app, and pairing QR codes that open a download page on a
+phone without the app.
 
 ## Next, in order
 
-1. **Share to Outpost from the phone**: send a picture or text from any app into chat or Create.
-2. **Gallery search by description**: find pictures by what's in them, not only by prompt.
-3. **Listening choice**: pick the speech-to-text model (e.g. Whisper large-v3-turbo) in Voice.
-4. **3D models**: make a 3D model from a picture (Hunyuan3D or TRELLIS).
+1. **Gallery search by description**: find pictures by what's in them, not only by prompt.
+2. **Listening choice**: pick the speech-to-text model (e.g. Whisper large-v3-turbo) in Voice.
+3. **3D models**: make a 3D model from a picture (Hunyuan3D or TRELLIS).
 
 ## Optional extras, later
 

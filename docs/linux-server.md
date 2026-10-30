@@ -67,7 +67,9 @@ On any paired device (or the server's own desktop app), open **Connections › P
 That shows a six-digit code, a QR code and the check words (a paired device asks for its PIN
 first):
 
-- **Phones** scan the QR code in the Outpost app.
+- **Phones** scan the QR code in the Outpost app. A phone without the app can scan it with its
+  camera: that opens a page (on GitHub Pages) to download the app, then hands the code to it.
+  The pairing details are after the `#` in that link, which never leaves the phone.
 - **Another PC**: in its desktop app choose **Connect to an Outpost server**, type the server's
   address, check the words, then type the code, pick the account and enter its PIN.
 

@@ -38,7 +38,31 @@ type Events = {
   onPlayback(e: { type: "end" | "stopped" | "error" | "level"; message?: string; level?: number }): void;
   onConverse(e: ConverseEvent): void;
   onUpdate(e: UpdateEvent): void;
+  /** Something was shared with Outpost while it was open: call takeShared(). */
+  onShare(e: Record<string, never>): void;
 };
+
+/** A file another app shared, copied into Outpost's cache. */
+export interface SharedFile {
+  /** Its path on the phone (absent if it couldn't be taken, see error). */
+  path?: string;
+  name: string;
+  mime?: string;
+  size?: number;
+  /** For a picture: a smaller JPEG, ready for chat. */
+  dataUri?: string | null;
+  /** e.g. "too big". */
+  error?: string;
+}
+
+/** What was shared with Outpost, or an Outpost link that was opened. */
+export interface Shared {
+  text?: string | null;
+  subject?: string | null;
+  files?: SharedFile[];
+  /** An opened link (a pairing QR scanned with the camera). */
+  link?: string;
+}
 
 /** Installing a phone app update: download progress, Android's prompt, the result. */
 export type UpdateEvent =
@@ -114,6 +138,12 @@ declare class OutpostNetModule extends NativeModule<Events> {
   /** Hand a downloaded update to Android's installer (it closes Outpost to update). */
   installUpdate(path: string): Promise<void>;
   stopDiscovery(): void;
+  /** What was shared with Outpost (or a link that opened it), once; null if nothing. */
+  takeShared(): Promise<Shared | null>;
+  /** Delete the copies of shared files. */
+  clearShared(): void;
+  /** POST a file from the phone as the body. */
+  upload(options: RequestOptions, path: string, contentType: string): Promise<NativeResponse>;
 }
 
 export default requireNativeModule<OutpostNetModule>("OutpostNet");

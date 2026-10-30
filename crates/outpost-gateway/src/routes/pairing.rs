@@ -141,6 +141,9 @@ pub async fn create_invite(
     Ok((StatusCode::CREATED, Json(view(&state, &tls, code, row).await)))
 }
 
+/// The page a pairing QR opens on a phone without Outpost (`docs/pair/` on GitHub Pages).
+pub const PAIR_PAGE: &str = "https://danite1252-ctrl.github.io/OutpostAI/pair/";
+
 /// A code with everything a device needs to use it, and its QR.
 async fn view(state: &AppState, tls: &crate::tls::TlsInfo, code: String, row: pairing::PairingCode) -> PairingView {
     let ts = if state.tailnet.get().is_some() {
@@ -150,8 +153,10 @@ async fn view(state: &AppState, tls: &crate::tls::TlsInfo, code: String, row: pa
     };
     let hosts = super::network::phone_hosts(state, ts.as_ref()).await;
     let name = super::health::machine_name();
+    // A web page, so a phone camera without the app lands on "Get the Outpost app"; the
+    // details go after the `#`, which browsers never send to the page's website.
     let mut link = format!(
-        "outpost://pair?v=1&name={}&hosts={}&port={}&fp={}&code={}",
+        "{PAIR_PAGE}#v=1&name={}&hosts={}&port={}&fp={}&code={}",
         encode(&name),
         encode(&hosts.join(",")),
         tls.port,

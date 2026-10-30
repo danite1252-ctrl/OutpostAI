@@ -87,11 +87,20 @@ export async function awayFor(): Promise<number> {
   }
 }
 
-/** Parse the QR link the PC shows: outpost://pair?v=1&name=..&hosts=..&port=..&fp=..&code=.. */
+/** The web page a pairing QR opens on a phone without Outpost (the details after the `#`). */
+export const PAIR_PAGE = "https://danite1252-ctrl.github.io/OutpostAI/pair/";
+
+/**
+ * Parse the QR link the PC shows: `https://…/pair/#v=1&name=..&hosts=..&port=..&fp=..&code=..`
+ * (newer), or `outpost://pair?…` (older Outposts, and the page's Open in Outpost button).
+ */
 export function parsePairLink(link: string): { name: string; hosts: string[]; port: number; fingerprint: string; code: string } | null {
-  if (!link.startsWith("outpost://pair?")) return null;
+  let query: string;
+  if (link.startsWith("outpost://pair?")) query = link.slice("outpost://pair?".length);
+  else if (link.startsWith(PAIR_PAGE) && link.includes("#")) query = link.slice(link.indexOf("#") + 1);
+  else return null;
   const q = new Map<string, string>();
-  for (const part of link.slice("outpost://pair?".length).split("&")) {
+  for (const part of query.split("&")) {
     const [k, v = ""] = part.split("=");
     try {
       q.set(k, decodeURIComponent(v));

@@ -133,6 +133,28 @@ export class Outpost {
     return `data:${mime};base64,${r.body}`;
   }
 
+  /** Send a file from the phone (a shared document or picture) as a POST body. */
+  async upload<T>(path: string, file: string, contentType: string): Promise<T> {
+    let last: unknown;
+    for (const host of this.conn.hosts) {
+      let r: NativeResponse;
+      try {
+        r = await OutpostNet.upload(
+          { url: this.base(host) + path, method: "POST", headers: this.headers(), fingerprint: this.conn.fingerprint },
+          file,
+          contentType,
+        );
+      } catch (e) {
+        last = e;
+        continue;
+      }
+      if (r.status < 200 || r.status >= 300) throw parseError(r);
+      return (r.body ? JSON.parse(r.body) : undefined) as T;
+    }
+    this.setOnline(false);
+    throw new ApiError(0, "offline", last instanceof Error ? last.message : "Can't reach your Outpost to send that.");
+  }
+
   /** A file (a gallery video) saved on the phone, for players that read from disk. */
   async download(path: string, name: string): Promise<string> {
     try {

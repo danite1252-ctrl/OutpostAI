@@ -154,6 +154,9 @@ if (-not $SkipPhone) {
     Remove-Item Env:OUTPOST_KEYSTORE, Env:OUTPOST_KEYSTORE_PASSWORD
     Set-Location $root
     Copy-Item (Join-Path $mobile "android\app\build\outputs\apk\release\app-release.apk") (Join-Path $out $apkName) -Force
+    # The same app under a name that never changes, for the pairing page's download link
+    # (releases/latest/download/Outpost.apk is always the newest).
+    Copy-Item (Join-Path $out $apkName) (Join-Path $out "Outpost.apk") -Force
 }
 
 Step "latest.json"

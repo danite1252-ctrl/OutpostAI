@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { Alert, BackHandler, Image, Keyboard, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { MicIcon, PlusIcon, SendIcon, StopIcon } from "../icons";
 import { AuthedImage } from "../images";
+import type { ChatStart } from "./Share";
 import { GalleryPicker } from "./Create";
 import HandsFree from "./HandsFree";
 import { hear, onSaying, say, stopSaying, type Listening } from "../voice";
@@ -12,11 +13,31 @@ import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
 
 const MAX_IMAGES = 4;
 
-export default function Chat({ api, onError }: { api: Outpost; onError: (e: unknown) => void }) {
+export default function Chat({
+  api,
+  onError,
+  incoming,
+  onIncomingUsed,
+}: {
+  api: Outpost;
+  onError: (e: unknown) => void;
+  /** Something shared from another app, to start a new chat with. */
+  incoming?: ChatStart | null;
+  onIncomingUsed?: () => void;
+}) {
   const [chats, setChats] = useState<ChatT[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [open, setOpen] = useState<ChatT | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // What the new chat starts with (from a share), until it's opened.
+  const [starting, setStarting] = useState<ChatStart | null>(null);
+  useEffect(() => {
+    if (incoming) {
+      setOpen(null);
+      setStarting(incoming);
+      onIncomingUsed?.();
+    }
+  }, [incoming, onIncomingUsed]);
 
   const load = useCallback(async () => {
     try {
@@ -32,10 +53,16 @@ export default function Chat({ api, onError }: { api: Outpost; onError: (e: unkn
     void load();
   }, [load]);
 
+  const [opening, setOpening] = useState<ChatStart | null>(null);
   async function start(persona?: Persona) {
     try {
       const chat = await api.json<ChatT>("POST", "/api/chats", { persona_id: persona?.id ?? personas[0]?.id ?? null });
+      if (starting?.documentIds.length) {
+        await api.json("PUT", `/api/chats/${chat.id}/documents`, { document_ids: starting.documentIds });
+      }
       setChats((c) => [chat, ...c]);
+      setOpening(starting);
+      setStarting(null);
       setOpen(chat);
     } catch (e) {
       onError(e);
@@ -67,7 +94,9 @@ export default function Chat({ api, onError }: { api: Outpost; onError: (e: unkn
         api={api}
         chat={open}
         persona={personas.find((p) => p.id === open.persona_id) ?? null}
+        initial={opening}
         onBack={() => {
+          setOpening(null);
           setOpen(null);
           void load();
         }}
@@ -79,6 +108,18 @@ export default function Chat({ api, onError }: { api: Outpost; onError: (e: unkn
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.pad}>
       <H1>Chat</H1>
+      {starting && (
+        <View style={[s.card, { borderColor: C.ember, gap: 8 }]}>
+          <Text style={{ color: C.ink, fontWeight: "600" }}>
+            {starting.documentIds.length
+              ? `Ask about ${starting.documentIds.length === 1 ? "your document" : `${starting.documentIds.length} documents`}: pick who to ask`
+              : "Pick who to ask about what you shared"}
+          </Text>
+          <Pressable accessibilityRole="button" onPress={() => setStarting(null)}>
+            <Text style={{ color: C.muted }}>Cancel</Text>
+          </Pressable>
+        </View>
+      )}
       <Text style={s.label}>New chat with</Text>
       <View style={[s.row, { flexWrap: "wrap" }]}>
         {personas.map((p) => (
@@ -123,19 +164,22 @@ function Conversation({
   api,
   chat,
   persona,
+  initial,
   onBack,
   onError,
 }: {
   api: Outpost;
   chat: ChatT;
   persona: Persona | null;
+  /** What the message box starts with (a share). */
+  initial?: ChatStart | null;
   onBack: () => void;
   onError: (e: unknown) => void;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [input, setInput] = useState("");
-  const [images, setImages] = useState<string[]>([]);
+  const [input, setInput] = useState(initial?.text ?? "");
+  const [images, setImages] = useState<string[]>(initial?.images ?? []);
   const [error, setError] = useState<string | null>(null);
   const stop = useRef<(() => void) | null>(null);
   const [attach, setAttach] = useState(false);

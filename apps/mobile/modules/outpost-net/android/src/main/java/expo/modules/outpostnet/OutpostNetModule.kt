@@ -18,6 +18,7 @@ import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
@@ -46,6 +47,9 @@ class RequestOptions : Record {
   @Field val base64: Boolean = false
   @Field val timeoutMs: Int = 30000
 }
+
+/** Marks an activity's start intent as already taken (so a share isn't handled twice). */
+private const val TAKEN = "outpost.shareTaken"
 
 private fun sha256Hex(bytes: ByteArray): String =
   MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
@@ -97,6 +101,9 @@ class OutpostNetModule : Module() {
   private val context: Context
     get() = appContext.reactContext ?: throw IllegalStateException("No Android context.")
 
+  /** A share that arrived while Outpost was running, until the app takes it. */
+  @Volatile private var pendingShare: android.content.Intent? = null
+
   private val updater by lazy { AppUpdater({ context }) { name, body -> sendEvent(name, body) } }
   private val voice by lazy { PhoneVoice({ context }) { name, body -> sendEvent(name, body) } }
 
@@ -132,7 +139,62 @@ class OutpostNetModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("OutpostNet")
 
-    Events("onChunk", "onEnd", "onError", "onService", "onServiceLost", "onSpeech", "onRecording", "onPlayback", "onConverse", "onUpdate")
+    Events("onChunk", "onEnd", "onError", "onService", "onServiceLost", "onSpeech", "onRecording", "onPlayback", "onConverse", "onUpdate", "onShare")
+
+    // ------------------------------------------------------------ shared with Outpost (see ShareReceiver)
+
+    /** What was shared with Outpost (or an Outpost link opened), once; null if nothing. */
+    AsyncFunction("takeShared") {
+      val intent = pendingShare ?: appContext.currentActivity?.intent?.takeIf { !it.getBooleanExtra(TAKEN, false) }
+      pendingShare = null
+      // Read once: the activity keeps its intent, so mark it.
+      appContext.currentActivity?.intent?.putExtra(TAKEN, true)
+      ShareReceiver.read(context, intent)
+    }
+
+    /** Delete the copies of shared files. */
+    Function("clearShared") { ShareReceiver.clear(context) }
+
+    /** Opened again with a share (or link) while running: the app is told, and takes it. */
+    OnNewIntent { intent ->
+      if (intent.action == android.content.Intent.ACTION_SEND ||
+        intent.action == android.content.Intent.ACTION_SEND_MULTIPLE ||
+        intent.action == android.content.Intent.ACTION_VIEW
+      ) {
+        pendingShare = intent
+        sendEvent("onShare", mapOf<String, Any?>())
+      }
+    }
+
+    /** Send a file from the phone as a request's body (documents, pictures for the gallery). */
+    AsyncFunction("upload") { o: RequestOptions, path: String, contentType: String, promise: Promise ->
+      val file = java.io.File(path.removePrefix("file://"))
+      if (!file.isFile) {
+        promise.reject("ERR_FILE", "That file is gone.", null)
+        return@AsyncFunction
+      }
+      val body = file.asRequestBody(contentType.toMediaType())
+      val b = Request.Builder().url(o.url).post(body)
+      for ((k, v) in o.headers) b.header(k, v)
+      client(o.fingerprint).newBuilder()
+        .writeTimeout(10, TimeUnit.MINUTES)
+        .readTimeout(2, TimeUnit.MINUTES)
+        .build()
+        .newCall(b.build())
+        .enqueue(object : Callback {
+          override fun onFailure(call: Call, e: IOException) {
+            promise.reject("ERR_NETWORK", e.message ?: "Can't reach Outpost.", e)
+          }
+
+          override fun onResponse(call: Call, response: Response) {
+            response.use {
+              promise.resolve(
+                mapOf("status" to it.code, "body" to (it.body?.string() ?: ""), "contentType" to (it.header("Content-Type") ?: "")),
+              )
+            }
+          }
+        })
+    }
 
     // ------------------------------------------------------------ updating the app (see AppUpdater)
 

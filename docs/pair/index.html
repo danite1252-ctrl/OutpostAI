@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Join Outpost</title>
+<!--
+  The page a pairing QR code opens on a phone without the Outpost app. The pairing details
+  are after the "#" in the address, which browsers never send to this website: this page
+  reads them on the phone and hands them to the app. It loads nothing from anywhere else.
+-->
+<style>
+  :root {
+    --bg: #121013; --surface: #1b181c; --line: #383238; --ink: #f3eee8; --muted: #a9a09a;
+    --ember: #ff6a3d; --on-ember: #1e0c05;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: center; justify-content: center; padding: 24px 16px;
+  }
+  main { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 16px; }
+  h1 { font-size: 26px; margin: 0; letter-spacing: 0.02em; }
+  p { margin: 0; color: var(--muted); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  .step { display: flex; gap: 12px; align-items: flex-start; }
+  .n { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--line); display: grid; place-items: center; font-weight: 700; font-size: 14px; }
+  a.button {
+    display: flex; align-items: center; justify-content: center; min-height: 48px; border-radius: 12px;
+    text-decoration: none; font-weight: 700; background: var(--ember); color: var(--on-ember);
+  }
+  a.button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); font-weight: 600; }
+  a.button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .who { color: var(--ink); font-weight: 600; }
+  .small { font-size: 13px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>OUTPOST</h1>
+  <p id="intro">You've been invited to use Outpost: private AI chat, pictures and more, running on a computer at home.</p>
+
+  <div class="card" id="steps">
+    <div class="step"><span class="n">1</span><div>
+      <strong>Get the Outpost app</strong>
+      <p class="small">For Android. Your phone may ask you to allow installing apps from your browser.</p>
+    </div></div>
+    <a class="button" href="https://github.com/danite1252-ctrl/OutpostAI/releases/latest/download/Outpost.apk">Download Outpost for Android</a>
+    <div class="step"><span class="n">2</span><div>
+      <strong>Open this code in it</strong>
+      <p class="small">Once it's installed, come back to this page and press the button. Or open the app and scan the QR code again.</p>
+    </div></div>
+    <a class="button ghost" id="open" href="#">Open in Outpost</a>
+  </div>
+
+  <p class="small" id="expiry"></p>
+  <p class="small" id="bad" hidden>This link is missing its pairing details. Scan the QR code on the computer again.</p>
+  <p class="small">iPhone isn't supported yet. Outpost is free and open source: <a style="color: var(--muted)" href="https://github.com/danite1252-ctrl/OutpostAI">github.com/danite1252-ctrl/OutpostAI</a></p>
+</main>
+<script>
+  (function () {
+    var details = location.hash.slice(1);
+    var q = {};
+    details.split("&").forEach(function (part) {
+      var i = part.indexOf("=");
+      if (i > 0) {
+        try { q[part.slice(0, i)] = decodeURIComponent(part.slice(i + 1)); } catch (e) {}
+      }
+    });
+    if (!q.code || !q.fp) {
+      document.getElementById("bad").hidden = false;
+      document.getElementById("open").hidden = true;
+      return;
+    }
+    // The app's own link: the same details, which it checks against the computer itself.
+    document.getElementById("open").href = "outpost://pair?" + details;
+    if (q.name) {
+      var intro = document.getElementById("intro");
+      intro.textContent = "";
+      intro.append("You've been invited to use Outpost on ");
+      var who = document.createElement("span");
+      who.className = "who";
+      who.textContent = q.name;
+      intro.append(who, ": private AI chat, pictures and more, running on a computer at home.");
+    }
+    document.getElementById("expiry").textContent =
+      "The code works once and only for a while. If it has run out, ask for a new one.";
+  })();
+</script>
+</body>
+</html>
