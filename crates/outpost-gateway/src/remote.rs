@@ -170,7 +170,11 @@ fn server_name(host: &str) -> ServerName<'static> {
 }
 
 async fn connect(host: &str, port: u16, tls: &TlsConnector) -> anyhow::Result<TlsStream<TcpStream>> {
-    let tcp = tokio::time::timeout(Duration::from_secs(6), TcpStream::connect((host, port)))
+    connect_within(host, port, tls, Duration::from_secs(6)).await
+}
+
+async fn connect_within(host: &str, port: u16, tls: &TlsConnector, wait: Duration) -> anyhow::Result<TlsStream<TcpStream>> {
+    let tcp = tokio::time::timeout(wait, TcpStream::connect((host, port)))
         .await
         .map_err(|_| anyhow!("{host} didn't answer on port {port}."))?
         .with_context(|| format!("Couldn't reach {host} on port {port}"))?;
@@ -246,9 +250,66 @@ async fn get_json(stream: &mut TlsStream<TcpStream>, host: &str, path: &str) -> 
     Ok(serde_json::from_str(body.trim())?)
 }
 
+/// The server's addresses, best first (the home network, then Tailscale), shared with the
+/// tunnel so new ones apply at once.
+pub type Hosts = Arc<std::sync::RwLock<Vec<String>>>;
+
+/// How long the home address gets before falling back to the next one (Tailscale).
+const QUICK_TRY: Duration = Duration::from_millis(1500);
+/// After an address fails, skip it this long (away from home, every request would
+/// otherwise wait for it first).
+const SKIP_FAILED: Duration = Duration::from_secs(30);
+
+/// Which addresses recently failed, so the next try goes straight to one that works.
+#[derive(Default)]
+struct Failures(std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>);
+
+impl Failures {
+    fn recent(&self, host: &str) -> bool {
+        self.0
+            .lock()
+            .ok()
+            .and_then(|f| f.get(host).copied())
+            .is_some_and(|t| t.elapsed() < SKIP_FAILED)
+    }
+    fn failed(&self, host: &str) {
+        if let Ok(mut f) = self.0.lock() {
+            f.insert(host.to_string(), std::time::Instant::now());
+        }
+    }
+    fn worked(&self, host: &str) {
+        if let Ok(mut f) = self.0.lock() {
+            f.remove(host);
+        }
+    }
+}
+
+/// Reach the server at the first address that answers, in order. Every address but the
+/// last gets a short time; recently failed ones are tried last.
+async fn connect_any(hosts: &[String], port: u16, tls: &TlsConnector, failures: &Failures) -> anyhow::Result<TlsStream<TcpStream>> {
+    let mut order: Vec<&String> = hosts.iter().filter(|h| !failures.recent(h)).collect();
+    order.extend(hosts.iter().filter(|h| failures.recent(h)));
+    let mut last = anyhow!("This app has no address for the server.");
+    for (i, host) in order.iter().enumerate() {
+        let wait = if i + 1 == order.len() { Duration::from_secs(6) } else { QUICK_TRY };
+        match connect_within(host, port, tls, wait).await {
+            Ok(s) => {
+                failures.worked(host);
+                return Ok(s);
+            }
+            Err(e) => {
+                failures.failed(host);
+                last = e;
+            }
+        }
+    }
+    Err(last)
+}
+
 /// Forward every connection made to `listener` (on 127.0.0.1) to the server, over TLS that
-/// only accepts the pinned certificate. Runs until the task is dropped.
-pub async fn tunnel(listener: TcpListener, host: String, port: u16, fingerprint: String) {
+/// only accepts the pinned certificate, at whichever of its addresses answers (the home
+/// network first, then Tailscale). Runs until the task is dropped.
+pub async fn tunnel(listener: TcpListener, hosts: Hosts, port: u16, fingerprint: String) {
     let tls = match connector(Some(&fingerprint)) {
         Ok((tls, _)) => tls,
         Err(e) => {
@@ -256,7 +317,7 @@ pub async fn tunnel(listener: TcpListener, host: String, port: u16, fingerprint:
             return;
         }
     };
-    let host = Arc::new(host);
+    let failures = Arc::new(Failures::default());
     loop {
         let (mut local, peer) = match listener.accept().await {
             Ok(c) => c,
@@ -270,19 +331,21 @@ pub async fn tunnel(listener: TcpListener, host: String, port: u16, fingerprint:
         if !peer.ip().is_loopback() {
             continue;
         }
-        let (tls, host) = (tls.clone(), host.clone());
+        let list: Vec<String> = hosts.read().map(|h| h.clone()).unwrap_or_default();
+        let (tls, failures) = (tls.clone(), failures.clone());
         tokio::spawn(async move {
             let _ = local.set_nodelay(true);
-            match connect(&host, port, &tls).await {
+            match connect_any(&list, port, &tls, &failures).await {
                 Ok(mut remote) => {
                     let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
                 }
                 Err(e) => {
-                    tracing::warn!(error = %format!("{e:#}"), %host, port, "couldn't reach the Outpost server");
+                    let tried = list.join(" or ");
+                    tracing::warn!(error = %format!("{e:#}"), %tried, port, "couldn't reach the Outpost server");
                     // Tell the window plainly, rather than just dropping the connection.
                     let msg = serde_json::json!({ "error": {
                         "code": "server_unreachable",
-                        "message": format!("Can't reach the Outpost server at {host}. {e:#}"),
+                        "message": format!("Can't reach the Outpost server at {tried}. {e:#}"),
                     }})
                     .to_string();
                     let reply = format!(
@@ -306,7 +369,8 @@ pub async fn start_tunnel(
 ) -> anyhow::Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let addr = listener.local_addr()?;
-    Ok((addr, tokio::spawn(tunnel(listener, host, port, fingerprint))))
+    let hosts: Hosts = Arc::new(std::sync::RwLock::new(vec![host]));
+    Ok((addr, tokio::spawn(tunnel(listener, hosts, port, fingerprint))))
 }
 
 #[cfg(test)]
@@ -323,6 +387,16 @@ mod tests {
         assert!(parse_address("").is_err());
         assert!(parse_address("host:port").is_err());
         assert!(parse_address("my server").is_err());
+    }
+
+    #[test]
+    fn a_failed_address_is_skipped_for_a_while() {
+        let f = Failures::default();
+        assert!(!f.recent("192.168.1.98"));
+        f.failed("192.168.1.98");
+        assert!(f.recent("192.168.1.98"));
+        f.worked("192.168.1.98");
+        assert!(!f.recent("192.168.1.98"));
     }
 
     #[test]

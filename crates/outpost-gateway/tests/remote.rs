@@ -101,3 +101,27 @@ async fn a_server_has_network_access_on_until_the_owner_turns_it_off() {
     server.apply_network_setting().await.unwrap();
     assert_eq!(server.config.bind, SocketAddr::from(([127, 0, 0, 1], 7420)));
 }
+
+#[tokio::test]
+async fn the_tunnel_falls_back_to_the_next_address_and_remembers() {
+    let (port, fingerprint) = secure_server().await;
+    // The first address goes nowhere (like the home network seen from away); the second works.
+    let hosts: remote::Hosts = std::sync::Arc::new(std::sync::RwLock::new(vec!["10.255.255.1".into(), "127.0.0.1".into()]));
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(remote::tunnel(listener, hosts.clone(), port, fingerprint));
+
+    let started = std::time::Instant::now();
+    let resp = client().get(format!("http://{addr}/api/health")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "fell back quickly");
+    // The dead address is skipped for a while, so the next request is quick.
+    let started = std::time::Instant::now();
+    let resp = client().get(format!("http://{addr}/api/health")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(started.elapsed() < std::time::Duration::from_millis(1000), "{:?}", started.elapsed());
+    // New addresses apply straight away.
+    *hosts.write().unwrap() = vec!["127.0.0.1".into()];
+    let resp = client().get(format!("http://{addr}/api/health")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+}

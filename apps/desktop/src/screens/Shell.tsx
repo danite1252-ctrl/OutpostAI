@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { SERVER, type SignInResponse } from "../api";
+import { useEffect, useState } from "react";
+import { refreshServerHosts, SERVER, type SignInResponse } from "../api";
 import { engineReady, useEngines } from "../components/engines";
 import { Avatar, Icon, icons, Mark, StatusDot, Wordmark } from "../components/ui";
 import Settings from "./Settings";
@@ -48,6 +48,10 @@ export default function Shell({
   onAddPerson?: () => void;
 }) {
   const [section, setSection] = useState<Section>("chat");
+  // Using a server: learn its addresses (home and Tailscale) for reaching it away from home.
+  useEffect(() => {
+    if (SERVER) void refreshServerHosts(auth.token).catch(() => undefined);
+  }, [auth.token]);
   const [createRequest, setCreateRequest] = useState<CreateRequest | null>(null);
   const { status: engines, refresh: refreshEngines } = useEngines(auth.token, onSignedOutElsewhere);
   const ollamaUp = engineReady(engines, "ollama");

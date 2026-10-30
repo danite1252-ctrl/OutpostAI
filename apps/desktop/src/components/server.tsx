@@ -548,6 +548,18 @@ export function ServerPanel({
             <p className="text-sm text-muted">
               Its check words: <span className="font-mono text-ink">{SERVER.words.join(" ")}</span>
             </p>
+            {SERVER.hosts.length > 1 && (
+              <p className="text-sm text-muted">
+                Reached at <span className="font-mono text-ink">{SERVER.hosts[0]}</span> at home, and{" "}
+                {SERVER.hosts.slice(1).map((h, i) => (
+                  <span key={h}>
+                    {i > 0 ? " or " : ""}
+                    <span className="font-mono text-ink">{h}</span>
+                  </span>
+                ))}{" "}
+                when that doesn't answer (Tailscale, away from home).
+              </p>
+            )}
             <p className="text-sm text-muted">
               {SERVER.people.length > 1
                 ? `Shared by ${SERVER.people.map((p) => p.name).join(", ")}: it opens on "Who's using Outpost?" and asks each person's PIN.`

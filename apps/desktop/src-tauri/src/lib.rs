@@ -131,7 +131,25 @@ struct Server {
     /// Everyone paired on this PC (a shared PC), each with their own token.
     #[serde(default)]
     people: Vec<Person>,
+    /// All the server's addresses, best first (its home-network address, then Tailscale),
+    /// as it reports them. `host` (what was typed) is tried too.
+    #[serde(default)]
+    hosts: Vec<String>,
 }
+
+impl Server {
+    /// The addresses to try, in order.
+    fn all_hosts(&self) -> Vec<String> {
+        let mut out = self.hosts.clone();
+        if !out.iter().any(|h| h.eq_ignore_ascii_case(&self.host)) {
+            out.push(self.host.clone());
+        }
+        out
+    }
+}
+
+/// The tunnel's addresses, changed in place when the server reports new ones.
+static HOSTS: OnceLock<outpost_gateway::remote::Hosts> = OnceLock::new();
 
 /// One person's sign-in on a shared PC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +170,7 @@ struct ServerView {
     fingerprint: String,
     token: Option<String>,
     people: Vec<Person>,
+    hosts: Vec<String>,
 }
 
 fn server_file() -> PathBuf {
@@ -183,6 +202,7 @@ fn write_server(server: &Server) -> Result<(), String> {
 #[tauri::command]
 fn server_status() -> Option<ServerView> {
     load_server().map(|s| ServerView {
+        hosts: s.all_hosts(),
         words: remote::words(&s.fingerprint),
         host: s.host,
         port: s.port,
@@ -228,15 +248,36 @@ fn save_server(
     token: Option<String>,
     person: Option<Person>,
 ) -> Result<(), String> {
-    let mut people = load_server()
-        .filter(|old| old.fingerprint.eq_ignore_ascii_case(&fingerprint))
-        .map(|old| old.people)
-        .unwrap_or_default();
+    let same = load_server().filter(|old| old.fingerprint.eq_ignore_ascii_case(&fingerprint));
+    let hosts = same.as_ref().map(|old| old.hosts.clone()).unwrap_or_default();
+    let mut people = same.map(|old| old.people).unwrap_or_default();
     if let Some(p) = person {
         people.retain(|q| q.account_id != p.account_id);
         people.push(p);
     }
-    write_server(&Server { host, port, fingerprint, name, token, people })
+    write_server(&Server { host, port, fingerprint, name, token, people, hosts })
+}
+
+/// The server's current addresses (from `GET /api/connection`), best first: kept for next
+/// time, and used by the tunnel straight away.
+#[tauri::command]
+fn save_server_hosts(hosts: Vec<String>) -> Result<(), String> {
+    let mut server = load_server().ok_or("This app isn't using a server.")?;
+    let clean: Vec<String> = hosts
+        .into_iter()
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty() && h.len() < 256 && !h.contains(char::is_whitespace))
+        .collect();
+    if clean.is_empty() {
+        return Ok(());
+    }
+    server.hosts = clean;
+    if let Some(live) = HOSTS.get() {
+        if let Ok(mut h) = live.write() {
+            *h = server.all_hosts();
+        }
+    }
+    write_server(&server)
 }
 
 /// Switch to (or, with `None`, sign out of) a sign-in on the server. Signing out also
@@ -399,11 +440,14 @@ fn start_server_tunnel(server: &Server) -> std::io::Result<()> {
     listener.set_nonblocking(true)?;
     let addr = listener.local_addr()?;
     let _ = GATEWAY_URL.set(format!("http://{addr}"));
-    let (host, port, fp) = (server.host.clone(), server.port, server.fingerprint.clone());
-    tracing::info!(%host, port, "using the Outpost server (no gateway on this PC)");
+    let (port, fp) = (server.port, server.fingerprint.clone());
+    let all = server.all_hosts();
+    tracing::info!(hosts = %all.join(", "), port, "using the Outpost server (no gateway on this PC)");
+    let hosts: remote::Hosts = Arc::new(std::sync::RwLock::new(all));
+    let _ = HOSTS.set(hosts.clone());
     tauri::async_runtime::spawn(async move {
         match tokio::net::TcpListener::from_std(listener) {
-            Ok(listener) => remote::tunnel(listener, host, port, fp).await,
+            Ok(listener) => remote::tunnel(listener, hosts, port, fp).await,
             Err(e) => tracing::error!(error = %e, "couldn't open the tunnel to the server"),
         }
     });
@@ -503,6 +547,7 @@ pub fn run() {
             try_server,
             save_server,
             save_server_token,
+            save_server_hosts,
             forget_person,
             forget_server,
             local_galleries,

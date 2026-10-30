@@ -15,6 +15,8 @@ export interface ServerInfo {
   token: string | null;
   /** Everyone paired on this PC (a shared PC), each with their own sign-in. */
   people: Person[];
+  /** The addresses tried, in order: the home network first, then Tailscale. */
+  hosts: string[];
 }
 
 export interface Person {
@@ -43,6 +45,18 @@ export async function saveServerToken(token: string | null) {
   await invoke("save_server_token", { token });
   const people = token === null ? SERVER.people.filter((p) => p.token !== SERVER?.token) : SERVER.people;
   SERVER = { ...SERVER, token, people };
+}
+
+/** Learn the server's current addresses (home network, Tailscale) so this app can reach it
+ * at home and away: the home one first, falling back to Tailscale. */
+export async function refreshServerHosts(token: string) {
+  if (!inTauri() || !SERVER) return;
+  const c = await request<{ hosts: string[]; port: number | null }>("GET", "/api/connection", { token });
+  if (!c.hosts.length) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("save_server_hosts", { hosts: c.hosts });
+  const typed = SERVER.host;
+  SERVER = { ...SERVER, hosts: c.hosts.some((h) => h.toLowerCase() === typed.toLowerCase()) ? c.hosts : [...c.hosts, typed] };
 }
 
 /** Make sure the signed-in person is in this PC's list (sign-ins from before shared PCs). */
