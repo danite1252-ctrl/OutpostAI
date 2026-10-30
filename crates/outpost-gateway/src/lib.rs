@@ -10,6 +10,7 @@ pub mod documents;
 pub mod discovery;
 pub mod error;
 pub mod extract;
+pub mod gallery_index;
 pub mod helper_pc;
 pub mod helpers;
 pub mod llm;
@@ -318,6 +319,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/documents/{id}/file", get(docs::file))
         .route("/api/chats/{id}/documents", get(docs::for_chat).put(docs::set_for_chat))
         .route("/api/personas/{id}/documents", get(docs::for_persona).put(docs::set_for_persona))
+        .route("/api/gallery/search", get(create::search_gallery))
+        .route("/api/gallery/search/status", get(create::search_status))
+        .route("/api/gallery/search/settings", put(create::search_settings))
         .route("/api/helpers", get(helpers::list))
         .route("/api/helpers/poll", post(helpers::poll))
         .route("/api/helpers/jobs/{id}/input/{key}", get(helpers::input))
@@ -373,6 +377,7 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     tokio::spawn(create::worker(state.clone()));
     tokio::spawn(helpers::watchdog(state.clone()));
     tokio::spawn(documents::resume(state.clone()));
+    tokio::spawn(gallery_index::run(state.clone()));
     // The one call to the internet: a daily look for a newer release (can be switched off).
     tokio::spawn(updates::background(state.clone()));
     // With network access on, phones get the encrypted port next door, and the

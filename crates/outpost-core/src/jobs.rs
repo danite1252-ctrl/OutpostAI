@@ -77,6 +77,20 @@ pub async fn queued_count(pool: &SqlitePool) -> CoreResult<i64> {
         .await?)
 }
 
+/// Is any job for these packs waiting?
+pub async fn has_queued_of(pool: &SqlitePool, packs: &[String]) -> CoreResult<bool> {
+    if packs.is_empty() {
+        return Ok(false);
+    }
+    let marks = vec!["?"; packs.len()].join(", ");
+    let sql = format!("SELECT EXISTS(SELECT 1 FROM jobs WHERE status = 'queued' AND pack_id IN ({marks}))");
+    let mut q = sqlx::query_scalar(&sql);
+    for p in packs {
+        q = q.bind(p);
+    }
+    Ok(q.fetch_one(pool).await?)
+}
+
 /// Who goes first on the GPU: someone at the desktop, then phones, then app keys.
 pub fn priority_for(kind: crate::sessions::SessionKind) -> i64 {
     match kind {

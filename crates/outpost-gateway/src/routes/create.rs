@@ -898,3 +898,94 @@ mod tests {
         assert_eq!(pack_fit(40.0, &hw(8, 16)), Fit::TooLarge);
     }
 }
+
+// ------------------------------------------------------------------ gallery search
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct SearchQuery {
+    /// What to look for, e.g. "dog on a beach".
+    pub q: String,
+    pub limit: Option<usize>,
+}
+
+/// A gallery item a search found, with what Outpost sees in it.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct Found {
+    #[serde(flatten)]
+    pub media: Media,
+    /// The picture's description (written for search), once it has one.
+    pub description: Option<String>,
+}
+
+/// Search my gallery by what's in the pictures (and their prompts), best match first.
+#[utoipa::path(get, path = "/api/gallery/search", tag = "create", security(("bearer" = [])),
+    params(SearchQuery),
+    responses((status = 200, description = "Matches", body = [Found])))]
+pub async fn search_gallery(State(state): State<AppState>, auth: Auth, Query(q): Query<SearchQuery>) -> ApiResult<Json<Vec<Found>>> {
+    let query = q.q.trim();
+    if query.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    let model = crate::memory::embedding_model(&state).await;
+    let items = outpost_core::media_index::all(&state.pool, &auth.account.id, model.as_deref()).await?;
+    let qv = match &model {
+        Some(m) => crate::memory::embed(&state, m, &[query.to_string()]).await.and_then(|mut v| v.pop()),
+        None => None,
+    };
+    let found = outpost_core::media_index::search(&items, query, qv.as_deref(), q.limit.unwrap_or(60).clamp(1, 200));
+    Ok(Json(
+        found
+            .into_iter()
+            .map(|(_, it)| Found { media: it.media.clone(), description: it.description.clone() })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SearchStatus {
+    /// Pictures are being described for search (the owner can turn it off).
+    pub enabled: bool,
+    /// The vision model that describes them; none installed means search uses prompts only.
+    pub describer: Option<String>,
+    /// The embedding model that finds by meaning; none means search matches words.
+    pub embedder: Option<String>,
+    /// Pictures described, of all pictures on this Outpost.
+    pub described: i64,
+    pub total: i64,
+    /// Still to describe.
+    pub waiting: i64,
+}
+
+/// How far describing pictures for search has got.
+#[utoipa::path(get, path = "/api/gallery/search/status", tag = "create", security(("bearer" = [])),
+    responses((status = 200, description = "Status", body = SearchStatus)))]
+pub async fn search_status(State(state): State<AppState>, _auth: Auth) -> ApiResult<Json<SearchStatus>> {
+    let (described, total, waiting) = outpost_core::media_index::progress(&state.pool).await?;
+    Ok(Json(SearchStatus {
+        enabled: crate::gallery_index::enabled(&state).await,
+        describer: crate::gallery_index::describer(&state).await,
+        embedder: crate::memory::embedding_model(&state).await,
+        described,
+        total,
+        waiting,
+    }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SearchSettings {
+    pub enabled: bool,
+}
+
+/// Turn describing pictures for search on or off (owner).
+#[utoipa::path(put, path = "/api/gallery/search/settings", tag = "create", security(("bearer" = [])),
+    request_body = SearchSettings,
+    responses((status = 200, description = "Saved", body = SearchStatus), (status = 403, description = "Not an owner", body = ErrorBody)))]
+pub async fn search_settings(
+    State(state): State<AppState>,
+    auth: Auth,
+    Json(req): Json<SearchSettings>,
+) -> ApiResult<Json<SearchStatus>> {
+    auth.require_owner()?;
+    outpost_core::settings::set_bool(&state.pool, outpost_core::settings::GALLERY_DESCRIBE, req.enabled).await?;
+    search_status(State(state), auth).await
+}

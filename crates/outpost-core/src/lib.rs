@@ -13,6 +13,7 @@ pub mod documents;
 pub mod error;
 pub mod jobs;
 pub mod media;
+pub mod media_index;
 pub mod memory;
 pub mod pairing;
 pub mod personas;

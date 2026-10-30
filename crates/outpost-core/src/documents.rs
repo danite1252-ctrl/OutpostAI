@@ -384,7 +384,7 @@ const STOP: &[&str] = &[
     "from", "they", "have", "does", "about", "would", "there", "their", "into", "your", "tell", "please", "could", "should",
 ];
 
-fn query_words(q: &str) -> Vec<String> {
+pub(crate) fn query_words(q: &str) -> Vec<String> {
     let mut w: Vec<String> = q
         .split(|c: char| !c.is_alphanumeric())
         .map(str::to_lowercase)
@@ -395,7 +395,7 @@ fn query_words(q: &str) -> Vec<String> {
     w
 }
 
-fn word_score(words: &[String], text: &str, _n: usize) -> f32 {
+pub(crate) fn word_score(words: &[String], text: &str, _n: usize) -> f32 {
     if words.is_empty() {
         return 0.0;
     }

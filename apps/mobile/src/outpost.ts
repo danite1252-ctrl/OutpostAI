@@ -360,6 +360,8 @@ export interface Media {
   created_at: number;
   shared_at: number | null;
   by_name?: string;
+  /** What Outpost sees in it (search results). */
+  description?: string | null;
 }
 
 export interface Progress {

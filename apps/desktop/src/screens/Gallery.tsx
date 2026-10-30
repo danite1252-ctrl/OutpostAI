@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, createApi, type Account, type Media, type Pack, type SharedMedia } from "../api";
+import { api, ApiError, createApi, type Account, type Media, type Pack, type SearchStatus, type SharedMedia } from "../api";
 import { GalleryGrid, Viewer, type CreateRequest } from "../components/gallery";
 import { dropCached } from "../components/images";
 import { Avatar, Button, ErrorNote } from "../components/ui";
@@ -33,6 +33,12 @@ export default function Gallery({
   const [filter, setFilter] = useState<Filter>("all");
   const [viewing, setViewing] = useState<Item | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Searching my gallery: the words, the results (null while not searching), and how far
+  // describing pictures has got.
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<Item[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [status, setStatus] = useState<SearchStatus | null>(null);
   // The tab showing now, so a slow answer for another tab is dropped.
   const showing = useRef(tabKey(tab));
   showing.current = tabKey(tab);
@@ -81,6 +87,26 @@ export default function Gallery({
     if (isOwner) void api.listAccounts(token).then(setAccounts, () => undefined);
   }, [token, isOwner]);
 
+  useEffect(() => {
+    void createApi.searchStatus(token).then(setStatus, () => undefined);
+  }, [token]);
+  // Search a moment after typing stops.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setResults(null);
+      return;
+    }
+    const t = window.setTimeout(() => {
+      setSearching(true);
+      createApi
+        .searchGallery(token, q)
+        .then(setResults, fail)
+        .finally(() => setSearching(false));
+    }, 350);
+    return () => window.clearTimeout(t);
+  }, [query, token, fail]);
+
   const mineItem = (m: Item) => m.account_id === me.id;
 
   function nameOf(m: Item) {
@@ -117,7 +143,8 @@ export default function Gallery({
     }
   }
 
-  const shown = items.filter((m) => filter === "all" || m.kind === filter);
+  const searchingMine = tab.kind === "mine" && results !== null;
+  const shown = (searchingMine ? results : items).filter((m) => filter === "all" || m.kind === filter);
   const last = items[items.length - 1];
   const oldest = last ? (tab.kind === "shared" ? (last.shared_at ?? undefined) : last.created_at) : undefined;
   const others = accounts.filter((a) => a.id !== me.id);
@@ -193,9 +220,24 @@ export default function Gallery({
           </>
         )}
       </div>
+      {tab.kind === "mine" && (
+        <div className="flex flex-col gap-1.5">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by what's in them, e.g. dog on a beach"
+            aria-label="Search my gallery"
+            className="min-h-11 rounded-xl border border-line bg-surface px-3.5 text-base text-ink placeholder:text-muted/60 focus:border-ember focus:outline-none"
+          />
+          {status && <SearchNote status={status} isOwner={isOwner} onToggle={(on) => void createApi.setSearch(token, on).then(setStatus, fail)} />}
+        </div>
+      )}
       <ErrorNote>{error}</ErrorNote>
 
-      {!loading && shown.length === 0 ? (
+      {searchingMine && !searching && shown.length === 0 ? (
+        <p className="text-sm text-muted">Nothing matches “{query.trim()}”.</p>
+      ) : !searchingMine && !loading && shown.length === 0 ? (
         <p className="text-sm text-muted">{items.length === 0 ? empty : "Nothing of that kind yet."}</p>
       ) : (
         <GalleryGrid
@@ -205,7 +247,7 @@ export default function Gallery({
           caption={tab.kind === "shared" ? (m) => (mineItem(m) ? "Shared by you" : `Shared by ${nameOf(m)}`) : undefined}
         />
       )}
-      {more && (
+      {more && !searchingMine && (
         <div className="flex justify-center">
           <Button variant="ghost" disabled={loading} onClick={() => void load(oldest, items)}>
             {loading ? "Loading…" : "Show older"}
@@ -230,5 +272,33 @@ export default function Gallery({
         />
       )}
     </section>
+  );
+}
+
+/** Under the search box: how much of the gallery search can see into. */
+function SearchNote({ status, isOwner, onToggle }: { status: SearchStatus; isOwner: boolean; onToggle: (on: boolean) => void }) {
+  let text: string;
+  if (!status.describer) {
+    text = "Searching prompts only. Get a model that can see pictures (the eye badge in Models) and Outpost describes each picture so you can search by what's in it.";
+  } else if (!status.enabled) {
+    text = "Searching prompts and the pictures described so far; describing is turned off.";
+  } else if (status.waiting > 0) {
+    text = `Outpost has described ${status.described} of ${status.total} pictures so far (it works while the graphics card is free); the rest are found by their prompts.`;
+  } else {
+    text = "Searching what's in every picture, and its prompt.";
+  }
+  return (
+    <p className="text-xs text-muted">
+      {text}
+      {!status.embedder && " Install an embedding model (Qwen3 Embedding 0.6B in Models) to find pictures by meaning, not just matching words."}
+      {isOwner && status.describer && (
+        <>
+          {" "}
+          <button type="button" className="underline hover:text-ink" onClick={() => onToggle(!status.enabled)}>
+            {status.enabled ? "Stop describing" : "Start describing"}
+          </button>
+        </>
+      )}
+    </p>
   );
 }

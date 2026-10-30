@@ -131,6 +131,7 @@ export function Viewer({
         </div>
         <aside className="flex w-full flex-col gap-3 overflow-auto rounded-2xl border border-line bg-surface p-4 lg:w-72">
           <p className="text-sm whitespace-pre-wrap">{m.prompt || "No prompt"}</p>
+          {m.description && <p className="text-xs text-soft">Outpost sees: {m.description}</p>}
           <p className="font-mono text-xs text-muted">
             {packName ?? m.pack_id} · seed {m.seed ?? "—"} · {new Date(m.created_at * 1000).toLocaleString()}
           </p>

@@ -867,6 +867,20 @@ export interface Media {
   created_at: number;
   /** In the shared gallery since; null while private. */
   shared_at: number | null;
+  /** What Outpost sees in it (search results only). */
+  description?: string | null;
+}
+
+/** How far describing pictures for search has got. */
+export interface SearchStatus {
+  enabled: boolean;
+  /** The vision model describing pictures; null: search uses prompts only. */
+  describer: string | null;
+  /** The embedding model finding by meaning; null: search matches words. */
+  embedder: string | null;
+  described: number;
+  total: number;
+  waiting: number;
 }
 
 /** A shared-gallery item, with who shared it. */
@@ -971,6 +985,10 @@ export const createApi = {
   job: (token: string, id: string) => request<Job>("GET", `/api/jobs/${encodeURIComponent(id)}`, { token }),
   cancelJob: (token: string, id: string) => request<void>("DELETE", `/api/jobs/${encodeURIComponent(id)}`, { token }),
   /** `accountId`: someone else's gallery (owner only). */
+  searchGallery: (token: string, q: string) => request<Media[]>("GET", `/api/gallery/search?q=${encodeURIComponent(q)}`, { token }),
+  searchStatus: (token: string) => request<SearchStatus>("GET", "/api/gallery/search/status", { token }),
+  setSearch: (token: string, enabled: boolean) =>
+    request<SearchStatus>("PUT", "/api/gallery/search/settings", { token, body: { enabled } }),
   gallery: (token: string, before?: number, accountId?: string) =>
     request<Media[]>(
       "GET",

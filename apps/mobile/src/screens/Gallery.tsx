@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Dimensions, Image, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, Dimensions, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AuthedImage, dropImage, useAuthedImage } from "../images";
@@ -36,6 +36,24 @@ export default function Gallery({
   const [items, setItems] = useState<Media[]>([]);
   const [viewing, setViewing] = useState<Media | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Searching my gallery by what's in the pictures.
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<Media[] | null>(null);
+  useEffect(() => {
+    const q = query.trim();
+    if (!q || tab !== "mine") {
+      setResults(null);
+      return;
+    }
+    const t = setTimeout(() => {
+      api.get<Media[]>(`/api/gallery/search?q=${encodeURIComponent(q)}`).then(setResults, (e) => {
+        onError(e);
+        setError(e instanceof Error ? e.message : "Couldn't search.");
+      });
+    }, 400);
+    return () => clearTimeout(t);
+  }, [api, query, tab, onError]);
+  const shown = results ?? items;
 
   const load = useCallback(() => {
     setError(null);
@@ -116,9 +134,21 @@ export default function Gallery({
             ))}
           </View>
         )}
+        {tab === "mine" && (
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search, e.g. dog on a beach"
+            placeholderTextColor={C.muted}
+            accessibilityLabel="Search my gallery"
+            returnKeyType="search"
+            style={[s.card, { color: C.ink, fontSize: 16, paddingVertical: 10 }]}
+          />
+        )}
+        {results && results.length === 0 && <P muted>Nothing matches “{query.trim()}”.</P>}
         {other && <P muted>{other.name}'s gallery. Only owners can see this.</P>}
         <ErrorText>{error}</ErrorText>
-        {items.length === 0 && (
+        {!results && items.length === 0 && (
           <P muted>
             {tab === "mine"
               ? "Nothing yet. What you make in Create lands here."
@@ -128,7 +158,7 @@ export default function Gallery({
           </P>
         )}
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-          {items.map((m) => (
+          {shown.map((m) => (
             <Pressable key={m.id} accessibilityRole="button" accessibilityLabel={m.prompt ?? "Picture"} onPress={() => setViewing(m)}>
               {m.kind === "video" ? (
                 <View style={{ width: size, height: size, borderRadius: 10, backgroundColor: C.raised, alignItems: "center", justifyContent: "center" }}>

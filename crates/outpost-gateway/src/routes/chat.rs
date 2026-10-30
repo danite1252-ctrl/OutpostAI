@@ -423,6 +423,8 @@ pub async fn send_message(
     if let Some(clock) = llm::UserClock::from_app(req.utc_offset_minutes, req.time_zone.as_deref()) {
         clock.save(&state, &account_id).await;
     }
+    // Chat has the graphics card for now (describing gallery pictures waits).
+    crate::gallery_index::chat_active();
     let mut system = llm::system_prompt(&state, &account_id, persona.as_ref(), Some(&content)).await?;
 
     // First message names the chat.

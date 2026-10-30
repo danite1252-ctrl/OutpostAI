@@ -14,6 +14,9 @@ pub const TAILSCALE_ACCESS: &str = "network.tailscale";
 /// Where ai-toolkit (the LoRA trainer) is installed. Unset: `C:\dev\ai-toolkit`.
 pub const AI_TOOLKIT_DIR: &str = "training.ai_toolkit_dir";
 
+/// "off" to stop describing gallery pictures for search (on until turned off).
+pub const GALLERY_DESCRIBE: &str = "gallery.describe";
+
 pub async fn get(pool: &SqlitePool, key: &str) -> CoreResult<Option<String>> {
     Ok(sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
         .bind(key)
