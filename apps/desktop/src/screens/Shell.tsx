@@ -129,12 +129,8 @@ export default function Shell({
           </div>
         </header>
 
-        {auth.account.role === "owner" && (
-          <>
-            <UpdateBanner token={auth.token} onOpenSettings={() => setSection("settings")} />
-            <CrashNotice token={auth.token} onOpenSettings={() => setSection("settings")} />
-          </>
-        )}
+        <UpdateBanner token={auth.token} onOpenSettings={() => setSection("settings")} isOwner={auth.account.role === "owner"} />
+        {auth.account.role === "owner" && <CrashNotice token={auth.token} onOpenSettings={() => setSection("settings")} />}
         {section === "chat" && (
           <div className="min-h-0 flex-1">
             <Chat token={auth.token} onUnauthorized={onSignedOutElsewhere} />

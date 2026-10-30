@@ -100,6 +100,8 @@ use crate::routes::{
         system::delete_all_crashes,
         system::update_status,
         system::check_updates,
+        system::install_server_update,
+        system::restart,
         system::update_settings,
         webhooks::list,
         webhooks::create,

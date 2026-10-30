@@ -304,6 +304,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/diagnostics/crashes/{id}", get(system::crash).delete(system::delete_crash))
         .route("/api/updates", get(system::update_status))
         .route("/api/updates/check", post(system::check_updates))
+        .route("/api/updates/install", post(system::install_server_update))
+        .route("/api/system/restart", post(system::restart))
         .route("/api/updates/settings", put(system::update_settings))
         .route("/api/hardware", get(models::hardware))
         .route("/api/models", get(models::overview))
@@ -396,9 +398,12 @@ pub fn secure_port(api_port: u16) -> u16 {
 async fn start_remote_access(state: &AppState) -> Vec<tokio::task::JoinHandle<()>> {
     let bind = state.config.bind;
     let lan = !bind.ip().is_loopback();
-    let tailscale_on = outpost_core::settings::get_bool(&state.pool, outpost_core::settings::TAILSCALE_ACCESS)
-        .await
-        .unwrap_or(false);
+    // A server answers on Tailscale too unless the owner said no (so phones reach it away
+    // from home), like network access.
+    let tailscale_on = match outpost_core::settings::get(&state.pool, outpost_core::settings::TAILSCALE_ACCESS).await {
+        Ok(Some(v)) => v == "on",
+        _ => state.config.server,
+    };
     let ts_ip = if tailscale_on { tailscale::ip() } else { None };
     if tailscale_on && ts_ip.is_none() {
         tracing::warn!("Tailscale access is on, but this PC has no Tailscale address right now");

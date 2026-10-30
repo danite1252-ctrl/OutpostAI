@@ -127,6 +127,46 @@ pub async fn check_updates(State(state): State<AppState>, auth: Auth) -> ApiResu
     Ok(Json(updates::status(&state).await))
 }
 
+/// Install the newest release on this server and restart (owner, with the PIN from a
+/// paired device). Only a server started with `--server` updates itself; it checks the
+/// download's signature first. Poll `GET /api/updates` (`installing`), then `/api/health`.
+#[utoipa::path(post, path = "/api/updates/install", tag = "system", security(("bearer" = [])),
+    responses((status = 202, description = "Installing"),
+        (status = 403, description = "Not an owner, or no PIN", body = ErrorBody),
+        (status = 409, description = "Not a server, nothing to install, or already installing", body = ErrorBody)))]
+pub async fn install_server_update(
+    State(state): State<AppState>,
+    auth: Auth,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<StatusCode> {
+    auth.require_owner()?;
+    auth.require_person("Updating the server")?;
+    auth.require_fresh_pin(&state, &headers).await?;
+    updates::install_server(&state).map_err(ApiError::conflict)?;
+    outpost_core::audit::log_quiet(&state.pool, Some(&auth.account.id), Some(&auth.session.id), "server_update", None).await;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Restart Outpost on this server (owner, with the PIN from a paired device), e.g. after
+/// changing network access. Only a server started with `--server`; it's back in a few seconds.
+#[utoipa::path(post, path = "/api/system/restart", tag = "system", security(("bearer" = [])),
+    responses((status = 202, description = "Restarting"),
+        (status = 403, description = "Not an owner, or no PIN", body = ErrorBody),
+        (status = 409, description = "Not a server", body = ErrorBody)))]
+pub async fn restart(State(state): State<AppState>, auth: Auth, headers: axum::http::HeaderMap) -> ApiResult<StatusCode> {
+    auth.require_owner()?;
+    auth.require_person("Restarting the server")?;
+    auth.require_fresh_pin(&state, &headers).await?;
+    if !state.config.server {
+        return Err(ApiError::conflict("Only a server restarts this way. On a PC, close and reopen the Outpost app."));
+    }
+    outpost_core::audit::log_quiet(&state.pool, Some(&auth.account.id), Some(&auth.session.id), "server_restart", None).await;
+    tracing::info!(by = %auth.account.name, "restarting on request");
+    let s = state.clone();
+    tokio::spawn(async move { updates::restart(&s).await });
+    Ok(StatusCode::ACCEPTED)
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateSettings {
     /// Check GitHub for updates (at start and once a day).

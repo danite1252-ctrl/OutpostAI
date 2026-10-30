@@ -1,5 +1,6 @@
-# Build an Outpost release: the Windows installer (signed for the updater), the phone app
-# (signed with the release key) and latest.json, ready to put on GitHub Releases.
+# Build an Outpost release: the Windows installer (signed for the updater), the Linux server
+# (built on the server by its runner, signed with the same key), the phone app (signed with
+# the release key) and latest.json, ready to put on GitHub Releases.
 #
 #   1. Build:    powershell -ExecutionPolicy Bypass -File scripts\release\release.ps1 -Version 0.2.0 -Notes "What's new..."
 #   2. Commit and push the version change it made.
@@ -14,7 +15,8 @@ param(
     [string]$Notes = "",
     [switch]$Publish,
     [switch]$PublishOnly,
-    [switch]$SkipPhone
+    [switch]$SkipPhone,
+    [switch]$SkipLinux
 )
 
 $ErrorActionPreference = "Stop"
@@ -88,6 +90,37 @@ $setupName = "Outpost_$($Version)_x64-setup.exe"
 Copy-Item $setup.FullName (Join-Path $out $setupName) -Force
 Copy-Item "$($setup.FullName).sig" (Join-Path $out "$setupName.sig") -Force
 
+$linuxName = "outpost-gateway-linux-x86_64"
+if (-not $SkipLinux) {
+    Step "Linux server (built on the server by its runner)"
+    # The runner (scripts/linux/runner.sh) watches target\overnight-linux in the shared folder.
+    $flags = Join-Path $root "target\overnight-linux"
+    $linuxOut = Join-Path $flags "release-out"
+    $built = Join-Path $linuxOut $linuxName
+    $versionFile = Join-Path $linuxOut "version.txt"
+    $result = Join-Path $flags "linux-result.txt"
+    Remove-Item -Recurse -Force $linuxOut -ErrorAction SilentlyContinue
+    New-Item -ItemType File -Force (Join-Path $flags "release") | Out-Null
+    Write-Host "Waiting for the server's runner to build it (a few minutes; up to 30)..."
+    $deadline = (Get-Date).AddMinutes(30)
+    while (-not ((Test-Path $built) -and (Test-Path $versionFile))) {
+        if ((Test-Path $result) -and (Select-String -Path $result -Pattern "=== release finished .*ok: false" -Quiet)) {
+            throw "The server couldn't build it: see $result. Fix it, or add -SkipLinux."
+        }
+        if ((Get-Date) -gt $deadline) { throw "The server's runner didn't answer. Is it running? Or add -SkipLinux." }
+        Start-Sleep -Seconds 10
+    }
+    $linuxVersion = (Get-Content $versionFile -Raw).Trim()
+    if ($linuxVersion -ne $Version) { throw "The server built version $linuxVersion, not $Version. Is the shared folder up to date?" }
+    New-Item -ItemType Directory -Force $out | Out-Null
+    Copy-Item $built (Join-Path $out $linuxName) -Force
+    # Signed with the update key, like the installer: servers check it before installing.
+    Run @("npm", "run", "tauri", "-w", "@outpost/desktop", "--", "signer", "sign", "-f", $updaterKey, "-p", $updaterPassword, (Join-Path $out $linuxName))
+    $linuxSig = (Get-Content (Join-Path $out "$linuxName.sig") -Raw).Trim()
+    $linuxHash = (Get-FileHash (Join-Path $out $linuxName) -Algorithm SHA256).Hash.ToLower()
+    Copy-Item (Join-Path $root "scripts\linux\install.sh") (Join-Path $out "install.sh") -Force
+}
+
 $apkName = "Outpost-$Version.apk"
 if (-not $SkipPhone) {
     Step "Phone app"
@@ -132,6 +165,9 @@ $manifest = [ordered]@{
     platforms = [ordered]@{
         "windows-x86_64" = [ordered]@{ signature = $sig.Trim(); url = "$download/$setupName" }
     }
+}
+if (-not $SkipLinux) {
+    $manifest.platforms."linux-x86_64" = [ordered]@{ signature = $linuxSig; url = "$download/$linuxName"; sha256 = $linuxHash }
 }
 if (-not $SkipPhone) {
     # The phone checks the download against this before installing it.

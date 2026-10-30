@@ -9,6 +9,8 @@
 #   build     copy the latest code, build the gateway (release)           -> linux-result.txt
 #   deploy    build, then install it as the "outpost" user service and restart it
 #                                                                          -> linux-result.txt
+#   release   build the gateway for a release (the release script on Windows asks for it)
+#                                                                          -> release-out/
 #   stop      stop the outpost service
 #   status    machine and service status (GPU, memory, disk, service log)  -> linux-status.txt
 #   logs      the outpost service's last 400 log lines                     -> linux-logs.txt
@@ -54,7 +56,7 @@ build() {
 
 echo "Outpost Linux runner is waiting for jobs in $FLAGS"
 while true; do
-  for job in test build deploy stop status logs; do
+  for job in test build deploy release stop status logs; do
     [ -e "$FLAGS/$job" ] || continue
     rm -f "$FLAGS/$job"
     case "$job" in
@@ -82,6 +84,20 @@ while true; do
           sleep 5
           step "service status" systemctl --user --no-pager status outpost
           step "health" curl -s --max-time 5 http://127.0.0.1:7420/api/health
+        else
+          ok=1
+        fi
+        ;;
+      release)
+        # The Linux server program for a GitHub release, beside its version, for
+        # scripts/release/release.ps1 to sign and attach.
+        rm -rf "$FLAGS/release-out"
+        if build; then
+          mkdir -p "$FLAGS/release-out"
+          cp "$CARGO_TARGET_DIR/release/outpost-gateway" "$FLAGS/release-out/outpost-gateway-linux-x86_64" &&
+            "$CARGO_TARGET_DIR/release/outpost-gateway" --version | awk '{print $2}' >"$FLAGS/release-out/version.txt" ||
+            ok=1
+          step "built" ls -l "$FLAGS/release-out"
         else
           ok=1
         fi

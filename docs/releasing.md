@@ -8,6 +8,9 @@ Each one has:
 | `Outpost_<version>_x64-setup.exe` | The Windows installer (per-user, no admin) |
 | `Outpost_<version>_x64-setup.exe.sig` | Its update signature |
 | `Outpost-<version>.apk` | The phone app, signed with the release key |
+| `outpost-gateway-linux-x86_64` | The Linux server program |
+| `outpost-gateway-linux-x86_64.sig` | Its update signature (servers check it before installing) |
+| `install.sh` | Installs or updates Outpost on a Linux server |
 | `latest.json` | What installed copies read to find the update (and the phone app) |
 
 Installed copies of Outpost read
@@ -54,14 +57,20 @@ app (and pair again) to take a new one.
    ```
 
    It sets the version everywhere (`scripts/release/bump.mjs`), builds the gateway (it ships
-   beside the app for the MCP bridge), the installer (signed for updates), the phone app
+   beside the app for the MCP bridge), the installer (signed for updates), the Linux server
+   (built on the server by its runner, then signed with the same update key), the phone app
    (signed with the release key) and `latest.json`, into `target\release-out\v0.2.0`.
-   `-SkipPhone` leaves the phone app out.
+   `-SkipPhone` leaves the phone app out; `-SkipLinux` the Linux server (needed if the
+   server's runner isn't running).
 3. **Commit and push the version change**: `git add -A; git commit -m "Outpost 0.2.0"; git push`.
 4. **Publish** (needs `gh`): the same command with `-PublishOnly` on the end. It makes the
    release `v0.2.0` on GitHub, tagged on the commit you just pushed, with every file attached.
    Without `gh`: make a release named `v0.2.0` on GitHub by hand and attach every file in
    `target\release-out\v0.2.0`.
+
+Servers (started with `--server`) also see it within a day, and an owner installs it from
+any paired device with **Update the server** (the server checks the signature, swaps itself
+and restarts).
 
 Within a day every installed Outpost shows "Outpost 0.2.0 is ready" (or straight away with
 **Settings › Updates › Check now**), and paired phones show the new app under **You**.

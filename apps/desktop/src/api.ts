@@ -1095,6 +1095,10 @@ export interface UpdateStatus {
   checked_at: number | null;
   update: Release | null;
   mobile: { version: string; url: string } | null;
+  /** A server that can install `update` itself. */
+  server_can_install?: boolean;
+  /** A server install in progress, or "Failed: ..." */
+  installing?: string | null;
   error: string | null;
 }
 
@@ -1108,7 +1112,25 @@ export const systemApi = {
   updates: (token: string) => request<UpdateStatus>("GET", "/api/updates", { token }),
   checkUpdates: (token: string) => request<UpdateStatus>("POST", "/api/updates/check", { token }),
   setUpdates: (token: string, enabled: boolean) => request<UpdateStatus>("PUT", "/api/updates/settings", { token, body: { enabled } }),
+  /** Install the newest release on the server and restart it (a server only). */
+  installServer: (token: string) => request<void>("POST", "/api/updates/install", { token }),
+  /** Restart Outpost on the server (a server only). */
+  restartServer: (token: string) => request<void>("POST", "/api/system/restart", { token }),
 };
+
+/** Wait for the server to come back after a restart (up to two minutes). */
+export async function waitForServer(): Promise<Health | null> {
+  // Give it a moment to go down first.
+  await new Promise((r) => setTimeout(r, 3000));
+  for (let i = 0; i < 60; i++) {
+    try {
+      return await api.health();
+    } catch {
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+  return null;
+}
 
 export const integrationsApi = {
   get: (token: string) => request<{ port: number; bridge_path: string | null }>("GET", "/api/integrations", { token }),

@@ -13,6 +13,8 @@ import {
   GATEWAY,
   saveServerToken,
   SERVER,
+  systemApi,
+  waitForServer,
   secretProblem,
   serverSetup,
   setPinPrompter,
@@ -531,6 +533,7 @@ export function ServerPanel({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [restarting, setRestarting] = useState<string | null>(null);
   return (
     <div className="flex flex-col gap-4">
       <h2 className="text-lg font-semibold">Server</h2>
@@ -549,13 +552,34 @@ export function ServerPanel({
                 ? `Shared by ${SERVER.people.map((p) => p.name).join(", ")}: it opens on "Who's using Outpost?" and asks each person's PIN.`
                 : "Only you are signed in on this PC, so it stays signed in. Add someone (from the lock button, or below) and it asks who's using it."}
             </p>
-            {onAddPerson && (
-              <div>
+            <div className="flex flex-wrap gap-3">
+              {onAddPerson && (
                 <Button variant="ghost" onClick={onAddPerson}>
                   Add someone to this PC
                 </Button>
-              </div>
-            )}
+              )}
+              {isOwner && (
+                <Button
+                  variant="ghost"
+                  disabled={!!restarting}
+                  title="E.g. after changing network or Tailscale access"
+                  onClick={() => {
+                    setError(null);
+                    setRestarting("Restarting the server…");
+                    systemApi
+                      .restartServer(token)
+                      .then(() => waitForServer())
+                      .then((back) => setRestarting(back ? "The server is back." : "The server hasn't come back yet."))
+                      .catch((e) => {
+                        setRestarting(null);
+                        setError(message(e));
+                      });
+                  }}
+                >
+                  {restarting ?? "Restart the server"}
+                </Button>
+              )}
+            </div>
             {confirming ? (
               <div className="flex flex-wrap items-center gap-3">
                 <span className="text-sm">Stop using the server and run Outpost on this PC again?</span>

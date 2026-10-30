@@ -93,7 +93,10 @@ async fn status(state: &AppState) -> ApiResult<NetworkStatus> {
     let open_now = listening.is_some_and(|a: SocketAddr| !a.ip().is_loopback());
     let lan = lan_ip();
     let port = listening.map(|a| a.port()).unwrap_or(state.config.bind.port());
-    let tailscale_access = settings::get_bool(&state.pool, settings::TAILSCALE_ACCESS).await?;
+    let tailscale_access = match settings::get(&state.pool, settings::TAILSCALE_ACCESS).await?.as_deref() {
+        Some(v) => v == "on",
+        None => state.config.server,
+    };
     let ts = crate::tailscale::detect().await;
     let tailscale_running = state.tailnet.get().is_some();
     let ts_differs = ts.is_some() && tailscale_access != tailscale_running;

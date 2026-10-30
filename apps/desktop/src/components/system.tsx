@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, systemApi, type CrashSummary, type Diagnostics, type UpdateStatus } from "../api";
+import { ApiError, SERVER, systemApi, waitForServer, type CrashSummary, type Diagnostics, type UpdateStatus } from "../api";
 import { Button, ErrorNote } from "./ui";
 
 function message(err: unknown) {
@@ -40,8 +40,137 @@ export async function installUpdate(onProgress: (text: string) => void) {
   await relaunch();
 }
 
-/** A slim bar at the top when a newer Outpost is out (owners only). */
-export function UpdateBanner({ token, onOpenSettings }: { token: string; onOpenSettings: () => void }) {
+/** This desktop app's own update, checked at start and once a day while open. Only needed
+ * when the app uses a server (otherwise the PC's own gateway checks for the same version). */
+function useAppUpdate() {
+  const [version, setVersion] = useState<string | null>(null);
+  const [newer, setNewer] = useState<string | null>(null);
+  const look = useCallback(async () => {
+    try {
+      const { getVersion } = await import("@tauri-apps/api/app");
+      setVersion(await getVersion());
+      const { check } = await import("@tauri-apps/plugin-updater");
+      const u = await check();
+      setNewer(u ? u.version : null);
+      return u ? u.version : null;
+    } catch {
+      return null;
+    }
+  }, []);
+  useEffect(() => {
+    if (!SERVER) return;
+    void look();
+    const t = window.setInterval(() => void look(), 24 * 60 * 60 * 1000);
+    return () => window.clearInterval(t);
+  }, [look]);
+  return { version, newer, look };
+}
+
+/** Update the server and wait for it to come back with the new version. */
+export async function updateServer(token: string, onProgress: (text: string) => void) {
+  onProgress("Downloading and checking the update…");
+  await systemApi.installServer(token);
+  // Follow it until the server restarts.
+  for (let i = 0; i < 120; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const s = await systemApi.updates(token).catch(() => null);
+    if (!s) break; // It's restarting.
+    if (s.installing?.startsWith("Failed")) throw new Error(s.installing.replace(/^Failed: /, ""));
+    if (s.installing) onProgress(`${s.installing}…`);
+  }
+  onProgress("Restarting the server…");
+  const back = await waitForServer();
+  if (!back) throw new Error("The server hasn't come back yet. Check it's running.");
+  onProgress(`The server is on Outpost ${back.version}.`);
+  window.setTimeout(() => window.location.reload(), 1500);
+}
+
+/** A slim bar at the top when a newer Outpost is out (owners only). Using a server, it
+ * covers this app's own update and the server's separately. */
+export function UpdateBanner({
+  token,
+  onOpenSettings,
+  isOwner = true,
+}: {
+  token: string;
+  onOpenSettings: () => void;
+  isOwner?: boolean;
+}) {
+  if (SERVER) return <ServerUpdateBanner token={token} onOpenSettings={onOpenSettings} isOwner={isOwner} />;
+  if (!isOwner) return null;
+  return <PcUpdateBanner token={token} onOpenSettings={onOpenSettings} />;
+}
+
+function ServerUpdateBanner({
+  token,
+  onOpenSettings,
+  isOwner,
+}: {
+  token: string;
+  onOpenSettings: () => void;
+  isOwner: boolean;
+}) {
+  const app = useAppUpdate();
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [hidden, setHidden] = useState<string[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const load = () => systemApi.updates(token).then(setStatus, () => undefined);
+    void load();
+    const t = window.setInterval(load, 30 * 60 * 1000);
+    return () => window.clearInterval(t);
+  }, [token]);
+
+  const server = isOwner && status?.server_can_install ? status.update : null;
+  const items: { key: string; text: string; action: string; run: () => Promise<void> }[] = [];
+  if (app.newer && !hidden.includes(`app-${app.newer}`)) {
+    items.push({ key: `app-${app.newer}`, text: `This app: Outpost ${app.newer} is ready.`, action: "Update this app", run: () => installUpdate(setBusy) });
+  }
+  if (server && !hidden.includes(`server-${server.version}`)) {
+    items.push({
+      key: `server-${server.version}`,
+      text: `${SERVER?.name}: Outpost ${server.version} is ready.`,
+      action: "Update the server",
+      run: () => updateServer(token, setBusy),
+    });
+  }
+  if (!items.length && !busy) return null;
+  return (
+    <div role="status" className="flex flex-col gap-1 border-b border-line bg-ember/10 px-6 py-2 text-sm">
+      {busy ? (
+        <span className="text-muted">{busy}</span>
+      ) : (
+        items.map((it) => (
+          <div key={it.key} className="flex flex-wrap items-center gap-3">
+            <span className="font-medium">{it.text}</span>
+            <button type="button" className="text-ember underline-offset-2 hover:underline" onClick={onOpenSettings}>
+              What's new
+            </button>
+            <Button
+              className="min-h-8 px-3"
+              onClick={() => {
+                setError(null);
+                it.run().catch((e) => {
+                  setBusy(null);
+                  setError(message(e));
+                });
+              }}
+            >
+              {it.action}
+            </Button>
+            <button type="button" className="text-muted hover:text-ink" onClick={() => setHidden((h) => [...h, it.key])}>
+              Later
+            </button>
+          </div>
+        ))
+      )}
+      {error && <span className="text-danger">{error}</span>}
+    </div>
+  );
+}
+
+function PcUpdateBanner({ token, onOpenSettings }: { token: string; onOpenSettings: () => void }) {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [hidden, setHidden] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -125,9 +254,11 @@ export function UpdatesPanel({ token, canManage }: { token: string; canManage: b
   return (
     <div className="flex flex-col gap-4">
       <h2 className="text-lg font-semibold">Updates</h2>
+      {SERVER && <AppUpdateRow />}
       <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5">
+        {SERVER && <h3 className="font-semibold">The server ({SERVER.name})</h3>}
         <p className="text-sm">
-          This is Outpost <b>{status.current}</b>.{" "}
+          {SERVER ? "It runs" : "This is"} Outpost <b>{status.current}</b>.{" "}
           {u ? (
             <>
               <b className="text-ember">Outpost {u.version}</b> is ready{u.date ? ` (released ${u.date.slice(0, 10)})` : ""}.
@@ -143,20 +274,21 @@ export function UpdatesPanel({ token, canManage }: { token: string; canManage: b
         )}
         {status.error && <p className="text-sm text-muted">Last check: {status.error}</p>}
         <div className="flex flex-wrap items-center gap-3">
-          {u && canManage && (
+          {u && canManage && (!SERVER || status.server_can_install) && (
             <Button
               disabled={!!busy}
               onClick={() => {
                 setError(null);
-                installUpdate(setBusy).catch((e) => {
+                (SERVER ? updateServer(token, setBusy) : installUpdate(setBusy)).catch((e) => {
                   setBusy(null);
                   setError(message(e));
                 });
               }}
             >
-              {busy ?? "Update and restart"}
+              {busy ?? (SERVER ? "Update the server" : "Update and restart")}
             </Button>
           )}
+          {status.installing && !busy && <span className="text-xs text-muted">{status.installing}</span>}
           {canManage && (
             <Button variant="ghost" disabled={checking} onClick={() => void checkNow()}>
               {checking ? "Checking…" : "Check now"}
@@ -179,6 +311,50 @@ export function UpdatesPanel({ token, canManage }: { token: string; canManage: b
         )}
         <ErrorNote>{error}</ErrorNote>
       </div>
+    </div>
+  );
+}
+
+/** Settings › Updates, using a server: this app's own version and update. */
+function AppUpdateRow() {
+  const app = useAppUpdate();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5">
+      <h3 className="font-semibold">This app</h3>
+      <p className="text-sm">
+        Outpost {app.version ?? ""} on this PC.{" "}
+        {app.newer ? <b className="text-ember">Outpost {app.newer} is ready.</b> : "It checks at start and once a day."}
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        {app.newer && (
+          <Button
+            disabled={!!busy}
+            onClick={() => {
+              setError(null);
+              installUpdate(setBusy).catch((e) => {
+                setBusy(null);
+                setError(message(e));
+              });
+            }}
+          >
+            {busy ?? "Update this app"}
+          </Button>
+        )}
+        <Button
+          variant="ghost"
+          disabled={checking}
+          onClick={() => {
+            setChecking(true);
+            void app.look().finally(() => setChecking(false));
+          }}
+        >
+          {checking ? "Checking…" : "Check now"}
+        </Button>
+      </div>
+      <ErrorNote>{error}</ErrorNote>
     </div>
   );
 }

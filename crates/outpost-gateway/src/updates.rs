@@ -51,6 +51,49 @@ struct Manifest {
     pub_date: Option<String>,
     #[serde(default)]
     mobile: Option<MobileRelease>,
+    #[serde(default)]
+    platforms: std::collections::HashMap<String, Platform>,
+}
+
+/// One platform's download in a release, signed with the update key.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Platform {
+    pub url: String,
+    /// The download's signature (minisign, base64), as the desktop updater uses.
+    pub signature: String,
+}
+
+/// The release key's public half: the same one the desktop app checks its updates with.
+fn update_public_key() -> Option<String> {
+    let conf: serde_json::Value =
+        serde_json::from_str(include_str!("../../../apps/desktop/src-tauri/tauri.conf.json")).ok()?;
+    conf["plugins"]["updater"]["pubkey"].as_str().map(str::to_string)
+}
+
+/// Is `signature` (base64 minisign, from latest.json) a good signature of `data` by the
+/// release key?
+pub fn signature_ok(data: &[u8], signature: &str) -> bool {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let decode = |s: &str| b64.decode(s.trim()).ok().and_then(|b| String::from_utf8(b).ok());
+    let (Some(key), Some(sig)) = (update_public_key().as_deref().and_then(decode), decode(signature)) else {
+        return false;
+    };
+    let (Ok(key), Ok(sig)) = (
+        minisign_verify::PublicKey::decode(&key),
+        minisign_verify::Signature::decode(&sig),
+    ) else {
+        return false;
+    };
+    key.verify(data, &sig, true).is_ok()
+}
+
+/// This server's platform in `latest.json`.
+pub fn server_platform() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Some("linux-x86_64"),
+        _ => None,
+    }
 }
 
 /// The phone app in a release.
@@ -78,6 +121,8 @@ struct Found {
     checked_at: Option<i64>,
     latest: Option<Release>,
     mobile: Option<MobileRelease>,
+    /// This server's download in the newest release.
+    server: Option<Platform>,
     error: Option<String>,
 }
 
@@ -85,6 +130,8 @@ struct Found {
 #[derive(Clone, Default)]
 pub struct Updates {
     found: Arc<RwLock<Found>>,
+    /// A server install in progress (or its failure).
+    installing: Arc<RwLock<Option<String>>>,
 }
 
 /// Update status for the apps.
@@ -103,6 +150,10 @@ pub struct UpdateStatus {
     pub update: Option<Release>,
     /// The newest phone app (the phone compares it with its own version).
     pub mobile: Option<MobileRelease>,
+    /// This is a server (`--server`) that can install `update` itself (`POST /api/updates/install`).
+    pub server_can_install: bool,
+    /// A server install in progress, or why the last one failed.
+    pub installing: Option<String>,
     /// Why the last check failed.
     pub error: Option<String>,
 }
@@ -117,16 +168,99 @@ pub async fn enabled(state: &AppState) -> bool {
 pub async fn status(state: &AppState) -> UpdateStatus {
     let found = state.updates.found.read().map(|f| f.clone()).unwrap_or_default();
     let current = env!("CARGO_PKG_VERSION").to_string();
+    let update = found.latest.filter(|r| newer(&r.version, &current));
     UpdateStatus {
         enabled: enabled(state).await,
         repo: RELEASES_REPO.to_string(),
         releases_page: releases_page(),
         checked_at: found.checked_at,
-        update: found.latest.filter(|r| newer(&r.version, &current)),
+        server_can_install: state.config.server && update.is_some() && found.server.is_some(),
+        installing: state.updates.installing.read().ok().and_then(|i| i.clone()),
+        update,
         mobile: found.mobile,
         error: found.error,
         current,
     }
+}
+
+/// Install the newest release on this server: download it, check its signature against the
+/// release key built into Outpost, put it in place of this program, and restart (the
+/// service manager starts the new one). Runs in the background; see `installing`.
+pub fn install_server(state: &AppState) -> Result<(), String> {
+    if !state.config.server {
+        return Err("Only a server (started with --server) updates itself. On a PC, the desktop app installs updates.".into());
+    }
+    let found = state.updates.found.read().map(|f| f.clone()).unwrap_or_default();
+    let (Some(latest), Some(platform)) = (found.latest, found.server) else {
+        return Err("There's no server update to install. Check for updates first.".into());
+    };
+    if !newer(&latest.version, env!("CARGO_PKG_VERSION")) {
+        return Err("This server is already up to date.".into());
+    }
+    {
+        let mut busy = state.updates.installing.write().map_err(|_| "busy")?;
+        if busy.as_deref().is_some_and(|b| !b.starts_with("Failed")) {
+            return Err("An update is already being installed.".into());
+        }
+        *busy = Some(format!("Downloading Outpost {}", latest.version));
+    }
+    let state = state.clone();
+    tokio::spawn(async move {
+        match download_and_replace(&state, &platform, &latest.version).await {
+            Ok(()) => {
+                tracing::info!(version = %latest.version, "installed the update; restarting");
+                restart(&state).await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "server update failed");
+                if let Ok(mut i) = state.updates.installing.write() {
+                    *i = Some(format!("Failed: {e}"));
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
+async fn download_and_replace(state: &AppState, platform: &Platform, version: &str) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(600))
+        .user_agent(concat!("Outpost/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(&platform.url).send().await.map_err(|_| "Couldn't download the update.".to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("The download failed ({}).", resp.status().as_u16()));
+    }
+    let data = resp.bytes().await.map_err(|_| "The download was cut off.".to_string())?;
+    if !signature_ok(&data, &platform.signature) {
+        return Err("The download's signature doesn't match Outpost's release key, so it wasn't installed.".into());
+    }
+    if let Ok(mut i) = state.updates.installing.write() {
+        *i = Some(format!("Installing Outpost {version}"));
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let new = exe.with_file_name(".outpost-gateway.new");
+    tokio::fs::write(&new, &data).await.map_err(|e| format!("Couldn't save the update: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755));
+    }
+    // On Linux a running program can be replaced; the old one keeps running until it exits.
+    tokio::fs::rename(&new, &exe).await.map_err(|e| format!("Couldn't put the update in place: {e}"))?;
+    Ok(())
+}
+
+/// Exit code that asks the service manager to start Outpost again (`Restart=on-failure`).
+pub const RESTART_EXIT_CODE: i32 = 75;
+
+/// Stop the engines, note a normal close, and exit so systemd starts Outpost again.
+pub async fn restart(state: &AppState) {
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    state.engines.shutdown();
+    crate::diagnostics::clean_exit();
+    std::process::exit(RESTART_EXIT_CODE);
 }
 
 /// Look now (whether or not checks are on: this is the "Check now" button).
@@ -138,6 +272,7 @@ pub async fn check(state: &AppState) {
             Ok(m) => {
                 f.latest = Some(Release { version: m.version.trim_start_matches('v').to_string(), notes: m.notes, date: m.pub_date });
                 f.mobile = m.mobile;
+                f.server = server_platform().and_then(|p| m.platforms.get(p).cloned());
                 f.error = None;
             }
             Err(e) => f.error = Some(e),
@@ -170,7 +305,8 @@ async fn fetch() -> Result<Manifest, String> {
         .map_err(|_| "The release information couldn't be read.".to_string())
 }
 
-/// Checks a minute after start, then once a day, while checks are on.
+/// Checks a minute after start, then once a day, while checks are on (a server left on
+/// sees a new release within a day; the apps' Check now looks at once).
 pub async fn background(state: AppState) {
     tokio::time::sleep(Duration::from_secs(60)).await;
     loop {
@@ -211,6 +347,15 @@ pub fn newer(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::newer;
+
+    #[test]
+    fn unsigned_or_tampered_downloads_are_refused() {
+        // The release key's public half is built in.
+        assert!(super::update_public_key().is_some_and(|k| k.len() > 40));
+        assert!(!super::signature_ok(b"anything", ""));
+        assert!(!super::signature_ok(b"anything", "bm90IGEgc2lnbmF0dXJl"));
+        assert_eq!(super::server_platform().is_some(), cfg!(all(target_os = "linux", target_arch = "x86_64")));
+    }
 
     #[test]
     fn versions_compare_by_number() {
