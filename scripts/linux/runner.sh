@@ -115,6 +115,10 @@ while true; do
         ;;
       logs)
         step "outpost log" journalctl --user -u outpost -n 400 --no-pager
+        # The engines' own logs (Ollama, ComfyUI, the voice service).
+        for f in "$HOME"/.local/share/Outpost/engines/*/logs/*.log; do
+          [ -f "$f" ] && step "$(basename "$f")" tail -n 120 "$f"
+        done
         ;;
     esac
     echo "=== $job finished $(date '+%F %T') (ok: $([ $ok -eq 0 ] && echo true || echo false)) ===" >>"$OUT"
