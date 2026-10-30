@@ -69,12 +69,15 @@ function useAppUpdate() {
 /** Update the server and wait for it to come back with the new version. */
 export async function updateServer(token: string, onProgress: (text: string) => void) {
   onProgress("Downloading and checking the update…");
+  const before = (await systemApi.updates(token).catch(() => null))?.current;
   await systemApi.installServer(token);
   // Follow it until the server restarts.
   for (let i = 0; i < 120; i++) {
     await new Promise((r) => setTimeout(r, 2000));
     const s = await systemApi.updates(token).catch(() => null);
     if (!s) break; // It's restarting.
+    // It restarted between two looks (a quick restart): it's already on the new version.
+    if (before && s.current !== before) break;
     if (s.installing?.startsWith("Failed")) throw new Error(s.installing.replace(/^Failed: /, ""));
     if (s.installing) onProgress(`${s.installing}…`);
   }
