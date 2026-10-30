@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod auth;
 pub mod chat;
 pub mod create;
+pub mod documents;
 pub mod downloads;
 pub mod engines;
 pub mod health;

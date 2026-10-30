@@ -6,6 +6,7 @@
 pub mod config;
 pub mod create;
 pub mod diagnostics;
+pub mod documents;
 pub mod discovery;
 pub mod error;
 pub mod extract;
@@ -156,6 +157,7 @@ const DESKTOP_ORIGINS: [&str; 5] = [
 
 pub fn router(state: AppState) -> Router {
     use routes::{
+        documents as docs,
         accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, system, training,
         voice, webhooks,
     };
@@ -311,6 +313,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/diagnostics/log", get(system::recent_log))
         .route("/api/diagnostics/crashes", delete(system::delete_all_crashes))
         .route("/api/diagnostics/crashes/{id}", get(system::crash).delete(system::delete_crash))
+        .route("/api/documents", get(docs::list).post(docs::add).layer(DefaultBodyLimit::max(outpost_core::documents::MAX_BYTES)))
+        .route("/api/documents/{id}", delete(docs::delete))
+        .route("/api/documents/{id}/file", get(docs::file))
+        .route("/api/chats/{id}/documents", get(docs::for_chat).put(docs::set_for_chat))
+        .route("/api/personas/{id}/documents", get(docs::for_persona).put(docs::set_for_persona))
         .route("/api/helpers", get(helpers::list))
         .route("/api/helpers/poll", post(helpers::poll))
         .route("/api/helpers/jobs/{id}/input/{key}", get(helpers::input))
@@ -365,6 +372,7 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     routes::create::claim_shared_loras(&state).await;
     tokio::spawn(create::worker(state.clone()));
     tokio::spawn(helpers::watchdog(state.clone()));
+    tokio::spawn(documents::resume(state.clone()));
     // The one call to the internet: a daily look for a newer release (can be switched off).
     tokio::spawn(updates::background(state.clone()));
     // With network access on, phones get the encrypted port next door, and the

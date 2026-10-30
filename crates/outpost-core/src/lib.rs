@@ -9,6 +9,7 @@ pub mod audit;
 pub mod auth;
 pub mod chats;
 pub mod db;
+pub mod documents;
 pub mod error;
 pub mod jobs;
 pub mod media;

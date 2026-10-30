@@ -457,6 +457,7 @@ mod tests {
             model: None,
             created_at: 0,
             attachments: Vec::new(),
+            sources: Vec::new(),
         }
     }
 

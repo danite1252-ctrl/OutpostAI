@@ -17,6 +17,7 @@ import { JobCard } from "../components/jobcard";
 import { jobsChanged } from "../components/queue";
 import { HandsFree, MicButton, PlayButton, sayAloud } from "../components/voice";
 import { ContextPanel } from "../components/context";
+import { ChatDocuments, SourcesLine } from "../components/documents";
 import { GalleryPicker, mediaAsInput } from "../components/gallery";
 import { Avatar, Button, ErrorNote } from "../components/ui";
 
@@ -52,6 +53,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
   const [installed, setInstalled] = useState<InstalledModel[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showContext, setShowContext] = useState(loadShowContext);
+  const [docsOpen, setDocsOpen] = useState(false);
   const [fromGallery, setFromGallery] = useState(false);
   const [handsFree, setHandsFree] = useState(false);
   const filePicker = useRef<HTMLInputElement | null>(null);
@@ -359,6 +361,21 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
             </button>
           )}
         </header>
+        <ChatDocuments
+          key={`${active?.id ?? "new"}-${active?.persona_id ?? ""}`}
+          token={token}
+          chatId={active?.id ?? null}
+          open={docsOpen}
+          onOpenChange={setDocsOpen}
+          ensureChat={async () => {
+            if (activeRef.current) return activeRef.current;
+            const chat = await api.createChat(token, personas[0]?.id);
+            setChats((c) => [chat, ...c]);
+            setActiveId(chat.id);
+            activeRef.current = chat.id;
+            return chat.id;
+          }}
+        />
 
         <div className="min-h-0 flex-1 overflow-auto">
           <div className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-8">
@@ -461,6 +478,14 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
               >
                 From gallery
               </Button>
+              <Button
+                variant="ghost"
+                disabled={!!draft}
+                onClick={() => setDocsOpen(true)}
+                title="Ask about PDFs, Word files and notes"
+              >
+                Documents
+              </Button>
               <span className="flex-1" />
               {draft ? (
                 <Button variant="ghost" onClick={stop}>
@@ -551,14 +576,14 @@ function Bubble({
   onVoiceError,
 }: {
   token: string;
-  message: Pick<Message, "role" | "content" | "thinking" | "attachments">;
+  message: Pick<Message, "role" | "content" | "thinking" | "attachments" | "sources">;
   persona: Persona | null;
   live?: boolean;
   /** Saved messages can be deleted. */
   onDelete?: () => void;
   onVoiceError?: (message: string) => void;
 }) {
-  const { role, content, thinking, attachments } = message;
+  const { role, content, thinking, attachments, sources } = message;
   if (role === "user") {
     return (
       <div className="group flex max-w-[80%] flex-col items-end gap-2 self-end">
@@ -593,6 +618,7 @@ function Bubble({
               ))}
             </div>
           )}
+          {sources && sources.length > 0 && !live && <SourcesLine token={token} sources={sources} />}
           {(onDelete || onVoiceError) && (
             <div className="mt-1 flex gap-1">
               {onVoiceError && content.trim() && <PlayButton token={token} text={content} persona={persona} onError={onVoiceError} />}

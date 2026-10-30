@@ -423,10 +423,17 @@ pub async fn send_message(
     if let Some(clock) = llm::UserClock::from_app(req.utc_offset_minutes, req.time_zone.as_deref()) {
         clock.save(&state, &account_id).await;
     }
-    let system = llm::system_prompt(&state, &account_id, persona.as_ref(), Some(&content)).await?;
+    let mut system = llm::system_prompt(&state, &account_id, persona.as_ref(), Some(&content)).await?;
 
     // First message names the chat.
     let earlier = chats::messages(&state.pool, &chat.id).await?;
+    // Passages from the chat's (and its persona's) documents that fit this message.
+    let previous = earlier.iter().rev().find(|m| m.role == "user").map(|m| m.content.clone());
+    let docs = crate::documents::context(&state, &chat.id, persona.as_ref(), &content, previous.as_deref()).await;
+    if let Some(d) = &docs {
+        system = format!("{system}\n\n{}", d.section);
+    }
+    let doc_sources = docs.map(|d| d.sources).unwrap_or_default();
     if earlier.is_empty() && chat.title == "New chat" {
         let title = if content.is_empty() {
             "Image".to_string()
@@ -550,7 +557,11 @@ pub async fn send_message(
         let thinking = Some(thinking.as_str()).filter(|t| !t.is_empty());
         let saved = chats::add_message(&pool, &chat_id, "assistant", &content, thinking, Some(model.as_str())).await;
         match saved {
-            Ok(saved) => {
+            Ok(mut saved) => {
+                if !doc_sources.is_empty() {
+                    saved.sources = crate::documents::cited(&content, &doc_sources);
+                    let _ = outpost_core::documents::set_message_sources(&pool, &saved.id, &saved.sources).await;
+                }
                 let complete = failure.is_none();
                 let _ = tx
                     .send(event("done", serde_json::json!({ "message": saved, "error": failure })))

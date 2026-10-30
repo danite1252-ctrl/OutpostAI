@@ -290,6 +290,8 @@ export interface Message {
   content: string;
   thinking: string | null;
   attachments: Attachment[];
+  /** Document passages the reply used ("[2] Handbook.pdf, page 3"). */
+  sources?: { n: number; document_id: string; name: string; page: number | null }[];
 }
 
 export type Task = "picture" | "character" | "edit" | "video" | "animate" | "upscale" | "cutout";

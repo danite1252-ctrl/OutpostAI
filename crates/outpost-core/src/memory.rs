@@ -368,11 +368,11 @@ pub fn dot(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
-fn to_blob(v: &[f32]) -> Vec<u8> {
+pub(crate) fn to_blob(v: &[f32]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
 
-fn from_blob(b: &[u8]) -> Option<Vec<f32>> {
+pub(crate) fn from_blob(b: &[u8]) -> Option<Vec<f32>> {
     (!b.is_empty() && b.len() % 4 == 0).then(|| {
         b.chunks_exact(4)
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))

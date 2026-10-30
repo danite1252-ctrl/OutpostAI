@@ -324,6 +324,7 @@ function Conversation({
               content={m.content}
               thinking={m.thinking}
               attachments={m.attachments.map((a) => a.id)}
+              sources={m.sources}
               onDelete={draft ? undefined : () => removeMessage(m)}
               speaking={saying === m.id}
               onSpeak={m.role === "assistant" ? () => readAloud(m.id, m.content) : undefined}
@@ -433,6 +434,7 @@ function Bubble({
   content,
   thinking,
   attachments,
+  sources,
   onDelete,
   speaking,
   onSpeak,
@@ -442,6 +444,7 @@ function Bubble({
   content: string;
   thinking: string | null;
   attachments: string[];
+  sources?: Message["sources"];
   onDelete?: () => void;
   speaking?: boolean;
   onSpeak?: () => void;
@@ -486,6 +489,11 @@ function Bubble({
       {jobIds.map((id) => (
         <JobCard key={id} api={api} jobId={id} />
       ))}
+      {sources && sources.length > 0 ? (
+        <Text style={{ color: C.muted, fontSize: 13 }}>
+          Sources: {sources.map((x) => `[${x.n}] ${x.name}${x.page != null ? `, page ${x.page}` : ""}`).join(" · ")}
+        </Text>
+      ) : null}
       {onSpeak && text ? (
         <Pressable
           accessibilityRole="button"

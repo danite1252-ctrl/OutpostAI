@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   api,
   ApiError,
+  docsApi,
   voiceApi,
+  type Doc,
   type DirectoryEntry,
   type InstalledModel,
   type Memory,
@@ -10,6 +12,7 @@ import {
   type Persona,
   type VoiceStatus,
 } from "../api";
+import { DocumentPicker } from "../components/documents";
 import { Avatar, Button, ErrorNote, Field } from "../components/ui";
 
 export default function Personas({ token }: { token: string }) {
@@ -320,6 +323,7 @@ function PersonaEditor({
           Use memory (what you asked it to remember, plus facts learned from chats)
         </label>
       </div>
+      <PersonaDocuments token={token} personaId={persona.id} shared={shared} />
       <div className="flex flex-col gap-3 rounded-2xl border border-line p-4 text-sm">
         <span className="font-medium">Voice</span>
         {voices && !voices.ready ? (
@@ -658,4 +662,41 @@ function toSlug(name: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
+}
+
+/** Documents the persona knows, in every chat with it. Saved straight away. */
+function PersonaDocuments({ token, personaId, shared }: { token: string; personaId: string; shared: boolean }) {
+  const [docs, setDocs] = useState<Doc[]>([]);
+  const [picking, setPicking] = useState(false);
+  useEffect(() => {
+    docsApi.forPersona(token, personaId).then(setDocs, () => setDocs([]));
+  }, [token, personaId]);
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border border-line p-4 text-sm">
+      <span className="font-medium">Documents</span>
+      <span className="text-muted">
+        {docs.length
+          ? `Knows ${docs.map((d) => d.name).join(", ")} in every chat.`
+          : "Give it documents (a manual, notes, a handbook) and it answers from them in every chat."}
+        {shared && docs.length > 0 ? " It's shared, so everyone who uses it can ask about these." : ""}
+      </span>
+      <Button variant="ghost" className="self-start" onClick={() => setPicking(true)}>
+        {docs.length ? "Change documents" : "Choose documents"}
+      </Button>
+      {picking && (
+        <DocumentPicker
+          token={token}
+          title="Documents for this persona"
+          note={
+            shared
+              ? "This persona is shared: everyone who chats with it can ask about the documents you tick (they can't download them)."
+              : "Tick the documents it should know in every chat."
+          }
+          chosen={docs.map((d) => d.id)}
+          onSave={async (ids) => setDocs(await docsApi.setForPersona(token, personaId, ids))}
+          onClose={() => setPicking(false)}
+        />
+      )}
+    </div>
+  );
 }

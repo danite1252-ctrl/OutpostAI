@@ -4,7 +4,7 @@ use utoipa::{Modify, OpenApi};
 use crate::error::{ErrorBody, ErrorDetail};
 use crate::helpers;
 use crate::routes::{
-    accounts, auth, chat, create, downloads, engines, health, keys, models, network, openai, pairing, setup, system, training, voice, webhooks,
+    accounts, auth, chat, create, documents, downloads, engines, health, keys, models, network, openai, pairing, setup, system, training, voice, webhooks,
     SignInResponse,
 };
 
@@ -102,6 +102,14 @@ use crate::routes::{
         system::crash,
         system::delete_crash,
         system::delete_all_crashes,
+        documents::list,
+        documents::add,
+        documents::file,
+        documents::delete,
+        documents::for_chat,
+        documents::set_for_chat,
+        documents::for_persona,
+        documents::set_for_persona,
         helpers::list,
         helpers::poll,
         helpers::input,

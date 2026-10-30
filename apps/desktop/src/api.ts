@@ -310,7 +310,74 @@ export interface Message {
   model: string | null;
   created_at: number;
   attachments: Attachment[];
+  /** Document passages the reply used, numbered as it cites them ("[1]"). */
+  sources?: Source[];
 }
+
+export interface Source {
+  n: number;
+  document_id: string;
+  name: string;
+  page: number | null;
+}
+
+/** A document to chat with. */
+export interface Doc {
+  id: string;
+  account_id: string;
+  name: string;
+  mime: string;
+  bytes: number;
+  /** "reading" (being read), "ready" or "failed" (see error). */
+  status: "reading" | "ready" | "failed";
+  error: string | null;
+  pages: number | null;
+  chars: number;
+  created_at: number;
+}
+
+/** The kinds of document Outpost reads, for file pickers. */
+export const DOC_TYPES = ".pdf,.docx,.txt,.md,.markdown,.csv,.html,.htm";
+
+export const docsApi = {
+  list: (token: string) => request<Doc[]>("GET", "/api/documents", { token }),
+  remove: (token: string, id: string) => request<void>("DELETE", `/api/documents/${encodeURIComponent(id)}`, { token }),
+  forChat: (token: string, chatId: string) =>
+    request<{ documents: Doc[]; persona_documents: Doc[] }>("GET", `/api/chats/${encodeURIComponent(chatId)}/documents`, { token }),
+  setForChat: (token: string, chatId: string, ids: string[]) =>
+    request<{ documents: Doc[]; persona_documents: Doc[] }>("PUT", `/api/chats/${encodeURIComponent(chatId)}/documents`, {
+      token,
+      body: { document_ids: ids },
+    }),
+  forPersona: (token: string, personaId: string) =>
+    request<Doc[]>("GET", `/api/personas/${encodeURIComponent(personaId)}/documents`, { token }),
+  setForPersona: (token: string, personaId: string, ids: string[]) =>
+    request<Doc[]>("PUT", `/api/personas/${encodeURIComponent(personaId)}/documents`, { token, body: { document_ids: ids } }),
+  /** Upload a document (with progress). Resolves with it, or the same one added before. */
+  add(token: string, file: File, onProgress: (fraction: number) => void): Promise<{ document: Doc; added: boolean }> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${GATEWAY}/api/documents?${new URLSearchParams({ name: file.name })}`);
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(e.loaded / e.total);
+      };
+      xhr.onerror = () => reject(new ApiError(0, "offline", "The upload stopped: Outpost couldn't be reached."));
+      xhr.onload = () => {
+        let data: { error?: { code?: string; message?: string } } | null = null;
+        try {
+          data = JSON.parse(xhr.responseText);
+        } catch {
+          data = null;
+        }
+        if (xhr.status === 201 || xhr.status === 200) resolve(data as unknown as { document: Doc; added: boolean });
+        else reject(new ApiError(xhr.status, data?.error?.code ?? "unknown", data?.error?.message ?? `Upload failed (${xhr.status}).`));
+      };
+      xhr.send(file);
+    });
+  },
+};
 
 export interface Memory {
   id: string;

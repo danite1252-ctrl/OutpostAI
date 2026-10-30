@@ -35,6 +35,10 @@ pub struct Message {
     #[sqlx(skip)]
     #[serde(default)]
     pub attachments: Vec<crate::attachments::Attachment>,
+    /// Passages from documents that the reply used, numbered as it cites them ("[1]").
+    #[sqlx(skip)]
+    #[serde(default)]
+    pub sources: Vec<crate::documents::Source>,
 }
 
 const CHAT_COLS: &str = "id, account_id, persona_id, title, model, created_at, updated_at";
@@ -171,9 +175,13 @@ pub async fn messages(pool: &SqlitePool, chat_id: &str) -> CoreResult<Vec<Messag
     .fetch_all(pool)
     .await?;
     let mut files = crate::attachments::for_chat(pool, chat_id).await?;
+    let mut sources = crate::documents::sources_for_chat(pool, chat_id).await?;
     for m in &mut list {
         if let Some(a) = files.remove(&m.id) {
             m.attachments = a;
+        }
+        if let Some(s) = sources.remove(&m.id) {
+            m.sources = s;
         }
     }
     Ok(list)
@@ -232,6 +240,7 @@ pub async fn add_message(
         model: model.map(Into::into),
         created_at: t,
         attachments: Vec::new(),
+        sources: Vec::new(),
     };
     // One statement, so it waits its turn if something else is writing (a read-then-
     // write transaction would fail instead, e.g. while the job queue starts a job).
