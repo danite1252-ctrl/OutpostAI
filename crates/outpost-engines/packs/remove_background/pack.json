@@ -1,0 +1,34 @@
+{
+  "id": "remove_background",
+  "name": "Remove background (BiRefNet)",
+  "lane": "tool",
+  "task": "cutout",
+  "rank": 10,
+  "description": "Cut out the subject: the background becomes transparent (a PNG).",
+  "license": "MIT",
+  "vram_gb": 3.0,
+  "output": {
+    "node": "6",
+    "kind": "image"
+  },
+  "models": [
+    {
+      "file": "birefnet.safetensors",
+      "folder": "background_removal",
+      "size_gb": 0.44,
+      "url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors",
+      "sha256": "9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154",
+      "bytes": 444473596
+    }
+  ],
+  "inputs": [
+    {
+      "key": "image",
+      "label": "Picture",
+      "kind": "image",
+      "required": true,
+      "default": null,
+      "targets": [["1", "image"]]
+    }
+  ]
+}

@@ -260,6 +260,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/devices/{id}", delete(pairing::revoke_device))
         .route("/api/training", get(training::status).put(training::set_settings))
         .route("/api/training/trigger-check", get(training::trigger_check))
+        .route("/api/training/install", post(training::install_toolkit))
         .route("/api/datasets", get(training::list_datasets).post(training::create_dataset))
         .route(
             "/api/datasets/{id}",

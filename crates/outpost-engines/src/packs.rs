@@ -20,6 +20,8 @@ pub enum Lane {
     EditImage,
     TextToVideo,
     ImageToVideo,
+    /// Does something to one picture (upscale, remove the background): run from the gallery.
+    Tool,
 }
 
 /// The jobs Create offers, one tab each. A task can have several packs; Outpost
@@ -37,10 +39,15 @@ pub enum Task {
     Video,
     /// A picture brought to life (image to video).
     Animate,
+    /// Make a picture bigger (a picture tool, from the gallery).
+    Upscale,
+    /// Remove a picture's background (a picture tool, from the gallery).
+    Cutout,
 }
 
 impl Task {
-    pub const ALL: [Task; 5] = [Task::Picture, Task::Character, Task::Edit, Task::Video, Task::Animate];
+    pub const ALL: [Task; 7] =
+        [Task::Picture, Task::Character, Task::Edit, Task::Video, Task::Animate, Task::Upscale, Task::Cutout];
 
     fn of_lane(lane: Lane) -> Task {
         match lane {
@@ -48,6 +55,7 @@ impl Task {
             Lane::EditImage => Task::Edit,
             Lane::TextToVideo => Task::Video,
             Lane::ImageToVideo => Task::Animate,
+            Lane::Tool => Task::Upscale,
         }
     }
 }
@@ -212,6 +220,8 @@ const BUILT_IN: &[(&str, &str)] = &[
     pack!("flux2_klein_edit"),
     pack!("wan22_t2v"),
     pack!("wan22_i2v"),
+    pack!("upscale_esrgan"),
+    pack!("remove_background"),
 ];
 
 /// The packs that ship with Outpost.
@@ -734,8 +744,13 @@ mod tests {
     #[test]
     fn every_pack_has_a_prompt_and_a_seed() {
         for p in built_in() {
-            assert!(p.inputs.iter().any(|i| i.key == "prompt" && i.required), "{}", p.id);
-            assert!(p.inputs.iter().any(|i| i.kind == InputKind::Seed), "{}", p.id);
+            if p.lane == Lane::Tool {
+                // A picture tool works on a picture, not a prompt.
+                assert!(p.inputs.iter().any(|i| i.kind == InputKind::Image && i.required), "{}", p.id);
+            } else {
+                assert!(p.inputs.iter().any(|i| i.key == "prompt" && i.required), "{}", p.id);
+                assert!(p.inputs.iter().any(|i| i.kind == InputKind::Seed), "{}", p.id);
+            }
             // Every graph saves somewhere Outpost reads from.
             assert!(p.graph[&p.output.node]["inputs"]["filename_prefix"]
                 .as_str()
@@ -838,6 +853,26 @@ mod tests {
         assert_eq!(g[LORA_NODE]["inputs"]["strength_model"], 1.1);
         // It shares Z-Image Turbo's graph and files.
         assert_eq!(p.graph, find("z_image_turbo").unwrap().graph);
+    }
+
+    #[test]
+    fn picture_tools_build() {
+        let p = find("upscale_esrgan").unwrap();
+        assert_eq!(p.task(), Task::Upscale);
+        assert_eq!(find("remove_background").unwrap().task(), Task::Cutout);
+        let mut v = serde_json::Map::new();
+        v.insert("image".into(), json!({"$file": "a/inputs/x.png"}));
+        v.insert("scale".into(), json!("4×"));
+        let up = HashMap::from([("image".to_string(), "outpost/x.png".to_string())]);
+        let b = p.build(&v, || 1, &up, &[]).unwrap();
+        assert_eq!(b.graph["1"]["inputs"]["image"], "outpost/x.png");
+        assert_eq!(b.graph["4"]["inputs"]["scale_by"], 1.0);
+        v.remove("scale");
+        let b = p.build(&v, || 1, &up, &[]).unwrap();
+        assert_eq!(b.graph["4"]["inputs"]["scale_by"], 0.5, "2× by default");
+        // Nothing needs an add-on node: only ComfyUI's own.
+        let cut = find("remove_background").unwrap();
+        assert!(cut.node_types().contains(&"RemoveBackground".to_string()));
     }
 
     #[test]

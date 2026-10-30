@@ -75,6 +75,8 @@ pub struct TrainingStatus {
     /// Video memory the training needs, and this PC's.
     pub vram_needed_gb: f32,
     pub vram_gb: f32,
+    /// Outpost's own install of ai-toolkit (the Install button).
+    pub install: outpost_engines::TrainerInstall,
 }
 
 /// Is this PC ready to train, and which models can write captions?
@@ -94,7 +96,30 @@ pub async fn status(State(state): State<AppState>, _auth: Auth) -> Json<Training
         character_pack_ready,
         vram_needed_gb: train_job::VRAM_GB,
         vram_gb: hw.vram_mb as f32 / 1024.0,
+        install: state.engines.trainer_install(),
     })
+}
+
+/// Install ai-toolkit for training (owner; a few GB, in the background; follow it with
+/// `GET /api/training`). Installing again updates it to the version Outpost pins.
+#[utoipa::path(post, path = "/api/training/install", tag = "training", security(("bearer" = [])),
+    responses((status = 202, description = "Installing"), (status = 403, description = "Not allowed", body = ErrorBody), (status = 409, description = "Already installing or training", body = ErrorBody)))]
+pub async fn install_toolkit(
+    State(state): State<AppState>,
+    auth: Auth,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<StatusCode> {
+    auth.require_owner()?;
+    auth.require_fresh_pin(&state, &headers).await?;
+    if state.queue.training() {
+        return Err(ApiError::conflict("A training is running; install after it finishes."));
+    }
+    state
+        .engines
+        .install_trainer()
+        .map_err(|e| ApiError::conflict(e.to_string()))?;
+    outpost_core::audit::log_quiet(&state.pool, Some(&auth.account.id), Some(&auth.session.id), "toolkit_install", None).await;
+    Ok(StatusCode::ACCEPTED)
 }
 
 pub(crate) async fn vision_models(state: &AppState) -> Vec<String> {

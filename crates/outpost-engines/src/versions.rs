@@ -106,3 +106,15 @@ mod context_tests {
         assert_eq!(context_length_for(0), 8_192);
     }
 }
+
+/// ai-toolkit (Ostris, MIT) for LoRA training: a pinned commit (its 0.13.33 release).
+pub const AI_TOOLKIT_COMMIT: &str = "31f4d92f8810bc68e77bf6dce73d6bdb57bc33ea";
+pub const AI_TOOLKIT_VERSION: &str = "0.13.33";
+/// The Python ai-toolkit is tested with.
+pub const AI_TOOLKIT_PYTHON: &str = "3.12";
+/// The PyTorch its README pins (CUDA 13.0 wheels).
+pub const AI_TOOLKIT_TORCH: [&str; 2] = ["torch==2.13.0", "torchvision==0.28.0"];
+
+pub fn ai_toolkit_url() -> String {
+    format!("https://github.com/ostris/ai-toolkit/archive/{AI_TOOLKIT_COMMIT}.zip")
+}

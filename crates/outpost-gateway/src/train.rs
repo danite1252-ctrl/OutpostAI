@@ -27,13 +27,21 @@ pub fn root(state: &AppState) -> PathBuf {
 
 /// Where ai-toolkit is: the saved setting, else the usual place.
 pub async fn toolkit_dir(state: &AppState) -> PathBuf {
-    outpost_core::settings::get(&state.pool, outpost_core::settings::AI_TOOLKIT_DIR)
+    let chosen = outpost_core::settings::get(&state.pool, outpost_core::settings::AI_TOOLKIT_DIR)
         .await
         .ok()
         .flatten()
         .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(trainer::default_dir)
+        .map(PathBuf::from);
+    // A folder chosen by hand wins while it works; then the one Outpost installed.
+    if let Some(dir) = chosen.as_ref().filter(|d| trainer::check_install(d).is_ok()) {
+        return dir.clone();
+    }
+    let managed = state.engines.trainer_dir();
+    if trainer::check_install(&managed).is_ok() {
+        return managed;
+    }
+    chosen.unwrap_or_else(trainer::default_dir)
 }
 
 /// Stop ComfyUI if Outpost runs it, including one still starting up (Outpost starts

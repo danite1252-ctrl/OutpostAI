@@ -5,6 +5,7 @@
 //! the user's back. If an engine is already running on its usual port (e.g. the user
 //! installed Ollama themselves), Outpost uses that one and marks it `external`.
 
+mod ai_toolkit;
 mod archive;
 pub mod assets;
 pub mod catalog;
@@ -24,6 +25,6 @@ pub mod trainer;
 pub mod types;
 pub mod versions;
 
-pub use manager::{EngineError, EngineManager};
+pub use manager::{EngineError, EngineManager, TrainerInstall};
 pub use process::Log;
 pub use types::{EngineId, EngineInfo, EngineState, EnginesStatus, Progress};

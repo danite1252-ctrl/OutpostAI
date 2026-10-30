@@ -292,7 +292,7 @@ export interface Message {
   attachments: Attachment[];
 }
 
-export type Task = "picture" | "character" | "edit" | "video" | "animate";
+export type Task = "picture" | "character" | "edit" | "video" | "animate" | "upscale" | "cutout";
 export type InputKind = "text" | "size" | "integer" | "number" | "seed" | "choice" | "image" | "lora";
 
 export interface PackInput {

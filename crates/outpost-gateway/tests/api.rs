@@ -368,6 +368,7 @@ async fn openapi_lists_every_route() {
         "/api/webhooks/{id}/test",
         "/api/training",
         "/api/training/trigger-check",
+        "/api/training/install",
         "/api/datasets",
         "/api/datasets/{id}",
         "/api/datasets/{id}/images",
@@ -1274,6 +1275,11 @@ async fn training_studio_datasets_captions_and_checks() {
     let (status, st) = call(&app, "PUT", "/api/training", t, Some(json!({"toolkit_dir": missing}))).await;
     assert_eq!(status, StatusCode::OK, "{st}");
     assert!(st["toolkit_problem"].is_string());
+    // Outpost can install it itself (not done here: it's gigabytes).
+    assert_eq!(st["install"]["installed"], false, "{st}");
+    assert_eq!(st["install"]["installing"], false);
+    assert!(st["install"]["dir"].as_str().unwrap().contains("ai-toolkit"));
+    assert!(!st["install"]["pinned_version"].as_str().unwrap().is_empty());
 
     let (status, d) = call(&app, "POST", "/api/datasets", t, Some(json!({"name": "Kat"}))).await;
     assert_eq!(status, StatusCode::CREATED, "{d}");

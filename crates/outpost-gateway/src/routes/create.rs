@@ -510,11 +510,23 @@ pub async fn create_job(
     let mut uploaded = HashMap::new();
     let mut saved = Vec::new();
     for input in pack.inputs.iter().filter(|i| i.kind == InputKind::Image) {
-        let Some(encoded) = inputs.get(&input.key).and_then(Value::as_str).filter(|s| !s.is_empty()) else {
-            inputs.remove(&input.key);
-            continue;
+        // One of my gallery pictures, by id (the picture tools): no need to send it back.
+        let from_gallery = inputs.get(&input.key).and_then(|v| v.get("$media")).and_then(Value::as_str).map(str::to_string);
+        let image = if let Some(id) = from_gallery {
+            match gallery_image(&state, &auth.account.id, &id).await {
+                Ok(image) => image,
+                Err(e) => {
+                    attachments::remove_files(&saved).await;
+                    return Err(e);
+                }
+            }
+        } else {
+            let Some(encoded) = inputs.get(&input.key).and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+                inputs.remove(&input.key);
+                continue;
+            };
+            attachments::decode_image(encoded)?
         };
-        let image = attachments::decode_image(encoded)?;
         let rel = attachments::save_job_input(&state.config.files_dir(), &auth.account.id, &image).await?;
         saved.push(state.config.files_dir().join(&rel));
         uploaded.insert(input.key.clone(), "check.png".to_string());
@@ -636,6 +648,19 @@ pub async fn cancel_job(State(state): State<AppState>, auth: Auth, Path(id): Pat
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// One of an account's gallery pictures, as a job input.
+async fn gallery_image(state: &AppState, account_id: &str, id: &str) -> ApiResult<attachments::ImageUpload> {
+    let (_, path) = media::get(&state.pool, &state.config.files_dir(), account_id, id)
+        .await
+        .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, "not_found", "That picture isn't in your gallery."))?;
+    let data = tokio::fs::read(&path)
+        .await
+        .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, "not_found", "That picture's file is missing."))?;
+    let mime = attachments::sniff_image(&data)
+        .ok_or_else(|| ApiError::bad_request("That's a video, not a picture."))?;
+    Ok(attachments::ImageUpload { data, mime })
 }
 
 #[derive(Debug, Deserialize, IntoParams)]

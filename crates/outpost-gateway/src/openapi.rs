@@ -121,6 +121,7 @@ use crate::routes::{
         training::status,
         training::set_settings,
         training::trigger_check,
+        training::install_toolkit,
         training::list_datasets,
         training::create_dataset,
         training::get_dataset,

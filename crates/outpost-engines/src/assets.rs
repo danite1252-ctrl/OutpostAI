@@ -20,7 +20,7 @@ use utoipa::ToSchema;
 use crate::packs::{ModelFile, Pack};
 
 /// ComfyUI model folders Outpost manages. Anything else in a pack is refused.
-pub const FOLDERS: [&str; 9] = [
+pub const FOLDERS: [&str; 10] = [
     "checkpoints",
     "diffusion_models",
     "text_encoders",
@@ -30,6 +30,7 @@ pub const FOLDERS: [&str; 9] = [
     "upscale_models",
     "model_patches",
     "audio_encoders",
+    "background_removal",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { authedBlob, createApi, type Media, type Task } from "../api";
+import { ApiError, authedBlob, createApi, type Media, type Pack, type Task } from "../api";
 import { Lightbox, prepareImage, useAuthedUrl } from "./images";
-import { Button, Icon, icons } from "./ui";
+import { jobsChanged } from "./queue";
+import { Button, ErrorNote, Icon, icons } from "./ui";
 
 /** What the gallery asks Create to do with a picture. */
 export type CreateRequest =
@@ -141,6 +142,7 @@ export function Viewer({
             </p>
           )}
           <Button onClick={() => onRequest({ kind: "reuse", media: m })}>Use these settings</Button>
+          {m.kind === "image" && !by && <PictureTools token={token} media={m} />}
           {m.kind === "image" && (
             <>
               <Button variant="ghost" onClick={() => onRequest({ kind: "use_image", media: m, task: "edit" })}>
@@ -224,6 +226,87 @@ export function GalleryPicker({ token, onPick, onClose }: { token: string; onPic
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+const TOOLS = [
+  { pack: "upscale_esrgan", label: "Upscale 2×", inputs: { scale: "2×" } },
+  { pack: "upscale_esrgan", label: "Upscale 4×", inputs: { scale: "4×" } },
+  { pack: "remove_background", label: "Remove background", inputs: {} },
+] as const;
+
+/** Upscale or cut out one of my pictures: queued like any job; the result joins the gallery. */
+function PictureTools({ token, media: m }: { token: string; media: Media }) {
+  const [packs, setPacks] = useState<Pack[] | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = () => createApi.packs(token).then(setPacks, () => setPacks([]));
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+  const downloading = packs?.some((p) => p.lane === "tool" && p.models.setup?.running) ?? false;
+  useEffect(() => {
+    if (!downloading) return;
+    const t = window.setInterval(() => void load(), 2000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [downloading]);
+  if (!packs) return null;
+  const tool = (id: string) => packs.find((p) => p.id === id);
+  const usable = (p?: Pack) => !!p && (p.models.ready || !!p.runs_on) && p.missing_nodes.length === 0;
+  const fail = (e: unknown) => setError(e instanceof ApiError ? e.message : "Something went wrong.");
+
+  const run = (packId: string, label: string, inputs: Record<string, unknown>) => {
+    setError(null);
+    setNote(null);
+    createApi
+      .createJob(token, packId, { image: { $media: m.id }, ...inputs })
+      .then(() => {
+        jobsChanged();
+        setNote(`${label}: queued. The result appears in your gallery.`);
+      })
+      .catch(fail);
+  };
+
+  const missing = [...new Set(TOOLS.map((t) => t.pack))].map(tool).filter((p): p is Pack => !!p && !usable(p));
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-line p-3">
+      <span className="text-xs font-semibold tracking-wide text-muted uppercase">Picture tools</span>
+      <div className="flex flex-wrap gap-2">
+        {TOOLS.filter((t) => usable(tool(t.pack))).map((t) => (
+          <Button key={t.label} variant="ghost" className="min-h-9 px-3" onClick={() => run(t.pack, t.label, t.inputs)}>
+            {t.label}
+          </Button>
+        ))}
+      </div>
+      {missing.map((p) => (
+        <div key={p.id} className="flex flex-wrap items-center gap-2 text-xs text-muted">
+          <span className="flex-1">
+            {p.name}:{" "}
+            {p.models.setup?.running
+              ? `downloading${p.models.setup.percent != null ? ` ${Math.round(p.models.setup.percent)}%` : "…"}`
+              : p.missing_nodes.length
+                ? "needs a newer ComfyUI"
+                : `a ${p.models.missing_gb < 0.1 ? `${Math.round(p.models.missing_gb * 1000)} MB` : `${p.models.missing_gb.toFixed(1)} GB`} download`}
+          </span>
+          {!p.models.setup?.running && !p.missing_nodes.length && (
+            <Button
+              variant="ghost"
+              className="min-h-8 px-3"
+              onClick={() => {
+                setError(null);
+                createApi.installPack(token, p.id).then(load).catch(fail);
+              }}
+            >
+              Download
+            </Button>
+          )}
+        </div>
+      ))}
+      {note && <p className="text-xs text-ok" role="status">{note}</p>}
+      <ErrorNote>{error}</ErrorNote>
     </div>
   );
 }

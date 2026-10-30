@@ -706,7 +706,7 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 // ---------------------------------------------------------------- Create
 
-export type Lane = "text_to_image" | "edit_image" | "text_to_video" | "image_to_video";
+export type Lane = "text_to_image" | "edit_image" | "text_to_video" | "image_to_video" | "tool";
 export type InputKind = "text" | "size" | "integer" | "number" | "seed" | "choice" | "image" | "lora";
 
 export interface PackInput {
@@ -738,7 +738,8 @@ export interface PackSetup {
 }
 
 /** The Create tabs. */
-export type Task = "picture" | "character" | "edit" | "video" | "animate";
+/** The Create tabs, plus the picture tools (upscale, cutout) run from the gallery. */
+export type Task = "picture" | "character" | "edit" | "video" | "animate" | "upscale" | "cutout";
 
 export interface Pack {
   id: string;
@@ -946,6 +947,17 @@ export interface TrainingStatus {
   character_pack_ready: boolean;
   vram_needed_gb: number;
   vram_gb: number;
+  /** Outpost's own install of ai-toolkit. */
+  install?: {
+    installed: boolean;
+    installing: boolean;
+    version: string | null;
+    progress: { step: string; step_index: number; step_count: number; percent: number | null; detail: string | null } | null;
+    error: string | null;
+    dir: string;
+    pinned_version: string;
+    log_tail: string[];
+  };
 }
 
 export interface Dataset {
@@ -1046,6 +1058,7 @@ const ds = (id: string) => `/api/datasets/${encodeURIComponent(id)}`;
 
 export const trainApi = {
   status: (token: string) => request<TrainingStatus>("GET", "/api/training", { token }),
+  installToolkit: (token: string) => request<void>("POST", "/api/training/install", { token }),
   setToolkitDir: (token: string, dir: string) =>
     request<TrainingStatus>("PUT", "/api/training", { token, body: { toolkit_dir: dir } }),
   checkTrigger: (token: string, word: string) =>

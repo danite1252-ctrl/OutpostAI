@@ -10,7 +10,7 @@ use tokio::sync::OnceCell;
 use crate::gpu::{self, Gpu};
 use crate::process::{self, Log};
 use crate::types::{EngineId, EngineInfo, EngineState, EnginesStatus, Progress};
-use crate::{comfyui, ollama, versions, voice};
+use crate::{ai_toolkit, comfyui, ollama, versions, voice};
 
 #[derive(Debug)]
 pub enum EngineError {
@@ -121,7 +121,26 @@ pub struct EngineManager {
     download_client: reqwest::Client,
     probe_client: reqwest::Client,
     slots: HashMap<EngineId, Arc<Slot>>,
+    /// ai-toolkit, for LoRA training: installed like an engine, but never left running.
+    trainer: Arc<Slot>,
     gpus: OnceCell<Vec<Gpu>>,
+}
+
+/// Outpost's own ai-toolkit install, as the apps see it.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TrainerInstall {
+    /// Installed by Outpost (in `dir`).
+    pub installed: bool,
+    pub installing: bool,
+    pub version: Option<String>,
+    pub progress: Option<Progress>,
+    /// Why the last install failed.
+    pub error: Option<String>,
+    /// Where Outpost installs it.
+    pub dir: String,
+    /// The pinned version an install gets.
+    pub pinned_version: String,
+    pub log_tail: Vec<String>,
 }
 
 impl EngineManager {
@@ -153,7 +172,21 @@ impl EngineManager {
                 (id, Arc::new(slot))
             })
             .collect();
+        let trainer_dir = engines_root.join("ai-toolkit");
+        let trainer_installed = read_marker(&trainer_dir.join("installed.json"));
+        let trainer = Arc::new(Slot {
+            log: Log::new(trainer_dir.join("logs").join("ai-toolkit-install.log")),
+            inner: Mutex::new(SlotState {
+                state: if trainer_installed.is_some() { EngineState::Stopped } else { EngineState::NotInstalled },
+                installed: trainer_installed,
+                progress: None,
+                error: None,
+                child: None,
+            }),
+            dir: trainer_dir,
+        });
         Arc::new(EngineManager {
+            trainer,
             models_root: data_dir.join("models"),
             engines_root,
             download_client: reqwest::Client::builder()
@@ -448,6 +481,70 @@ impl EngineManager {
         } else {
             EngineState::NotInstalled
         };
+        Ok(())
+    }
+
+    /// The ai-toolkit Outpost installs (holds `run.py` and `venv`).
+    pub fn trainer_dir(&self) -> PathBuf {
+        self.trainer.dir.join("app")
+    }
+
+    pub fn trainer_install(&self) -> TrainerInstall {
+        let st = self.trainer.lock();
+        TrainerInstall {
+            installed: st.installed.is_some(),
+            installing: st.state == EngineState::Installing,
+            version: st.installed.as_ref().map(|i| i.version.clone()),
+            progress: st.progress.clone(),
+            error: st.error.clone(),
+            dir: self.trainer_dir().to_string_lossy().to_string(),
+            pinned_version: versions::AI_TOOLKIT_VERSION.to_string(),
+            log_tail: self.trainer.log.tail(20),
+        }
+    }
+
+    /// Download and set up ai-toolkit in the background (or update it to the pinned version).
+    pub fn install_trainer(self: &Arc<Self>) -> Result<(), EngineError> {
+        let slot = self.trainer.clone();
+        {
+            let mut st = slot.lock();
+            if st.state == EngineState::Installing {
+                return Err(EngineError::Busy);
+            }
+            st.state = EngineState::Installing;
+            st.error = None;
+            st.progress = None;
+        }
+        let me = self.clone();
+        tokio::spawn(async move {
+            let ctx = Ctx {
+                slot: slot.clone(),
+                engines_root: me.engines_root.clone(),
+                client: me.download_client.clone(),
+                gpus: me.gpus().await,
+            };
+            slot.log.push("Installing ai-toolkit");
+            // A new install replaces the old one: it's not installed until this one finishes.
+            let _ = std::fs::remove_file(slot.marker());
+            slot.lock().installed = None;
+            match ai_toolkit::install(&ctx).await {
+                Ok(installed) => {
+                    let saved = serde_json::to_vec_pretty(&installed)
+                        .map_err(anyhow::Error::from)
+                        .and_then(|bytes| std::fs::write(slot.marker(), bytes).map_err(anyhow::Error::from));
+                    if let Err(e) = saved {
+                        fail(&slot, format!("Installed, but could not save the install record: {e}"));
+                        return;
+                    }
+                    slot.log.push(format!("ai-toolkit {} installed", installed.version));
+                    let mut st = slot.lock();
+                    st.installed = Some(installed);
+                    st.state = EngineState::Stopped;
+                    st.progress = None;
+                }
+                Err(e) => fail(&slot, format!("{e:#}")),
+            }
+        });
         Ok(())
     }
 

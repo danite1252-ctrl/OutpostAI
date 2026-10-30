@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from "react"
 import {
   ApiError,
   createApi,
+  SERVER,
   trainApi,
   type Character,
   type Dataset,
@@ -77,7 +78,13 @@ export default function Train({ auth, onUnauthorized }: { auth: SignInResponse; 
           best result and use it by name in Create and chat.
         </p>
       </div>
-      <SetupNote status={status} isOwner={auth.account.role === "owner"} token={token} onSaved={setStatus} />
+      <SetupNote
+        status={status}
+        isOwner={auth.account.role === "owner"}
+        token={token}
+        onSaved={setStatus}
+        onRefresh={loadStatus}
+      />
       <ErrorNote>{error}</ErrorNote>
       <div className="flex flex-col gap-6 lg:flex-row">
         <aside className="flex w-full shrink-0 flex-col gap-4 lg:w-64">
@@ -170,30 +177,90 @@ function SetupNote({
   isOwner,
   token,
   onSaved,
+  onRefresh,
 }: {
   status: TrainingStatus | null;
   isOwner: boolean;
   token: string;
   onSaved: (s: TrainingStatus) => void;
+  onRefresh: () => void;
 }) {
   const [dir, setDir] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [ownFolder, setOwnFolder] = useState(false);
   useEffect(() => setDir(status?.toolkit_dir ?? ""), [status?.toolkit_dir]);
+  const installing = status?.install?.installing ?? false;
+  // Follow an install until it's done.
+  useEffect(() => {
+    if (!installing) return;
+    const t = window.setInterval(onRefresh, 3000);
+    return () => window.clearInterval(t);
+  }, [installing, onRefresh]);
   if (!status) return null;
   const notes: string[] = [];
   if (status.caption_models.length === 0) notes.push("No model that can see pictures is installed, so captions must be written by hand. Get one with the eye badge in Models.");
   if (!status.character_pack_ready) notes.push("Z-Image Turbo isn't downloaded yet: get it in Create › Characters to use a trained character.");
   if (status.vram_gb > 0 && status.vram_gb < status.vram_needed_gb)
-    notes.push(`Training needs about ${status.vram_needed_gb} GB of video memory; this PC has ${status.vram_gb.toFixed(0)} GB, so it may run out.`);
-  if (!status.toolkit_problem && notes.length === 0) return null;
+    notes.push(`Training needs about ${status.vram_needed_gb} GB of video memory; ${SERVER ? SERVER.name : "this PC"} has ${status.vram_gb.toFixed(0)} GB, so it may run out.`);
+  if (!status.toolkit_problem && !installing && notes.length === 0) return null;
+  const install = status.install;
+  const p = install?.progress;
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5" role="status">
-      {status.toolkit_problem && (
+      {(status.toolkit_problem || installing) && (
         <>
           <p className="text-sm">
-            <b>Training isn't set up yet.</b> {status.toolkit_problem}
+            <b>{installing ? "Installing ai-toolkit…" : "Training isn't set up yet."}</b>{" "}
+            {installing
+              ? "It's a few GB and takes a while. You can leave this page; it carries on."
+              : `Training uses ai-toolkit, which isn't installed${SERVER ? ` on ${SERVER.name}` : ""}.`}
           </p>
-          {isOwner && (
+          {installing && p && (
+            <div className="flex flex-col gap-1" aria-live="polite">
+              <span className="text-xs text-muted">
+                Step {p.step_index} of {p.step_count}: {p.step}
+                {p.detail ? ` · ${p.detail}` : ""}
+              </span>
+              <div className="h-2 overflow-hidden rounded-full bg-raised">
+                {p.percent != null ? (
+                  <div className="h-2 rounded-full bg-ember transition-all" style={{ width: `${p.percent}%` }} />
+                ) : (
+                  <div className="h-2 w-1/3 animate-pulse rounded-full bg-ember/70" />
+                )}
+              </div>
+            </div>
+          )}
+          {install?.error && !installing && (
+            <ErrorNote>
+              The last install failed: {install.error}
+            </ErrorNote>
+          )}
+          {isOwner && !installing && (
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                onClick={() => {
+                  setError(null);
+                  trainApi
+                    .installToolkit(token)
+                    .then(onRefresh)
+                    .catch((err: unknown) => setError(message(err)));
+                }}
+              >
+                {install?.error ? "Try installing again" : `Install ai-toolkit ${install?.pinned_version ?? ""}`}
+              </Button>
+              <span className="text-xs text-muted">About 8 GB, with PyTorch. Base models download on the first training.</span>
+            </div>
+          )}
+          {isOwner && !installing && (
+            <button
+              type="button"
+              className="self-start text-xs text-muted underline hover:text-ink"
+              onClick={() => setOwnFolder((o) => !o)}
+            >
+              Already installed it yourself? Choose its folder
+            </button>
+          )}
+          {isOwner && ownFolder && !installing && (
             <form
               className="flex flex-wrap items-end gap-3"
               onSubmit={(e) => {
@@ -210,6 +277,7 @@ function SetupNote({
               </Button>
             </form>
           )}
+          {!isOwner && <p className="text-xs text-muted">Ask an owner to install it.</p>}
           <ErrorNote>{error}</ErrorNote>
         </>
       )}

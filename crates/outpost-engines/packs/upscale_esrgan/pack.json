@@ -1,0 +1,47 @@
+{
+  "id": "upscale_esrgan",
+  "name": "Upscale (Real-ESRGAN)",
+  "lane": "tool",
+  "task": "upscale",
+  "rank": 10,
+  "description": "Make a picture bigger and sharper: 2 or 4 times the width and height.",
+  "license": "BSD-3-Clause",
+  "vram_gb": 2.0,
+  "output": {
+    "node": "5",
+    "kind": "image"
+  },
+  "models": [
+    {
+      "file": "RealESRGAN_x4plus.safetensors",
+      "folder": "upscale_models",
+      "size_gb": 0.07,
+      "url": "https://huggingface.co/Comfy-Org/Real-ESRGAN/resolve/main/RealESRGAN_x4plus.safetensors",
+      "sha256": "37f9a931c215f040aa6d50f711f2cb115f713c46df1d0d6469a8bd7bfe9a60bb",
+      "bytes": 66857836
+    }
+  ],
+  "inputs": [
+    {
+      "key": "image",
+      "label": "Picture to upscale",
+      "kind": "image",
+      "required": true,
+      "default": null,
+      "targets": [["1", "image"]]
+    },
+    {
+      "key": "scale",
+      "label": "How much bigger",
+      "kind": "choice",
+      "default": "2×",
+      "options": ["2×", "4×"],
+      "targets": [],
+      "help": "4× makes very large files from big pictures.",
+      "presets": {
+        "2×": [["4", "scale_by", 0.5]],
+        "4×": [["4", "scale_by", 1.0]]
+      }
+    }
+  ]
+}

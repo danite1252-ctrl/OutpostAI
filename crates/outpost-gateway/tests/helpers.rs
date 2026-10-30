@@ -248,3 +248,38 @@ async fn this_pc_checks_in_as_a_helper() {
     wait_for("off").await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The picture tools take a gallery picture by id; the helper gets that same picture.
+#[tokio::test]
+async fn a_gallery_picture_goes_to_a_picture_tool() {
+    let (app, _state) = app().await;
+    let dan = owner(&app).await;
+    let png = b"\x89PNG\r\n\x1a\nmy picture".to_vec();
+    let (status, imported) =
+        send(&app, "POST", "/api/media/import?name=mine.png", &dan, "application/octet-stream", png.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{imported}");
+    let media_id = imported["media"]["id"].as_str().unwrap().to_string();
+
+    let tool = json!({"vram_mb": 8192, "ram_mb": 16384, "ready_packs": ["remove_background", "upscale_esrgan"]});
+    call(&app, "POST", "/api/helpers/poll", &dan, Some(tool.clone())).await;
+    // Someone else's (or no such) picture is refused.
+    let (status, _) =
+        call(&app, "POST", "/api/jobs", &dan, Some(json!({"pack": "remove_background", "inputs": {"image": {"$media": "nope"}}}))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, made) =
+        call(&app, "POST", "/api/jobs", &dan, Some(json!({"pack": "remove_background", "inputs": {"image": {"$media": media_id}}}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let id = made["id"].as_str().unwrap().to_string();
+
+    let (_, body) = call(&app, "POST", "/api/helpers/poll", &dan, Some(tool)).await;
+    assert_eq!(body["job"]["job_id"], id.as_str(), "{body}");
+    assert_eq!(body["job"]["images"], json!(["image"]));
+    let req = Request::builder()
+        .uri(format!("/api/helpers/jobs/{id}/input/image"))
+        .header(header::AUTHORIZATION, format!("Bearer {dan}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.into_body().collect().await.unwrap().to_bytes().to_vec(), png);
+}
