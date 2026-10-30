@@ -345,14 +345,10 @@ pub async fn send_message(
     } else {
         Default::default()
     };
-    let body = llm::ollama_chat_body(
-        &model,
-        &system,
-        &history,
-        &history_images,
-        resolved.can_think,
-        persona.as_ref(),
-    );
+    // The reply's request is built in the task below: a long chat may first need its
+    // oldest messages summarised (one extra call), and the user shouldn't wait for "start".
+    let body_state = state.clone();
+    let body_persona = persona.clone();
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Event>(256);
     let url = format!("{}/api/chat", state.config.ollama_url.trim_end_matches('/'));
@@ -366,6 +362,7 @@ pub async fn send_message(
     let user_text = content.clone();
     let user_message_id = user_msg.id.clone();
     let can_think = resolved.can_think;
+    let model_for_body = model.clone();
     let _ = tx
         .send(event(
             "start",
@@ -374,6 +371,17 @@ pub async fn send_message(
         .await;
 
     tokio::spawn(async move {
+        let (summary, recent) =
+            llm::fit_history(&body_state, &chat_id, &model_for_body, can_think, &system, history).await;
+        let body = llm::ollama_chat_body(
+            &model_for_body,
+            &system,
+            summary.as_deref(),
+            &recent,
+            &history_images,
+            can_think,
+            body_persona.as_ref(),
+        );
         let mut content = String::new();
         let mut thinking = String::new();
         let mut failure: Option<String> = None;

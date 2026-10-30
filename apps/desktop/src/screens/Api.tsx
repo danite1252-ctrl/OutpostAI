@@ -63,6 +63,7 @@ const METHOD_STYLE: Record<string, string> = {
 export default function Api({ auth, onOpenConnections }: { auth: SignInResponse; onOpenConnections: () => void }) {
   const token = auth.token;
   const [network, setNetwork] = useState<NetworkStatus | null>(null);
+  const [context, setContext] = useState(65536);
   const [port, setPort] = useState(7420);
   const [bridge, setBridge] = useState<string | null>(null);
   const [personas, setPersonas] = useState<Persona[]>([]);
@@ -82,6 +83,11 @@ export default function Api({ auth, onOpenConnections }: { auth: SignInResponse;
     api.personas(token).then(setPersonas, () => undefined);
     integrationsApi.mcpTools(token).then(setTools, () => undefined);
     integrationsApi.openapi().then(setDoc, () => undefined);
+    // The window Ollama runs with here (smaller on smaller cards).
+    api.models(token).then((r) => {
+      const c = r.data.find((m) => m.context_length)?.context_length;
+      if (c) setContext(c);
+    }, () => undefined);
   }, [token]);
 
   // Where other apps reach Outpost: this PC, the home network, Tailscale.
@@ -168,7 +174,7 @@ export default function Api({ auth, onOpenConnections }: { auth: SignInResponse;
       >
         <Copy
           label="Hermes config"
-          text={`# Hermes config.yaml\nproviders:\n  outpost:\n    api: ${base}/v1\n    key: op_your_app_key\n    model: persona:${slug}\n    context_length: 65536`}
+          text={`# Hermes config.yaml\nproviders:\n  outpost:\n    api: ${base}/v1\n    key: op_your_app_key\n    model: persona:${slug}\n    context_length: ${context}`}
         />
         <Copy
           label="curl chat example"

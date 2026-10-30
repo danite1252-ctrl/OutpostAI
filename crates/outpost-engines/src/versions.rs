@@ -9,10 +9,22 @@ pub const PYTHON_VERSION: &str = "3.13";
 
 pub const OLLAMA_PORT: u16 = 11434;
 
-/// Context window (tokens) Outpost starts Ollama with. Agents such as Hermes need at
-/// least 64K; Ollama's own default is much smaller. With flash attention and an 8-bit
-/// KV cache this fits a 9B model on a 16 GB card comfortably.
+/// The largest context window (tokens) Outpost starts Ollama with. Agents such as Hermes
+/// want 64K; Ollama's own default is much smaller. With flash attention and an 8-bit KV
+/// cache this fits a 9B model on a 16 GB card comfortably.
 pub const OLLAMA_CONTEXT_LENGTH: u32 = 65_536;
+
+/// The context window for a card: the window's memory (the KV cache) grows with it, so a
+/// smaller card gets a smaller window rather than pushing the model out of video memory.
+/// 16 GB and up: 64K; 12 GB: 32K; 8 GB: 16K; smaller (or none): 8K.
+pub fn context_length_for(vram_mb: u64) -> u32 {
+    match vram_mb {
+        v if v >= 15 * 1024 => OLLAMA_CONTEXT_LENGTH,
+        v if v >= 11 * 1024 => 32_768,
+        v if v >= 7 * 1024 => 16_384,
+        _ => 8_192,
+    }
+}
 pub const COMFYUI_PORT: u16 = 8188;
 
 /// The voice service (speech to text and text to speech), Outpost's own script.
@@ -77,5 +89,20 @@ pub fn exe(name: &str) -> String {
         format!("{name}.exe")
     } else {
         name.to_string()
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    #[test]
+    fn the_window_suits_the_card() {
+        assert_eq!(context_length_for(16 * 1024), 65_536);
+        assert_eq!(context_length_for(24 * 1024), 65_536);
+        assert_eq!(context_length_for(12 * 1024), 32_768);
+        assert_eq!(context_length_for(8 * 1024), 16_384);
+        assert_eq!(context_length_for(6 * 1024), 8_192);
+        assert_eq!(context_length_for(0), 8_192);
     }
 }

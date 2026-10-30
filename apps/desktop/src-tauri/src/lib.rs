@@ -125,9 +125,21 @@ struct Server {
     fingerprint: String,
     /// Its name, as shown when connecting.
     name: String,
-    /// This app's paired-device token, once signed in.
+    /// The sign-in in use now (a paired-device token).
     #[serde(default)]
     token: Option<String>,
+    /// Everyone paired on this PC (a shared PC), each with their own token.
+    #[serde(default)]
+    people: Vec<Person>,
+}
+
+/// One person's sign-in on a shared PC.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Person {
+    account_id: String,
+    name: String,
+    avatar_color: String,
+    token: String,
 }
 
 /// What the window is told about the server (with the check words to show in Settings).
@@ -139,6 +151,7 @@ struct ServerView {
     words: Vec<String>,
     fingerprint: String,
     token: Option<String>,
+    people: Vec<Person>,
 }
 
 fn server_file() -> PathBuf {
@@ -176,6 +189,7 @@ fn server_status() -> Option<ServerView> {
         name: s.name,
         fingerprint: s.fingerprint,
         token: s.token,
+        people: s.people,
     })
 }
 
@@ -203,17 +217,52 @@ async fn try_server(host: String, port: u16, fingerprint: String) -> Result<Stri
     Ok(format!("http://{addr}"))
 }
 
-/// Use this server from now on (the window then restarts the app).
+/// Use this server from now on (the window then restarts the app), signed in as `person`.
+/// Someone added on a PC already using this server joins the people already there.
 #[tauri::command]
-fn save_server(host: String, port: u16, fingerprint: String, name: String, token: Option<String>) -> Result<(), String> {
-    write_server(&Server { host, port, fingerprint, name, token })
+fn save_server(
+    host: String,
+    port: u16,
+    fingerprint: String,
+    name: String,
+    token: Option<String>,
+    person: Option<Person>,
+) -> Result<(), String> {
+    let mut people = load_server()
+        .filter(|old| old.fingerprint.eq_ignore_ascii_case(&fingerprint))
+        .map(|old| old.people)
+        .unwrap_or_default();
+    if let Some(p) = person {
+        people.retain(|q| q.account_id != p.account_id);
+        people.push(p);
+    }
+    write_server(&Server { host, port, fingerprint, name, token, people })
 }
 
-/// Keep (or forget) this app's sign-in on the server.
+/// Switch to (or, with `None`, sign out of) a sign-in on the server. Signing out also
+/// forgets that person on this PC.
 #[tauri::command]
 fn save_server_token(token: Option<String>) -> Result<(), String> {
     let mut server = load_server().ok_or("This app isn't using a server.")?;
+    if token.is_none() {
+        if let Some(old) = &server.token {
+            server.people.retain(|p| &p.token != old);
+        }
+    }
     server.token = token;
+    write_server(&server)
+}
+
+/// Forget one person on this PC (their device sign-in stays on the server until unpaired).
+#[tauri::command]
+fn forget_person(account_id: String) -> Result<(), String> {
+    let mut server = load_server().ok_or("This app isn't using a server.")?;
+    if let Some(p) = server.people.iter().find(|p| p.account_id == account_id) {
+        if server.token.as_ref() == Some(&p.token) {
+            server.token = None;
+        }
+    }
+    server.people.retain(|p| p.account_id != account_id);
     write_server(&server)
 }
 
@@ -225,6 +274,91 @@ fn forget_server() -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.to_string()),
     }
+}
+
+// ------------------------------------------------ this PC's gallery, for copying to a server
+
+/// This PC's own Outpost (the normal install's data, even in a test build).
+fn this_pc_db() -> Result<(PathBuf, PathBuf), String> {
+    let dir = Config::local_default().data_dir;
+    let db = dir.join("outpost.db");
+    if !db.is_file() {
+        return Err("There's no Outpost data on this PC to copy from.".into());
+    }
+    Ok((db, dir.join("files")))
+}
+
+#[derive(Debug, Serialize)]
+struct LocalGallery {
+    account_id: String,
+    name: String,
+    avatar_color: String,
+    items: usize,
+    bytes: i64,
+}
+
+/// The accounts on this PC's own Outpost, with how many gallery items each has.
+#[tauri::command]
+async fn local_galleries() -> Result<Vec<LocalGallery>, String> {
+    let (db, _) = this_pc_db()?;
+    let pool = outpost_core::db::open_read_only(&db).await.map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for a in outpost_core::accounts::list(&pool).await.map_err(|e| e.to_string())? {
+        let items = outpost_core::media::all(&pool, &a.id).await.map_err(|e| e.to_string())?;
+        if items.is_empty() {
+            continue;
+        }
+        out.push(LocalGallery {
+            bytes: items.iter().map(|m| m.bytes).sum(),
+            items: items.len(),
+            account_id: a.id,
+            name: a.name,
+            avatar_color: a.avatar_color,
+        });
+    }
+    pool.close().await;
+    Ok(out)
+}
+
+/// Accounts whose PIN was given in this run of the app (so copying asks once).
+static UNLOCKED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// One account's gallery on this PC, oldest first. Needs that account's PIN on this PC, so
+/// on a shared PC nobody copies someone else's pictures.
+#[tauri::command]
+async fn local_gallery_items(account_id: String, pin: String) -> Result<Vec<outpost_core::media::Media>, String> {
+    let (db, _) = this_pc_db()?;
+    let pool = outpost_core::db::open_read_only(&db).await.map_err(|e| e.to_string())?;
+    let ok = outpost_core::auth::secret_matches(&pool, &account_id, &pin).await.unwrap_or(false);
+    if !ok {
+        pool.close().await;
+        // Slow down guessing (this database is read-only, so it has no lockout counter).
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        return Err("That isn't the PIN for that account on this PC.".into());
+    }
+    if let Ok(mut u) = UNLOCKED.lock() {
+        if !u.contains(&account_id) {
+            u.push(account_id.clone());
+        }
+    }
+    let items = outpost_core::media::all(&pool, &account_id).await.map_err(|e| e.to_string());
+    pool.close().await;
+    items
+}
+
+/// One gallery file from this PC, as raw bytes (after `local_gallery_items` took the PIN).
+#[tauri::command]
+async fn local_gallery_file(account_id: String, id: String) -> Result<tauri::ipc::Response, String> {
+    if !UNLOCKED.lock().map(|u| u.contains(&account_id)).unwrap_or(false) {
+        return Err("Enter that account's PIN first.".into());
+    }
+    let (db, files) = this_pc_db()?;
+    let pool = outpost_core::db::open_read_only(&db).await.map_err(|e| e.to_string())?;
+    let found = outpost_core::media::get(&pool, &files, &account_id, &id).await;
+    pool.close().await;
+    let (_, path) = found.map_err(|_| "That picture isn't on this PC any more.".to_string())?;
+    let data = tokio::fs::read(&path).await.map_err(|e| format!("Couldn't read {}: {e}", path.display()))?;
+    Ok(tauri::ipc::Response::new(data))
 }
 
 /// Using a server: open the tunnel the window will talk to. Bound here, before the
@@ -338,7 +472,11 @@ pub fn run() {
             try_server,
             save_server,
             save_server_token,
-            forget_server
+            forget_person,
+            forget_server,
+            local_galleries,
+            local_gallery_items,
+            local_gallery_file
         ])
         .build(context)
         .expect("error while building Outpost");

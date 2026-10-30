@@ -42,6 +42,27 @@ pub struct PairingView {
     /// The link as a QR code (SVG).
     pub qr_svg: String,
     pub name: String,
+    /// For an invite: who it's for.
+    #[serde(default)]
+    pub invite: Option<InviteInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct InviteInfo {
+    /// `join` (a new account) or `reset` (a new PIN for an existing one).
+    pub kind: String,
+    /// The person's name.
+    pub name: String,
+    /// For a join: their role.
+    pub role: Option<String>,
+}
+
+fn invite_info(row: &pairing::PairingCode) -> Option<InviteInfo> {
+    Some(InviteInfo {
+        kind: row.invite_kind.clone()?,
+        name: row.invite_name.clone().unwrap_or_default(),
+        role: row.invite_role.clone(),
+    })
 }
 
 fn encode(s: &str) -> String {
@@ -67,20 +88,69 @@ pub async fn create_code(
 ) -> ApiResult<(StatusCode, Json<PairingView>)> {
     auth.require_person("Pairing a device")?;
     auth.require_fresh_pin(&state, &headers).await?;
-    let tls = state.tls.get().cloned().ok_or_else(|| {
+    let tls = secure_port(&state)?;
+    let (code, row) = pairing::create(&state.pool, &auth.account.id).await?;
+    Ok((StatusCode::CREATED, Json(view(&state, &tls, code, row).await)))
+}
+
+fn secure_port(state: &AppState) -> Result<crate::tls::TlsInfo, ApiError> {
+    state.tls.get().cloned().ok_or_else(|| {
         ApiError::conflict(
             "Turn on \"Allow other devices on my network\" in Settings and restart Outpost, then pair the phone.",
         )
-    })?;
-    let (code, row) = pairing::create(&state.pool, &auth.account.id).await?;
+    })
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct InviteRequest {
+    /// Reset this account's PIN.
+    #[serde(default)]
+    pub account_id: Option<String>,
+    /// Or invite someone new with this name...
+    #[serde(default)]
+    pub name: Option<String>,
+    /// ...and role (`member` unless said; `owner` or `restricted` too).
+    #[serde(default)]
+    pub role: Option<Role>,
+}
+
+/// Invite someone (owner): a code and QR they use on their own phone or PC to join as a
+/// new account, or to set a new PIN for theirs (`account_id`). They pick the PIN; the
+/// device is paired. Works once, for 24 hours.
+#[utoipa::path(post, path = "/api/invites", tag = "pairing", security(("bearer" = [])),
+    request_body = InviteRequest,
+    responses((status = 201, description = "The invite", body = PairingView),
+        (status = 403, description = "Not an owner, or no PIN from a paired device", body = ErrorBody),
+        (status = 409, description = "Network access is off, or the name is taken", body = ErrorBody)))]
+pub async fn create_invite(
+    State(state): State<AppState>,
+    auth: Auth,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<InviteRequest>,
+) -> ApiResult<(StatusCode, Json<PairingView>)> {
+    auth.require_owner()?;
+    auth.require_person("Inviting someone")?;
+    auth.require_fresh_pin(&state, &headers).await?;
+    let tls = secure_port(&state)?;
+    let invite = match (req.account_id, req.name) {
+        (Some(account_id), _) => pairing::Invite::Reset { account_id },
+        (None, Some(name)) => pairing::Invite::Join { name, role: req.role.unwrap_or(Role::Member) },
+        (None, None) => return Err(ApiError::bad_request("Say who the invite is for.")),
+    };
+    let (code, row) = pairing::create_invite(&state.pool, &auth.account.id, invite).await?;
+    Ok((StatusCode::CREATED, Json(view(&state, &tls, code, row).await)))
+}
+
+/// A code with everything a device needs to use it, and its QR.
+async fn view(state: &AppState, tls: &crate::tls::TlsInfo, code: String, row: pairing::PairingCode) -> PairingView {
     let ts = if state.tailnet.get().is_some() {
         crate::tailscale::detect().await
     } else {
         None
     };
-    let hosts = super::network::phone_hosts(&state, ts.as_ref()).await;
+    let hosts = super::network::phone_hosts(state, ts.as_ref()).await;
     let name = super::health::machine_name();
-    let link = format!(
+    let mut link = format!(
         "outpost://pair?v=1&name={}&hosts={}&port={}&fp={}&code={}",
         encode(&name),
         encode(&hosts.join(",")),
@@ -88,6 +158,9 @@ pub async fn create_code(
         tls.fingerprint,
         code
     );
+    if let Some(kind) = &row.invite_kind {
+        link.push_str(&format!("&invite={kind}"));
+    }
     let qr_svg = qrcode::QrCode::new(link.as_bytes())
         .map(|q| {
             q.render::<qrcode::render::svg::Color>()
@@ -98,21 +171,19 @@ pub async fn create_code(
                 .build()
         })
         .unwrap_or_default();
-    Ok((
-        StatusCode::CREATED,
-        Json(PairingView {
-            qr_svg,
-            id: row.id,
-            code,
-            expires_at: row.expires_at,
-            words: pairing::words(&tls.fingerprint).iter().map(|w| w.to_string()).collect(),
-            fingerprint: tls.fingerprint,
-            port: tls.port,
-            hosts,
-            link,
-            name,
-        }),
-    ))
+    PairingView {
+        qr_svg,
+        invite: invite_info(&row),
+        id: row.id,
+        code,
+        expires_at: row.expires_at,
+        words: pairing::words(&tls.fingerprint).iter().map(|w| w.to_string()).collect(),
+        fingerprint: tls.fingerprint.clone(),
+        port: tls.port,
+        hosts,
+        link,
+        name,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -159,8 +230,11 @@ pub struct HelloResponse {
     /// This Outpost's name.
     pub name: String,
     pub version: String,
-    /// The accounts the phone can sign in to.
+    /// The accounts the phone can sign in to (none for an invite).
     pub accounts: Vec<DirectoryEntry>,
+    /// An invite: who it's for. The person then picks a PIN (`/api/pair/accept`).
+    #[serde(default)]
+    pub invite: Option<InviteInfo>,
 }
 
 /// Step 2 on the phone: check the code and list the accounts. Encrypted port only.
@@ -175,7 +249,15 @@ pub async fn hello(
     Json(req): Json<HelloRequest>,
 ) -> ApiResult<Json<HelloResponse>> {
     transport.require_secure()?;
-    pairing::check(&state.pool, &req.code).await?;
+    let code = pairing::check(&state.pool, &req.code).await?;
+    if let Some(invite) = invite_info(&code) {
+        return Ok(Json(HelloResponse {
+            name: super::health::machine_name(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            accounts: Vec::new(),
+            invite: Some(invite),
+        }));
+    }
     let accounts = accounts::list(&state.pool)
         .await?
         .into_iter()
@@ -191,7 +273,36 @@ pub async fn hello(
         name: super::health::machine_name(),
         version: env!("CARGO_PKG_VERSION").into(),
         accounts,
+        invite: None,
     }))
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct AcceptRequest {
+    pub code: String,
+    /// The PIN or password the person chose.
+    pub secret: String,
+    /// What to call this device, e.g. "Sam's phone".
+    pub device_name: String,
+}
+
+/// Use an invite: the chosen PIN makes the account (or replaces its PIN), and this device
+/// is paired to it. Encrypted port only.
+#[utoipa::path(post, path = "/api/pair/accept", tag = "pairing",
+    request_body = AcceptRequest,
+    responses((status = 200, description = "Joined and paired", body = SignInResponse),
+        (status = 400, description = "Wrong or expired code, or the PIN isn't accepted", body = ErrorBody),
+        (status = 403, description = "Not over the encrypted port", body = ErrorBody)))]
+pub async fn accept(
+    State(state): State<AppState>,
+    transport: Transport,
+    Json(req): Json<AcceptRequest>,
+) -> ApiResult<Json<SignInResponse>> {
+    transport.require_secure()?;
+    let name: String = req.device_name.trim().chars().take(60).collect();
+    let signed_in = pairing::accept_invite(&state.pool, &req.code, &req.secret, &name).await?;
+    tracing::info!(device = %signed_in.session.label, account = %signed_in.account.name, "used an invite");
+    Ok(Json(signed_in.into()))
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

@@ -63,6 +63,34 @@ A paired device stays signed in to its account until it's unpaired (Connections,
 the server's owner). It asks for the PIN again only before risky changes: deleting models or
 accounts, installing engines, making app keys, pairing devices, and changing network access.
 
+## Adding people
+
+In **Settings › Accounts**, an owner adds someone with **Make an invite** (the default): Outpost
+shows a code, a QR code and the check words, valid for 24 hours. The person scans it with the
+phone app, or types it in the desktop app's **Connect to an Outpost server**, checks the words,
+and picks their own PIN. That makes their account and pairs that device. Nobody needs to log in
+to the server.
+
+**Send PIN reset** does the same for someone who forgot their PIN: they pick a new one on their
+own device, and their other devices are signed out.
+
+### A shared PC
+
+A desktop app using a server can hold several people (**Add someone to this PC**, from the lock
+button or Settings › Server). With more than one, it opens on **Who's using Outpost?** and asks
+each person's PIN, and locks back to it after 15 idle minutes. With one, it stays signed in.
+
+### Locked out
+
+If the only owner forgets their PIN, run this on the server:
+
+```bash
+~/.local/lib/outpost/outpost-gateway --reset-pin Dan
+```
+
+It prints a reset code and the check words (valid 24 hours); use it in the desktop or phone app
+like an invite and pick a new PIN.
+
 ## Going back
 
 **Settings › Server › Use Outpost on this PC instead** makes the desktop app run Outpost on that

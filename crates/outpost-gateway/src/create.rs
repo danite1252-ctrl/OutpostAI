@@ -297,6 +297,7 @@ async fn run(state: AppState, job: Job) -> Result<(), ComfyError> {
                 seed: built.seed,
                 source_name: &file.filename,
                 data: &data,
+                created_at: None,
             },
         )
         .await

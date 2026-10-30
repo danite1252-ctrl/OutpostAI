@@ -50,6 +50,8 @@ struct OllamaModel {
         (status = 401, description = "Not signed in", body = ErrorBody),
     ))]
 pub async fn list_models(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<ModelList>> {
+    // The window Ollama runs with on this card.
+    let context_length = outpost_engines::versions::context_length_for(measure(&state).await.vram_mb);
     let url = format!("{}/api/tags", state.config.ollama_url.trim_end_matches('/'));
     let data = match state.http.get(&url).send().await {
         Ok(resp) if resp.status().is_success() => match resp.json::<OllamaTags>().await {
@@ -61,7 +63,7 @@ pub async fn list_models(State(state): State<AppState>, auth: Auth) -> ApiResult
                     object: "model".into(),
                     created: 0,
                     owned_by: "ollama".into(),
-                    context_length: outpost_engines::versions::OLLAMA_CONTEXT_LENGTH,
+                    context_length,
                 })
                 .collect(),
             Err(e) => {
@@ -83,7 +85,7 @@ pub async fn list_models(State(state): State<AppState>, auth: Auth) -> ApiResult
             object: "model".into(),
             created: p.created_at,
             owned_by: "outpost-persona".into(),
-            context_length: outpost_engines::versions::OLLAMA_CONTEXT_LENGTH,
+            context_length,
         });
     }
     Ok(Json(ModelList {

@@ -57,6 +57,12 @@ struct Args {
     #[arg(long, env = "OUTPOST_SERVER")]
     server: bool,
 
+    /// Locked out? Make a PIN-reset invite for this account (by name), print its code and
+    /// check words, then exit. Use it from the desktop or phone app like a pairing code:
+    /// you pick a new PIN there. Works once, for 24 hours.
+    #[arg(long, value_name = "NAME")]
+    reset_pin: Option<String>,
+
     /// Show the one-time setup code for creating the first owner from another device
     /// (only while Outpost has no owner), then exit.
     #[arg(long)]
@@ -81,6 +87,11 @@ async fn main() -> anyhow::Result<()> {
             ),
         }
         return Ok(());
+    }
+
+    if let Some(name) = &args.reset_pin {
+        let data_dir = args.data_dir.clone().unwrap_or_else(default_data_dir);
+        return reset_pin(&data_dir, name).await;
     }
 
     if args.mcp_stdio {
@@ -134,4 +145,39 @@ async fn main() -> anyhow::Result<()> {
     let result = outpost_gateway::serve_state(state).await;
     outpost_gateway::diagnostics::clean_exit();
     result
+}
+
+/// `--reset-pin NAME`: a reset invite made on the server itself (reading the data folder
+/// means having the server's own login, which is the proof needed).
+async fn reset_pin(data_dir: &std::path::Path, name: &str) -> anyhow::Result<()> {
+    let db = data_dir.join("outpost.db");
+    if !db.is_file() {
+        anyhow::bail!("There's no Outpost data in {}.", data_dir.display());
+    }
+    let pool = outpost_core::db::open(&db).await?;
+    let accounts = outpost_core::accounts::list(&pool).await?;
+    let Some(account) = accounts.iter().find(|a| a.name.eq_ignore_ascii_case(name.trim())) else {
+        let names: Vec<&str> = accounts.iter().map(|a| a.name.as_str()).collect();
+        anyhow::bail!("No account called \"{name}\". The accounts are: {}.", names.join(", "));
+    };
+    let (code, row) = outpost_core::pairing::create_invite(
+        &pool,
+        &account.id,
+        outpost_core::pairing::Invite::Reset { account_id: account.id.clone() },
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let words = outpost_gateway::tls::load_or_create(data_dir)
+        .map(|id| outpost_core::pairing::words(&id.fingerprint).join(" "))
+        .unwrap_or_default();
+    let host = outpost_gateway::routes::network::lan_ip().map(|ip| ip.to_string()).unwrap_or_else(|| "this server's address".into());
+    println!("PIN reset for {}", account.name);
+    println!("Code:        {}", code);
+    println!("Check words: {words}");
+    println!("Valid until: {} (UTC)", outpost_gateway::diagnostics::rfc3339(row.expires_at));
+    println!();
+    println!("In the Outpost desktop app choose \"Connect to an Outpost server\" (or on a phone, pair by");
+    println!("typing the code), connect to {host}, check the words match, enter the code and pick a new PIN.");
+    println!("The new PIN signs {} out on every other device.", account.name);
+    Ok(())
 }

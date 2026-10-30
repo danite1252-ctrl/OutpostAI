@@ -535,13 +535,15 @@ pub struct CatalogEntry {
     pub recommended: bool,
 }
 
-/// Memory a model needs: its weights plus working space for an 8K-token chat.
-fn needed_gb(size_gb: f32) -> f32 {
-    size_gb * 1.15 + 0.6
+/// Memory a model needs: its weights plus working space, which grows a little with the
+/// context window Outpost gives it on this card (0.6 GB, plus 0.6 GB more at 64K: flash
+/// attention and the 8-bit KV cache keep the window cheap).
+fn needed_gb(size_gb: f32, context: u32) -> f32 {
+    size_gb * 1.15 + 0.6 + 0.6 * (context as f32 / 65_536.0)
 }
 
 pub fn fit(size_gb: f32, hw: &Hardware) -> Fit {
-    let need = needed_gb(size_gb);
+    let need = needed_gb(size_gb, crate::versions::context_length_for(hw.vram_mb));
     let vram = hw.vram_mb as f32 / 1024.0;
     let ram = hw.ram_mb as f32 / 1024.0;
     if vram > 0.0 && need <= vram * 0.95 {

@@ -119,8 +119,19 @@ export default function Connections({ auth }: { auth: SignInResponse }) {
   );
 }
 
-/** The code, QR and check words; closes itself into a "paired" message once the phone finishes. */
-function PairDialog({ token, onClose }: { token: string; onClose: () => void }) {
+/** The code, QR and check words; closes itself into a "paired" message once the device
+ * finishes. `make` makes something else than a plain pairing code (an invite). */
+export function PairDialog({
+  token,
+  onClose,
+  make: makeCode,
+  title = "Pair a device",
+}: {
+  token: string;
+  onClose: () => void;
+  make?: () => Promise<PairingView>;
+  title?: string;
+}) {
   const [view, setView] = useState<PairingView | null>(null);
   const [status, setStatus] = useState<PairingStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -129,9 +140,10 @@ function PairDialog({ token, onClose }: { token: string; onClose: () => void }) 
   const make = useCallback(() => {
     setError(null);
     setStatus(null);
-    api.createPairing(token).then(setView, (err: unknown) =>
+    (makeCode ? makeCode() : api.createPairing(token)).then(setView, (err: unknown) =>
       setError(err instanceof ApiError ? err.message : "Couldn't make a code."),
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
   useEffect(make, [make]);
 
@@ -155,10 +167,10 @@ function PairDialog({ token, onClose }: { token: string; onClose: () => void }) 
   const expired = status?.expired || (view != null && left === 0 && !status?.used);
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Pair a device" className="fixed inset-0 z-40 flex items-center justify-center bg-black/80 p-6" onClick={onClose}>
+    <div role="dialog" aria-modal="true" aria-label={title} className="fixed inset-0 z-40 flex items-center justify-center bg-black/80 p-6" onClick={onClose}>
       <div className="flex w-full max-w-2xl flex-col gap-5 rounded-2xl border border-line bg-surface p-6" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center">
-          <h2 className="flex-1 text-xl font-semibold">Pair a device</h2>
+          <h2 className="flex-1 text-xl font-semibold">{title}</h2>
           <button
             type="button"
             aria-label="Close"
@@ -189,12 +201,27 @@ function PairDialog({ token, onClose }: { token: string; onClose: () => void }) 
               className={`size-64 shrink-0 self-center rounded-xl bg-white p-2 ${expired ? "opacity-20" : ""}`}
             />
             <div className="flex flex-col gap-4">
-              <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm">
-                <li>Open the Outpost app on the phone, on the same Wi-Fi as this PC.</li>
-                <li>Scan this code, or pick this Outpost and type the code below.</li>
-                <li>Check the phone shows the same three words.</li>
-                <li>Choose your account and enter your PIN on the phone.</li>
-              </ol>
+              {view.invite ? (
+                <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm">
+                  <li>
+                    {view.invite.name} opens the Outpost app on their phone and scans this code, or on a PC chooses{" "}
+                    <b>Connect to an Outpost server</b> and types it.
+                  </li>
+                  <li>They check it shows the same three words.</li>
+                  <li>
+                    {view.invite.kind === "join"
+                      ? `They pick their own PIN. That makes ${view.invite.name}'s account, and their device stays signed in.`
+                      : `They pick a new PIN. It replaces the old one and signs ${view.invite.name} out on other devices.`}
+                  </li>
+                </ol>
+              ) : (
+                <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm">
+                  <li>Open the Outpost app on the phone, on the same Wi-Fi as this PC.</li>
+                  <li>Scan this code, or pick this Outpost and type the code below.</li>
+                  <li>Check the phone shows the same three words.</li>
+                  <li>Choose your account and enter your PIN on the phone.</li>
+                </ol>
+              )}
               <div>
                 <span className="text-xs text-muted">Code</span>
                 <p className={`font-mono text-4xl tracking-[0.3em] ${expired ? "text-muted line-through" : ""}`}>
@@ -214,7 +241,11 @@ function PairDialog({ token, onClose }: { token: string; onClose: () => void }) 
                     </button>
                   </>
                 ) : (
-                  `Works once, for ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} more. ${view.name}${
+                  `Works once, for ${
+                    left >= 3600
+                      ? `${Math.floor(left / 3600)} h ${Math.floor((left % 3600) / 60)} min`
+                      : `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`
+                  } more. ${view.name}${
                     view.hosts.length ? ` · ${view.hosts.join(", ")}:${view.port}` : ""
                   }`
                 )}

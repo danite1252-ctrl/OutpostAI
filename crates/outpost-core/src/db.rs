@@ -25,6 +25,13 @@ pub async fn open(path: &Path) -> CoreResult<SqlitePool> {
     Ok(pool)
 }
 
+/// Open another Outpost's database to read from (e.g. this PC's own, while the app uses a
+/// server). Never changes it: no migrations, no writes.
+pub async fn open_read_only(path: &Path) -> CoreResult<SqlitePool> {
+    let options = SqliteConnectOptions::new().filename(path).read_only(true);
+    Ok(SqlitePoolOptions::new().max_connections(2).connect_with(options).await?)
+}
+
 /// An in-memory database for tests. One connection, so every query sees the same data.
 pub async fn open_in_memory() -> CoreResult<SqlitePool> {
     let options = SqliteConnectOptions::from_str("sqlite::memory:")?.foreign_keys(true);

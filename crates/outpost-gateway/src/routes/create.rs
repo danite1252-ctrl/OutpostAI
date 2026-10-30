@@ -705,6 +705,78 @@ pub async fn share_media(
     Ok(Json(m))
 }
 
+/// The largest gallery item brought over from another Outpost (videos included).
+pub const MAX_IMPORT_BYTES: usize = 1024 * 1024 * 1024;
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct MediaImport {
+    /// Its file name, for the type (`.png`, `.jpg`, `.webp`, `.gif`, `.mp4`, `.webm`).
+    pub name: String,
+    pub prompt: Option<String>,
+    pub pack_id: Option<String>,
+    pub seed: Option<u64>,
+    /// When it was made (Unix seconds); kept, so the gallery stays in order.
+    pub created_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct MediaImported {
+    /// False when the same item was copied before (nothing added).
+    pub added: bool,
+    pub media: Option<Media>,
+}
+
+/// Bring a picture or video over from another Outpost into my gallery, with its prompt,
+/// seed and date. The body is the file. The same item twice is only kept once.
+#[utoipa::path(post, path = "/api/media/import", tag = "create", security(("bearer" = [])),
+    params(MediaImport),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "The picture or video"),
+    responses((status = 200, description = "Added, or already there", body = MediaImported),
+        (status = 400, description = "Not a picture or video the gallery keeps", body = ErrorBody),
+        (status = 403, description = "An app key", body = ErrorBody)))]
+pub async fn import_media(
+    State(state): State<AppState>,
+    auth: Auth,
+    Query(q): Query<MediaImport>,
+    body: Body,
+) -> ApiResult<Json<MediaImported>> {
+    auth.require_person("Copying pictures in")?;
+    if media::kind_of(&q.name).is_none() {
+        return Err(ApiError::bad_request(format!("{} isn't a picture or video the gallery keeps.", q.name)));
+    }
+    let data = axum::body::to_bytes(body, MAX_IMPORT_BYTES)
+        .await
+        .map_err(|_| ApiError::bad_request("That file is too big (over 1 GB), or the copy was interrupted."))?;
+    if data.is_empty() {
+        return Err(ApiError::bad_request("That file is empty."));
+    }
+    let now = outpost_core::now();
+    let created_at = q.created_at.filter(|t| (946_684_800..=now + 86_400).contains(t));
+    if let Some(at) = created_at {
+        if media::has_copy(&state.pool, &auth.account.id, at, data.len() as i64).await? {
+            return Ok(Json(MediaImported { added: false, media: None }));
+        }
+    }
+    let tidy = |v: &Option<String>| v.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(|t| t.chars().take(4000).collect::<String>());
+    let (prompt, pack_id) = (tidy(&q.prompt), tidy(&q.pack_id));
+    let m = media::add(
+        &state.pool,
+        &state.config.files_dir(),
+        media::NewMedia {
+            account_id: &auth.account.id,
+            job_id: None,
+            pack_id: pack_id.as_deref(),
+            prompt: prompt.as_deref(),
+            seed: q.seed,
+            source_name: &q.name,
+            data: &data,
+            created_at,
+        },
+    )
+    .await?;
+    Ok(Json(MediaImported { added: true, media: Some(m) }))
+}
+
 /// Delete one of my gallery items (the owner can delete anyone's).
 #[utoipa::path(delete, path = "/api/media/{id}", tag = "create", security(("bearer" = [])),
     params(("id" = String, Path, description = "Media id")),

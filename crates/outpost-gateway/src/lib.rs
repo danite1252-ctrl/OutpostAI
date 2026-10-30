@@ -173,6 +173,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/sign-in", post(auth::sign_in))
         .route("/api/auth/sign-out", post(auth::sign_out))
         .route("/api/me", get(auth::me))
+        .route("/api/me/check-pin", post(auth::check_pin))
         .route("/api/me/secret", put(auth::change_my_secret))
         .route("/api/accounts", get(accounts::list).post(accounts::create))
         .route("/api/accounts/{id}", delete(accounts::delete))
@@ -234,10 +235,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/gallery", get(create::gallery))
         .route("/api/gallery/shared", get(create::shared_gallery))
         .route("/api/media/{id}/share", post(create::share_media))
+        .route(
+            "/api/media/import",
+            post(create::import_media).layer(DefaultBodyLimit::max(create::MAX_IMPORT_BYTES)),
+        )
         .route("/api/media/{id}", get(create::get_media).delete(create::delete_media))
         .route("/api/downloads", get(downloads::list))
         .route("/api/pairing", post(pairing::create_code))
         .route("/api/pairing/{id}", get(pairing::code_status))
+        .route("/api/invites", post(pairing::create_invite))
+        .route("/api/pair/accept", post(pairing::accept))
         .route("/api/pair/hello", post(pairing::hello))
         .route("/api/pair/complete", post(pairing::complete))
         .route("/api/devices", get(pairing::list_devices))

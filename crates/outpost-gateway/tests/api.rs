@@ -386,6 +386,7 @@ async fn openapi_lists_every_route() {
         "/api/updates",
         "/api/updates/check",
         "/api/updates/settings",
+        "/api/media/import",
     ] {
         assert!(paths.contains_key(p), "missing {p} in OpenAPI spec");
     }
@@ -1606,4 +1607,102 @@ async fn loras_i_already_have_can_be_uploaded() {
     assert_eq!(theirs["loras"].as_array().unwrap().len(), 1);
     let (_, mine) = call(&app, "GET", "/api/loras", Some(&owner), None).await;
     assert_eq!(mine["loras"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn pictures_come_over_from_another_outpost_once() {
+    let app = app().await;
+    let (owner, _) = setup_owner(&app).await;
+    // A 1x1 PNG.
+    let png = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+    )
+    .unwrap();
+    let uri = "/api/media/import?name=old.png&prompt=Kat%20at%20the%20beach&pack_id=z_image_turbo&seed=42&created_at=1761470100";
+    let (status, body) = upload(&app, uri, &owner, png.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["added"], true);
+    assert_eq!(body["media"]["created_at"], 1761470100);
+    assert_eq!(body["media"]["prompt"], "Kat at the beach");
+    assert_eq!(body["media"]["seed"], 42);
+    // The same item again isn't doubled.
+    let (status, body) = upload(&app, uri, &owner, png.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["added"], false);
+    let (_, gallery) = call(&app, "GET", "/api/gallery", Some(&owner), None).await;
+    let items = gallery.as_array().or_else(|| gallery["items"].as_array()).cloned().unwrap_or_default();
+    assert_eq!(items.len(), 1, "{gallery}");
+    // Only pictures and videos.
+    let (status, _) = upload(&app, "/api/media/import?name=notes.txt", &owner, b"hi".to_vec()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn invites_add_people_and_reset_pins_from_their_own_devices() {
+    let pool = outpost_core::db::open_in_memory().await.unwrap();
+    let mut config = Config::local_default();
+    config.data_dir = temp_data_dir();
+    config.ollama_url = "http://127.0.0.1:9".into();
+    let state = AppState::with_pool(pool, config);
+    let local = router(state.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 50000))));
+    let phone = router(state.clone())
+        .layer(axum::Extension(outpost_gateway::tls::Secure))
+        .layer(MockConnectInfo(SocketAddr::from(([192, 168, 1, 77], 50000))));
+    let (owner, _) = setup_owner(&local).await;
+    let _ = state.tls.set(outpost_gateway::tls::TlsInfo { port: 7421, fingerprint: "ab".repeat(32) });
+
+    // The owner invites Sam: a code, QR and words, valid a day.
+    let (status, inv) = call(&local, "POST", "/api/invites", Some(&owner), Some(json!({"name": "Sam"}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{inv}");
+    assert_eq!(inv["invite"]["kind"], "join");
+    assert!(inv["link"].as_str().unwrap().ends_with("&invite=join"));
+    let code = inv["code"].as_str().unwrap().to_string();
+
+    // On Sam's phone: the code says who it's for (no account list), and Sam picks a PIN.
+    let (status, hello) = call(&phone, "POST", "/api/pair/hello", None, Some(json!({"code": code}))).await;
+    assert_eq!(status, StatusCode::OK, "{hello}");
+    assert_eq!(hello["invite"]["name"], "Sam");
+    assert!(hello["accounts"].as_array().unwrap().is_empty());
+    let accept = |pin: &str| json!({"code": code, "secret": pin, "device_name": "Sam's phone"});
+    let (status, _) = call(&phone, "POST", "/api/pair/complete", None, Some(json!({"code": code, "account_id": "x", "secret": "1", "device_name": "x"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "an invite isn't a pairing code");
+    let (status, sam) = call(&phone, "POST", "/api/pair/accept", None, Some(accept("2468"))).await;
+    assert_eq!(status, StatusCode::OK, "{sam}");
+    assert_eq!(sam["account"]["name"], "Sam");
+    assert_eq!(sam["account"]["role"], "member");
+    assert_eq!(sam["session"]["kind"], "device");
+    let sam_token = sam["token"].as_str().unwrap().to_string();
+    let (status, _) = call(&phone, "GET", "/api/me", Some(&sam_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Members can't invite.
+    let (status, _) = call_with(&phone, "POST", "/api/invites", Some(&sam_token), &[("x-outpost-pin", "2468")], Some(json!({"name": "Eve"}))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Sam forgets the PIN: a reset invite; the new PIN signs the old devices out.
+    let sam_id = sam["account"]["id"].as_str().unwrap();
+    let (status, reset) = call(&local, "POST", "/api/invites", Some(&owner), Some(json!({"account_id": sam_id}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{reset}");
+    assert_eq!(reset["invite"]["kind"], "reset");
+    let code = reset["code"].as_str().unwrap();
+    let (status, again) = call(&phone, "POST", "/api/pair/accept", None, Some(json!({"code": code, "secret": "97531", "device_name": "Sam's new phone"}))).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    let (status, _) = call(&phone, "GET", "/api/me", Some(&sam_token), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "the old phone is signed out");
+}
+
+#[tokio::test]
+async fn a_shared_pc_checks_each_persons_pin() {
+    let app = app().await;
+    let (owner, _) = setup_owner(&app).await;
+    let check = |pin: &'static str| {
+        let app = app.clone();
+        let owner = owner.clone();
+        async move { call_with(&app, "POST", "/api/me/check-pin", Some(&owner), &[("x-outpost-pin", pin)], None).await.0 }
+    };
+    assert_eq!(check("4821").await, StatusCode::NO_CONTENT);
+    assert_eq!(check("0000").await, StatusCode::UNAUTHORIZED);
+    let (status, _) = call(&app, "POST", "/api/me/check-pin", Some(&owner), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }

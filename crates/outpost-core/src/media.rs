@@ -48,6 +48,8 @@ pub struct NewMedia<'a> {
     /// The file's name as ComfyUI saved it (for its extension).
     pub source_name: &'a str,
     pub data: &'a [u8],
+    /// When it was made, for items brought over from another Outpost (default: now).
+    pub created_at: Option<i64>,
 }
 
 /// Image and video types the gallery keeps, by extension.
@@ -84,7 +86,7 @@ pub async fn add(pool: &SqlitePool, files_dir: &Path, new: NewMedia<'_>) -> Core
         pack_id: new.pack_id.map(Into::into),
         prompt: new.prompt.map(Into::into),
         seed: new.seed.map(|s| s as i64),
-        created_at: now(),
+        created_at: new.created_at.unwrap_or_else(now),
         shared_at: None,
     };
     let saved = sqlx::query(
@@ -218,6 +220,27 @@ pub async fn get_any(pool: &SqlitePool, files_dir: &Path, id: &str) -> CoreResul
     get(pool, files_dir, &account_id, id).await
 }
 
+/// Is an item like this already in my gallery? (Same moment and size: copied before.)
+pub async fn has_copy(pool: &SqlitePool, account_id: &str, created_at: i64, bytes: i64) -> CoreResult<bool> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media WHERE account_id = ? AND created_at = ? AND bytes = ?")
+        .bind(account_id)
+        .bind(created_at)
+        .bind(bytes)
+        .fetch_one(pool)
+        .await?;
+    Ok(n > 0)
+}
+
+/// Every item in my gallery, oldest first.
+pub async fn all(pool: &SqlitePool, account_id: &str) -> CoreResult<Vec<Media>> {
+    Ok(sqlx::query_as(&format!(
+        "SELECT {COLS} FROM media WHERE account_id = ? ORDER BY created_at, rowid"
+    ))
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?)
+}
+
 /// Delete one of my items and its file.
 pub async fn delete(pool: &SqlitePool, files_dir: &Path, account_id: &str, id: &str) -> CoreResult<()> {
     let (_, path) = get(pool, files_dir, account_id, id).await?;
@@ -259,6 +282,7 @@ mod tests {
                 seed: Some(42),
                 source_name: "outpost_00001_.png",
                 data: b"\x89PNG fake",
+                created_at: None,
             },
         )
         .await
@@ -307,6 +331,7 @@ mod tests {
                 seed: None,
                 source_name: "notes.txt",
                 data: b"x",
+                created_at: None,
             },
         )
         .await;

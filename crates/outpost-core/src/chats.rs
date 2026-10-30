@@ -323,3 +323,22 @@ mod tests {
         assert!(messages(&pool, &chat.id).await.unwrap().is_empty());
     }
 }
+
+/// A chat's rolling summary of its older messages, and the last message seq it covers.
+pub async fn summary(pool: &SqlitePool, chat_id: &str) -> CoreResult<(Option<String>, i64)> {
+    Ok(sqlx::query_as::<_, (Option<String>, i64)>("SELECT summary, summary_upto FROM chats WHERE id = ?")
+        .bind(chat_id)
+        .fetch_optional(pool)
+        .await?
+        .unwrap_or((None, 0)))
+}
+
+pub async fn set_summary(pool: &SqlitePool, chat_id: &str, summary: &str, upto: i64) -> CoreResult<()> {
+    sqlx::query("UPDATE chats SET summary = ?, summary_upto = ? WHERE id = ?")
+        .bind(summary)
+        .bind(upto)
+        .bind(chat_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}

@@ -35,9 +35,29 @@ pub struct PairingCode {
     /// The device session it made, once used.
     pub session_id: Option<String>,
     pub wrong_guesses: i64,
+    /// For an invite: `join` (a new account) or `reset` (a new PIN for an existing one).
+    pub invite_kind: Option<String>,
+    /// The account it resets, or (once used) the account it made.
+    pub invite_account: Option<String>,
+    /// For a join: the new account's name and role.
+    pub invite_name: Option<String>,
+    pub invite_role: Option<String>,
 }
 
-const COLS: &str = "id, created_by, created_at, expires_at, used_at, session_id, wrong_guesses";
+const COLS: &str =
+    "id, created_by, created_at, expires_at, used_at, session_id, wrong_guesses, invite_kind, invite_account, invite_name, invite_role";
+
+/// How long an invite works: long enough to send to someone.
+pub const INVITE_TTL_SECS: i64 = 24 * 60 * 60;
+
+/// Who an invite is for.
+#[derive(Debug, Clone)]
+pub enum Invite {
+    /// A new account, made when the person picks their PIN.
+    Join { name: String, role: crate::accounts::Role },
+    /// A new PIN for an existing account (it signs that account out everywhere else).
+    Reset { account_id: String },
+}
 
 fn hash(code: &str) -> String {
     let digest = Sha256::digest(format!("outpost-pairing:{code}").as_bytes());
@@ -53,7 +73,7 @@ pub fn normalise(code: &str) -> Option<String> {
 /// A new code for `account_id` (who is at the PC). Their older unused codes stop working.
 pub async fn create(pool: &SqlitePool, account_id: &str) -> CoreResult<(String, PairingCode)> {
     let t = now();
-    sqlx::query("UPDATE pairing_codes SET expires_at = ? WHERE created_by = ? AND used_at IS NULL AND expires_at > ?")
+    sqlx::query("UPDATE pairing_codes SET expires_at = ? WHERE created_by = ? AND used_at IS NULL AND expires_at > ? AND invite_kind IS NULL")
         .bind(t)
         .bind(account_id)
         .bind(t)
@@ -69,6 +89,10 @@ pub async fn create(pool: &SqlitePool, account_id: &str) -> CoreResult<(String, 
         used_at: None,
         session_id: None,
         wrong_guesses: 0,
+        invite_kind: None,
+        invite_account: None,
+        invite_name: None,
+        invite_role: None,
     };
     sqlx::query(
         "INSERT INTO pairing_codes (id, code_hash, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
@@ -82,6 +106,133 @@ pub async fn create(pool: &SqlitePool, account_id: &str) -> CoreResult<(String, 
     .await?;
     audit::log_quiet(pool, Some(account_id), None, "pairing_code", None).await;
     Ok((code, row))
+}
+
+/// A new invite, made by `created_by` (an owner, or the account itself for a reset made
+/// on the server). It replaces earlier unused invites for the same person.
+pub async fn create_invite(pool: &SqlitePool, created_by: &str, invite: Invite) -> CoreResult<(String, PairingCode)> {
+    let t = now();
+    let (kind, account, name, role) = match &invite {
+        Invite::Join { name, role } => {
+            let name = name.trim();
+            if name.is_empty() || name.chars().count() > 40 {
+                return Err(CoreError::Invalid("Give them a name of up to 40 characters.".into()));
+            }
+            if *role == crate::accounts::Role::Service {
+                return Err(CoreError::Invalid("Service accounts use app keys, not invites.".into()));
+            }
+            let taken = crate::accounts::list(pool)
+                .await?
+                .iter()
+                .any(|a| a.name.eq_ignore_ascii_case(name));
+            if taken {
+                return Err(CoreError::Conflict(format!("There's already an account called {name}.")));
+            }
+            ("join", None, Some(name.to_string()), Some(role.as_str().to_string()))
+        }
+        Invite::Reset { account_id } => {
+            let a = crate::accounts::get(pool, account_id).await?;
+            if a.role == crate::accounts::Role::Service {
+                return Err(CoreError::Invalid("Service accounts use app keys, not a PIN.".into()));
+            }
+            ("reset", Some(a.id), Some(a.name), None)
+        }
+    };
+    // Only the newest invite for a person works.
+    sqlx::query(
+        "UPDATE pairing_codes SET expires_at = ? WHERE used_at IS NULL AND expires_at > ? AND invite_kind = ?
+         AND (invite_account = ? OR (invite_account IS NULL AND invite_name = ?))",
+    )
+    .bind(t)
+    .bind(t)
+    .bind(kind)
+    .bind(&account)
+    .bind(&name)
+    .execute(pool)
+    .await?;
+    let n = u32::from_le_bytes(random_bytes::<4>()?) % 1_000_000;
+    let code = format!("{n:06}");
+    let row = PairingCode {
+        id: uuid::Uuid::new_v4().to_string(),
+        created_by: created_by.into(),
+        created_at: t,
+        expires_at: t + INVITE_TTL_SECS,
+        used_at: None,
+        session_id: None,
+        wrong_guesses: 0,
+        invite_kind: Some(kind.into()),
+        invite_account: account,
+        invite_name: name,
+        invite_role: role,
+    };
+    sqlx::query(
+        "INSERT INTO pairing_codes (id, code_hash, created_by, created_at, expires_at, invite_kind, invite_account, invite_name, invite_role)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&row.id)
+    .bind(hash(&code))
+    .bind(created_by)
+    .bind(row.created_at)
+    .bind(row.expires_at)
+    .bind(&row.invite_kind)
+    .bind(&row.invite_account)
+    .bind(&row.invite_name)
+    .bind(&row.invite_role)
+    .execute(pool)
+    .await?;
+    audit::log_quiet(pool, Some(created_by), None, "invite", Some(&format!("{kind} {}", row.invite_name.as_deref().unwrap_or("")))).await;
+    Ok((code, row))
+}
+
+/// Use an invite: the person's new PIN makes their account (join) or replaces the old
+/// one (reset), and this device is paired to it as `device`.
+pub async fn accept_invite(pool: &SqlitePool, code: &str, new_secret: &str, device: &str) -> CoreResult<SignIn> {
+    let _one_at_a_time = checks().lock().await;
+    let invite = check_locked(pool, code).await?;
+    crate::secret::validate_secret(new_secret)?;
+    let account_id = match invite.invite_kind.as_deref() {
+        Some("join") => {
+            let role = crate::accounts::Role::parse(invite.invite_role.as_deref().unwrap_or("member"))?;
+            let a = crate::accounts::create(
+                pool,
+                crate::accounts::NewAccount {
+                    name: invite.invite_name.clone().unwrap_or_default(),
+                    role,
+                    secret: Some(new_secret.to_string()),
+                },
+            )
+            .await?;
+            a.id
+        }
+        Some("reset") => {
+            let id = invite.invite_account.clone().ok_or(CoreError::NotFound)?;
+            crate::accounts::set_secret(pool, &id, new_secret.to_string()).await?;
+            id
+        }
+        _ => {
+            return Err(CoreError::Invalid(
+                "That's a pairing code, not an invite: pick your account and enter your PIN.".into(),
+            ))
+        }
+    };
+    let label = if device.trim().is_empty() { "Device" } else { device };
+    let signed_in = auth::sign_in(pool, &account_id, new_secret, SessionKind::Device, label).await?;
+    sqlx::query("UPDATE pairing_codes SET used_at = ?, session_id = ?, invite_account = ? WHERE id = ?")
+        .bind(now())
+        .bind(&signed_in.session.id)
+        .bind(&account_id)
+        .bind(&invite.id)
+        .execute(pool)
+        .await?;
+    audit::log_quiet(
+        pool,
+        Some(&account_id),
+        Some(&signed_in.session.id),
+        if invite.invite_kind.as_deref() == Some("join") { "invite_joined" } else { "pin_reset_by_invite" },
+        Some(label),
+    )
+    .await;
+    Ok(signed_in)
 }
 
 /// One code by id (for the PC to see whether its code was used).
@@ -141,6 +292,9 @@ pub async fn complete(
     // or after it died.
     let _one_at_a_time = checks().lock().await;
     let pairing = check_locked(pool, code).await?;
+    if pairing.invite_kind.is_some() {
+        return Err(CoreError::Invalid("That's an invite: choose your PIN instead.".into()));
+    }
     let label = if device.trim().is_empty() { "Phone" } else { device };
     let signed_in = match auth::sign_in(pool, account_id, secret, SessionKind::Device, label).await {
         Ok(s) => s,
@@ -269,6 +423,39 @@ mod tests {
         assert!(check(&pool, &code).await.is_err(), "too many wrong guesses");
         assert!(check(&pool, "12345").await.is_err());
         assert!(check(&pool, "abcdef").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn invites_let_people_pick_their_own_pin() {
+        let pool = open_in_memory().await.unwrap();
+        let dan = account(&pool, "Dan", Role::Owner).await;
+
+        // Join: Sam's account appears when Sam picks a PIN.
+        let (code, _) = create_invite(&pool, &dan, Invite::Join { name: "Sam".into(), role: Role::Member }).await.unwrap();
+        let normal = create(&pool, &dan).await.unwrap().0;
+        // A new pairing code doesn't kill the invite, and each is used its own way.
+        assert!(complete(&pool, &code, &dan, "4821", "x").await.is_err());
+        assert!(accept_invite(&pool, &normal, "2468", "x").await.is_err());
+        assert!(accept_invite(&pool, &code, "12", "Sam's phone").await.is_err(), "PIN too short");
+        let sam = accept_invite(&pool, &code, "2468", "Sam's phone").await.unwrap();
+        assert_eq!(sam.account.name, "Sam");
+        assert_eq!(sam.account.role, Role::Member);
+        assert_eq!(sam.session.kind, SessionKind::Device);
+        assert!(accept_invite(&pool, &code, "2468", "again").await.is_err(), "used once");
+        // Names stay unique.
+        assert!(create_invite(&pool, &dan, Invite::Join { name: "sam".into(), role: Role::Member }).await.is_err());
+
+        // Reset: Dan forgot his PIN.
+        let (old, _) = create_invite(&pool, &dan, Invite::Reset { account_id: dan.clone() }).await.unwrap();
+        let (reset, row) = create_invite(&pool, &dan, Invite::Reset { account_id: dan.clone() }).await.unwrap();
+        if old != reset {
+            assert!(check(&pool, &old).await.is_err(), "the newest invite replaces the old");
+        }
+        assert_eq!(row.expires_at - row.created_at, INVITE_TTL_SECS);
+        let back = accept_invite(&pool, &reset, "13579", "Dan's desktop").await.unwrap();
+        assert_eq!(back.account.id, dan);
+        assert!(auth::sign_in(&pool, &dan, "4821", SessionKind::Desktop, "old").await.is_err());
+        assert!(auth::sign_in(&pool, &dan, "13579", SessionKind::Desktop, "new").await.is_ok());
     }
 
     #[test]

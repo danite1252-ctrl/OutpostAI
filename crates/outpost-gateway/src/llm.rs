@@ -206,6 +206,121 @@ pub async fn system_prompt(
     Ok(if prompt.is_empty() { clock } else { format!("{prompt}\n\n{clock}") })
 }
 
+// ------------------------------------------------------------------- rolling summary
+
+/// Rough token count: about 3 characters a token (on the safe side for English), and a
+/// picture counts as about 800.
+pub fn estimate_tokens(m: &Message) -> usize {
+    m.content.chars().count() / 3 + 8 + m.attachments.len() * 800
+}
+
+/// When the messages not yet summarised outgrow `budget` tokens (or [`HISTORY`] messages),
+/// how many of the oldest to fold into the summary: enough to bring the rest down to about
+/// half of each, so it happens now and then rather than every message. The newest two
+/// messages always stay. `None`: nothing to fold yet.
+pub fn plan_fold(recent: &[Message], budget: usize) -> Option<usize> {
+    let tokens: usize = recent.iter().map(estimate_tokens).sum();
+    if recent.len() <= HISTORY && tokens <= budget {
+        return None;
+    }
+    let keep_min = 2.min(recent.len());
+    let mut fold = 0;
+    let mut left = tokens;
+    while recent.len() - fold > keep_min && (recent.len() - fold > HISTORY / 2 || left > budget / 2) {
+        left -= estimate_tokens(&recent[fold]);
+        fold += 1;
+    }
+    (fold > 0).then_some(fold)
+}
+
+const SUMMARY_PROMPT: &str = "You keep a running summary of a conversation between a user and an \
+assistant, so the assistant can carry on later without the full text. Update the summary with the \
+new messages. Keep what matters for continuing: who the user is, what they are working on or asking \
+about, decisions made, names, numbers, preferences, and anything left unfinished. Leave out small \
+talk. Write plain sentences in the third person (\"The user...\", \"The assistant...\"), at most 300 \
+words. Reply with the summary only.";
+
+/// Ask the chat's model to fold `messages` into the summary so far.
+async fn summarise(
+    state: &AppState,
+    model: &str,
+    can_think: bool,
+    previous: Option<&str>,
+    messages: &[Message],
+) -> Option<String> {
+    let mut transcript = String::new();
+    for m in messages {
+        let who = if m.role == "assistant" { "Assistant" } else { "User" };
+        let text: String = without_job_cards(&m.content).chars().take(6000).collect();
+        let pics = if m.attachments.is_empty() { String::new() } else { format!(" [{} picture(s)]", m.attachments.len()) };
+        transcript.push_str(&format!("{who}:{pics} {text}\n\n"));
+    }
+    let mut body = json!({
+        "model": model,
+        "stream": false,
+        "options": { "temperature": 0.2, "num_predict": 700 },
+        "messages": [
+            { "role": "system", "content": SUMMARY_PROMPT },
+            { "role": "user", "content": format!(
+                "Summary so far:\n{}\n\nNew messages:\n{}",
+                previous.filter(|p| !p.trim().is_empty()).unwrap_or("(none yet)"),
+                transcript.trim_end(),
+            ) }
+        ]
+    });
+    if can_think {
+        body["think"] = json!(false);
+    }
+    let url = format!("{}/api/chat", state.config.ollama_url.trim_end_matches('/'));
+    let resp = state
+        .llm
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(180))
+        .json(&body)
+        .send()
+        .await
+        .ok()?;
+    let answer: Value = resp.json().await.ok()?;
+    let text = answer["message"]["content"].as_str()?.trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+/// What of a chat goes to the model: its rolling summary (if any) and the messages after
+/// it. When those outgrow the context window, the oldest are summarised first (and the
+/// summary saved with the chat). If summarising fails, the oldest are simply left out, as
+/// before.
+pub async fn fit_history(
+    state: &AppState,
+    chat_id: &str,
+    model: &str,
+    can_think: bool,
+    system: &str,
+    history: Vec<Message>,
+) -> (Option<String>, Vec<Message>) {
+    let (mut summary, upto) = outpost_core::chats::summary(&state.pool, chat_id).await.unwrap_or((None, 0));
+    let mut recent: Vec<Message> = history.into_iter().filter(|m| m.seq > upto).collect();
+    // About 55% of the window for the conversation; the rest is the persona, memories,
+    // summary and room for the reply.
+    let window = outpost_engines::versions::context_length_for(crate::routes::models::measure(state).await.vram_mb) as usize;
+    let budget = (window * 55 / 100).saturating_sub(system.chars().count() / 3 + summary.as_deref().map_or(0, |s| s.len() / 3));
+    if let Some(n) = plan_fold(&recent, budget.max(1024)) {
+        let folding = &recent[..n];
+        let last_seq = folding.last().map(|m| m.seq).unwrap_or(upto);
+        match summarise(state, model, can_think, summary.as_deref(), folding).await {
+            Some(new) => {
+                if let Err(e) = outpost_core::chats::set_summary(&state.pool, chat_id, &new, last_seq).await {
+                    tracing::warn!(error = %e, "couldn't save a chat summary");
+                }
+                tracing::info!(chat = %chat_id, folded = n, "summarised the start of a long chat");
+                summary = Some(new);
+                recent.drain(..n);
+            }
+            None => tracing::warn!(chat = %chat_id, "couldn't summarise a long chat; its oldest messages are left out"),
+        }
+    }
+    (summary, recent)
+}
+
 /// Body for Ollama's native `/api/chat`, streaming.
 /// A chat message that started a picture (`/draw`) carries a card marker for the
 /// apps, `[[outpost-job:<id>]]`; the model sees the words only.
@@ -222,6 +337,7 @@ pub fn without_job_cards(content: &str) -> String {
 pub fn ollama_chat_body(
     model: &str,
     system: &str,
+    summary: Option<&str>,
     history: &[Message],
     images: &HashMap<String, Vec<String>>,
     can_think: bool,
@@ -233,6 +349,12 @@ pub fn ollama_chat_body(
     let (system, clock) = split_clock(system);
     if !system.is_empty() {
         messages.push(json!({ "role": "system", "content": system }));
+    }
+    if let Some(summary) = summary.filter(|s| !s.trim().is_empty()) {
+        messages.push(json!({
+            "role": "system",
+            "content": format!("Summary of the earlier part of this conversation (those messages aren't shown):\n{summary}"),
+        }));
     }
     let start = history.len().saturating_sub(HISTORY);
     for m in &history[start..] {
@@ -285,12 +407,14 @@ mod tests {
         // In a chat, the clock sits just before the newest message, not at the top.
         let history = vec![msg(1, "user", "date?"), msg(2, "assistant", "23 September 2025"), msg(3, "user", "and now?")];
         let system = format!("Be terse.\n\n{}", clock_line(now, sydney.as_ref()));
-        let body = ollama_chat_body("m", &system, &history, &HashMap::new(), false, None);
+        let body = ollama_chat_body("m", &system, Some("The user is Dan."), &history, &HashMap::new(), false, None);
         let m = body["messages"].as_array().unwrap();
         assert_eq!(m[0]["content"], "Be terse.");
-        assert_eq!(m[3]["role"], "system");
-        assert!(m[3]["content"].as_str().unwrap().starts_with("Current date and time for the user: Friday, 30 October 2026"));
-        assert_eq!(m[4]["content"], "and now?");
+        // The chat's summary of its older part comes next.
+        assert!(m[1]["content"].as_str().unwrap().ends_with("The user is Dan."));
+        assert_eq!(m[4]["role"], "system");
+        assert!(m[4]["content"].as_str().unwrap().starts_with("Current date and time for the user: Friday, 30 October 2026"));
+        assert_eq!(m[5]["content"], "and now?");
         // Nonsense from an app is ignored.
         assert!(UserClock::from_app(Some(5000), None).is_none());
         assert_eq!(UserClock::from_app(Some(60), Some("Not a zone!")).unwrap().zone, None);
@@ -311,26 +435,46 @@ mod tests {
     }
 
     #[test]
+    fn long_chats_fold_their_oldest_messages_now_and_then() {
+        let chat = |n: i64, words: usize| -> Vec<Message> {
+            (1..=n).map(|i| msg(i, if i % 2 == 1 { "user" } else { "assistant" }, &"word ".repeat(words))).collect()
+        };
+        // Short chat: nothing to do.
+        assert_eq!(plan_fold(&chat(10, 20), 9000), None);
+        // Over the message limit: fold down to half of it.
+        let fold = plan_fold(&chat(41, 5), 9000).unwrap();
+        assert_eq!(41 - fold, HISTORY / 2);
+        // Over the token budget: fold until the rest is under half the budget.
+        let long = chat(20, 600); // about 1000 tokens each
+        let fold = plan_fold(&long, 9000).unwrap();
+        let left: usize = long[fold..].iter().map(estimate_tokens).sum();
+        assert!(left <= 4500, "{left}");
+        // The newest two always stay, however big.
+        let huge = chat(3, 30_000);
+        assert_eq!(plan_fold(&huge, 9000), Some(1));
+    }
+
+    #[test]
     fn body_has_system_history_and_think_switch() {
         let history: Vec<_> = (1..=50)
             .map(|i| msg(i, if i % 2 == 1 { "user" } else { "assistant" }, &format!("m{i}")))
             .collect();
         let none = HashMap::new();
-        let b = ollama_chat_body("qwen3.5:9b", "Be terse.", &history, &none, true, None);
+        let b = ollama_chat_body("qwen3.5:9b", "Be terse.", None, &history, &none, true, None);
         let msgs = b["messages"].as_array().unwrap();
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs.len(), 1 + HISTORY);
         assert_eq!(msgs.last().unwrap()["content"], "m50");
         assert_eq!(b["think"], false);
 
-        let no_think = ollama_chat_body("gemma", "", &history[..1], &none, false, None);
+        let no_think = ollama_chat_body("gemma", "", None, &history[..1], &none, false, None);
         assert!(no_think.get("think").is_none());
         assert_eq!(no_think["messages"].as_array().unwrap().len(), 1);
         assert!(no_think["messages"][0].get("images").is_none());
 
         let mut imgs = HashMap::new();
         imgs.insert("50".to_string(), vec!["aGk=".to_string()]);
-        let seeing = ollama_chat_body("ornith", "", &history, &imgs, false, None);
+        let seeing = ollama_chat_body("ornith", "", None, &history, &imgs, false, None);
         let last = seeing["messages"].as_array().unwrap().last().unwrap().clone();
         assert_eq!(last["images"][0], "aGk=");
     }

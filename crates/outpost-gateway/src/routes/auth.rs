@@ -139,3 +139,21 @@ pub async fn change_my_secret(
     .await;
     Ok(StatusCode::NO_CONTENT)
 }
+
+/// Check my PIN (sent as `X-Outpost-Pin`), e.g. when someone picks their account on a
+/// shared PC that uses a server. Wrong PINs count towards the account's lockout.
+#[utoipa::path(post, path = "/api/me/check-pin", tag = "auth", security(("bearer" = [])),
+    responses((status = 204, description = "That's my PIN"),
+        (status = 401, description = "Wrong PIN; see `attempts_left`", body = ErrorBody),
+        (status = 403, description = "No PIN sent", body = ErrorBody),
+        (status = 429, description = "Locked; see `retry_after`", body = ErrorBody)))]
+pub async fn check_pin(State(state): State<AppState>, auth: Auth, headers: axum::http::HeaderMap) -> ApiResult<StatusCode> {
+    let pin = headers
+        .get("x-outpost-pin")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| crate::error::ApiError::forbidden("Send the PIN as X-Outpost-Pin."))?;
+    outpost_core::auth::check_secret(&state.pool, &auth.account.id, pin, "switch_account").await?;
+    Ok(StatusCode::NO_CONTENT)
+}

@@ -6,7 +6,7 @@ use anyhow::{anyhow, bail};
 use tokio::process::Command;
 
 use crate::manager::{Ctx, Installed};
-use crate::versions::{self, exe, OLLAMA_CONTEXT_LENGTH, OLLAMA_PORT, OLLAMA_VERSION};
+use crate::versions::{self, exe, OLLAMA_PORT, OLLAMA_VERSION};
 use crate::{archive, download};
 
 pub async fn install(ctx: &Ctx) -> anyhow::Result<Installed> {
@@ -54,8 +54,9 @@ pub async fn install(ctx: &Ctx) -> anyhow::Result<Installed> {
 }
 
 /// `ollama serve` on 127.0.0.1, keeping models in Outpost's models folder so a
-/// reinstall never deletes them.
-pub fn command(dir: &Path, models_root: &Path) -> anyhow::Result<Command> {
+/// reinstall never deletes them, with a context window of `context` tokens (see
+/// [`versions::context_length_for`]).
+pub fn command(dir: &Path, models_root: &Path, context: u32) -> anyhow::Result<Command> {
     let app = dir.join("app");
     let bin = archive::find_file(&app, &exe("ollama"))
         .ok_or_else(|| anyhow!("Ollama's files are missing. Reinstall it from Settings."))?;
@@ -66,9 +67,9 @@ pub fn command(dir: &Path, models_root: &Path) -> anyhow::Result<Command> {
         .current_dir(&app)
         .env("OLLAMA_HOST", format!("127.0.0.1:{OLLAMA_PORT}"))
         .env("OLLAMA_MODELS", models)
-        // A 64K window for agents, kept affordable: flash attention plus an 8-bit KV
+        // A window sized to the card, kept affordable: flash attention plus an 8-bit KV
         // cache roughly halves the memory the window needs.
-        .env("OLLAMA_CONTEXT_LENGTH", OLLAMA_CONTEXT_LENGTH.to_string())
+        .env("OLLAMA_CONTEXT_LENGTH", context.to_string())
         .env("OLLAMA_FLASH_ATTENTION", "1")
         .env("OLLAMA_KV_CACHE_TYPE", "q8_0");
     Ok(cmd)

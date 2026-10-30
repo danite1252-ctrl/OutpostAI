@@ -3,6 +3,7 @@ import {
   api,
   ApiError,
   GATEWAY,
+  rememberPerson,
   saveServerToken,
   SERVER,
   type DirectoryEntry,
@@ -10,7 +11,7 @@ import {
   type ServerProbe,
   type SignInResponse,
 } from "./api";
-import { ConnectServer, PinPromptHost } from "./components/server";
+import { ConnectServer, PinPromptHost, WhoPicker } from "./components/server";
 import Connecting from "./screens/Connecting";
 import Setup from "./screens/Setup";
 import EngineSetup from "./screens/EngineSetup";
@@ -29,8 +30,13 @@ type Stage =
   // Connecting this app to a server (from the first-run screen or Settings).
   | { kind: "server" }
   // Using a server, but not signed in to it (unpaired, or it was reset).
-  | { kind: "server-again"; probe: ServerProbe }
+  | { kind: "server-again"; probe: ServerProbe; adding?: boolean }
+  // A shared PC using a server: who's using it?
+  | { kind: "who" }
   | { kind: "unreachable"; reason: string };
+
+/** More than one person is paired on this PC (it then asks who's using it). */
+const shared = () => (SERVER?.people.length ?? 0) > 1;
 
 /** Lock back to the account picker after this long without input. */
 const IDLE_LOCK_MS = 15 * 60 * 1000;
@@ -56,10 +62,20 @@ export default function App() {
             return;
           }
           const probe: ServerProbe = { host: SERVER.host, port: SERVER.port, fingerprint: SERVER.fingerprint, words: SERVER.words, health: h };
+          if (shared() && !h.setup_required) {
+            if (!cancelled) setStage({ kind: "who" });
+            return;
+          }
           const token = SERVER.token;
           if (token && !h.setup_required) {
             try {
               const me = await api.me(token);
+              await rememberPerson({
+                account_id: me.account.id,
+                name: me.account.name,
+                avatar_color: me.account.avatar_color,
+                token,
+              }).catch(() => undefined);
               if (!cancelled) setStage({ kind: "app", auth: { token, ...me } });
               return;
             } catch (e) {
@@ -91,15 +107,22 @@ export default function App() {
     setStage({ kind: "picker" });
   }, []);
 
-  // Idle lock while signed in. (Using a server, this app is a paired device that stays
-  // signed in, like a phone.)
+  // Back to "Who's using Outpost?" on a shared PC using a server (everyone stays paired).
+  const lockShared = useCallback(() => {
+    clearImageCache();
+    setStage({ kind: "who" });
+  }, []);
+
+  // Idle lock while signed in. (Using a server, a PC with one person on it is a paired
+  // device that stays signed in, like a phone; a shared one locks.)
   useEffect(() => {
-    if (stage.kind !== "app" || SERVER) return;
+    if (stage.kind !== "app" || (SERVER && !shared())) return;
     const token = stage.auth.token;
-    let timer = window.setTimeout(() => void lock(token), IDLE_LOCK_MS);
+    const idle = () => (SERVER ? lockShared() : void lock(token));
+    let timer = window.setTimeout(idle, IDLE_LOCK_MS);
     const reset = () => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => void lock(token), IDLE_LOCK_MS);
+      timer = window.setTimeout(idle, IDLE_LOCK_MS);
     };
     const events = ["pointerdown", "keydown", "wheel"] as const;
     events.forEach((e) => window.addEventListener(e, reset, { passive: true }));
@@ -107,7 +130,7 @@ export default function App() {
       window.clearTimeout(timer);
       events.forEach((e) => window.removeEventListener(e, reset));
     };
-  }, [stage, lock]);
+  }, [stage, lock, lockShared]);
 
   // Signed out by the server (unpaired elsewhere): pair again.
   const signedOut = useCallback(() => {
@@ -117,6 +140,16 @@ export default function App() {
       setStage({ kind: "picker" });
     }
   }, []);
+
+  // Pair one more person on this PC (with their pairing code or invite).
+  function addPerson() {
+    if (!SERVER || !health) return;
+    setStage({
+      kind: "server-again",
+      adding: true,
+      probe: { host: SERVER.host, port: SERVER.port, fingerprint: SERVER.fingerprint, words: SERVER.words, health },
+    });
+  }
 
   return (
     <>
@@ -134,7 +167,14 @@ export default function App() {
     case "server":
       return <ConnectServer onCancel={() => setStage({ kind: "connecting" })} />;
     case "server-again":
-      return <ConnectServer again={{ probe: stage.probe, base: GATEWAY }} />;
+      return (
+        <ConnectServer
+          again={{ probe: stage.probe, base: GATEWAY }}
+          onCancel={stage.adding ? () => setStage(shared() ? { kind: "who" } : { kind: "connecting" }) : undefined}
+        />
+      );
+    case "who":
+      return <WhoPicker onPicked={(auth) => setStage({ kind: "app", auth })} onAdd={addPerson} />;
     case "setup":
       return (
         <Setup
@@ -165,9 +205,10 @@ export default function App() {
         <Shell
           auth={stage.auth}
           version={health?.version ?? ""}
-          onLock={SERVER ? undefined : () => void lock(stage.auth.token)}
+          onLock={SERVER ? (shared() ? lockShared : undefined) : () => void lock(stage.auth.token)}
           onSignedOutElsewhere={signedOut}
           onUseServer={() => setStage({ kind: "server" })}
+          onAddPerson={SERVER ? addPerson : undefined}
         />
       );
   }

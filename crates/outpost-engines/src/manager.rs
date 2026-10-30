@@ -333,7 +333,10 @@ impl EngineManager {
                 return Err(EngineError::NotInstalled);
             }
             let cmd = match id {
-                EngineId::Ollama => ollama::command(&slot.dir, &self.models_root),
+                EngineId::Ollama => {
+                    let vram = self.gpus.get().and_then(|g| g.iter().map(|g| g.vram_mb).max()).unwrap_or(0);
+                    ollama::command(&slot.dir, &self.models_root, versions::context_length_for(vram))
+                }
                 EngineId::Comfyui => comfyui::command(&slot.dir, &self.models_root),
                 EngineId::Voice => voice::command(&slot.dir, &self.models_root),
             };

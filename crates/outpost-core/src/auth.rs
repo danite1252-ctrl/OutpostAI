@@ -47,6 +47,16 @@ pub async fn sign_in(
 
 /// Check a PIN or password without starting a session (e.g. before changing it).
 /// Wrong attempts count towards the lockout exactly like a sign-in.
+/// Is this the account's PIN? For reading another Outpost's data on this computer (opened
+/// read-only, so without the lockout counter: callers slow wrong guesses down themselves).
+pub async fn secret_matches(pool: &SqlitePool, account_id: &str, secret: &str) -> CoreResult<bool> {
+    let row = accounts::get_row(pool, account_id).await?;
+    Ok(row
+        .secret_hash
+        .as_deref()
+        .is_some_and(|hash| crate::secret::verify_secret(secret, hash)))
+}
+
 pub async fn check_secret(pool: &SqlitePool, account_id: &str, secret: &str, context: &str) -> CoreResult<Account> {
     let row = accounts::get_row(pool, account_id).await?;
     if Role::parse(&row.role)? == Role::Service {

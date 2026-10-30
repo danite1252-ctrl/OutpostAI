@@ -3162,6 +3162,7 @@ dependencies = [
 name = "outpost-desktop"
 version = "0.1.7"
 dependencies = [
+ "outpost-core",
  "outpost-engines",
  "outpost-gateway",
  "serde",

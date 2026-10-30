@@ -370,6 +370,8 @@ export interface HelloResponse {
   name: string;
   version: string;
   accounts: Account[];
+  /** An invite: who it's for. The person picks a PIN instead of choosing an account. */
+  invite?: { kind: "join" | "reset"; name: string; role: string | null } | null;
 }
 
 export function fraction(p: Progress | null): number | null {

@@ -36,6 +36,7 @@ export default function Shell({
   onLock,
   onSignedOutElsewhere,
   onUseServer,
+  onAddPerson,
 }: {
   auth: SignInResponse;
   version: string;
@@ -43,6 +44,8 @@ export default function Shell({
   onLock?: () => void;
   onSignedOutElsewhere: () => void;
   onUseServer: () => void;
+  /** Using a server: pair one more person on this PC. */
+  onAddPerson?: () => void;
 }) {
   const [section, setSection] = useState<Section>("chat");
   const [createRequest, setCreateRequest] = useState<CreateRequest | null>(null);
@@ -179,6 +182,7 @@ export default function Shell({
               onEnginesChanged={() => void refreshEngines()}
               onSignedOut={onSignedOutElsewhere}
               onUseServer={onUseServer}
+              onAddPerson={onAddPerson}
             />
           )}
           {section === "connections" && <Connections auth={auth} />}

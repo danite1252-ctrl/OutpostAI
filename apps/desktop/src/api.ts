@@ -13,6 +13,15 @@ export interface ServerInfo {
   words: string[];
   fingerprint: string;
   token: string | null;
+  /** Everyone paired on this PC (a shared PC), each with their own sign-in. */
+  people: Person[];
+}
+
+export interface Person {
+  account_id: string;
+  name: string;
+  avatar_color: string;
+  token: string;
 }
 export let SERVER: ServerInfo | null = null;
 
@@ -26,12 +35,42 @@ export async function initGateway() {
   SERVER = await invoke<ServerInfo | null>("server_status");
 }
 
-/** Keep (or forget) this app's sign-in on its server. */
+/** Switch to (or with null, sign out of) a sign-in on this app's server. Signing out also
+ * forgets that person on this PC. */
 export async function saveServerToken(token: string | null) {
   if (!inTauri() || !SERVER) return;
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("save_server_token", { token });
-  SERVER = { ...SERVER, token };
+  const people = token === null ? SERVER.people.filter((p) => p.token !== SERVER?.token) : SERVER.people;
+  SERVER = { ...SERVER, token, people };
+}
+
+/** Make sure the signed-in person is in this PC's list (sign-ins from before shared PCs). */
+export async function rememberPerson(person: Person) {
+  if (!inTauri() || !SERVER || SERVER.people.some((p) => p.account_id === person.account_id)) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("save_server", {
+    host: SERVER.host,
+    port: SERVER.port,
+    fingerprint: SERVER.fingerprint,
+    name: SERVER.name,
+    token: person.token,
+    person,
+  });
+  SERVER = { ...SERVER, token: person.token, people: [...SERVER.people, person] };
+}
+
+/** Forget one person on this shared PC. */
+export async function forgetPerson(accountId: string) {
+  if (!inTauri() || !SERVER) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("forget_person", { accountId });
+  const gone = SERVER.people.find((p) => p.account_id === accountId);
+  SERVER = {
+    ...SERVER,
+    people: SERVER.people.filter((p) => p.account_id !== accountId),
+    token: gone && gone.token === SERVER.token ? null : SERVER.token,
+  };
 }
 
 /** Asks for the PIN when the server wants it again for a risky action (a paired device,
@@ -86,6 +125,8 @@ export interface ModelEntry {
   object: "model";
   created: number;
   owned_by: string;
+  /** Ollama's context window on this Outpost, in tokens. */
+  context_length?: number;
 }
 
 export type EngineId = "ollama" | "comfyui" | "voice";
@@ -301,6 +342,8 @@ export interface PairingView {
   link: string;
   qr_svg: string;
   name: string;
+  /** For an invite: who it's for. */
+  invite?: { kind: "join" | "reset"; name: string; role: string | null } | null;
 }
 
 export interface PairingStatus {
@@ -404,6 +447,8 @@ export interface PairHello {
   name: string;
   version: string;
   accounts: DirectoryEntry[];
+  /** An invite: who it's for (the person then picks a PIN). */
+  invite?: { kind: "join" | "reset"; name: string; role: string | null } | null;
 }
 
 /** Connecting this app to a server: calls go through a trial tunnel (`base`) until it
@@ -423,10 +468,19 @@ export const serverSetup = {
   hello: (base: string, code: string) => request<PairHello>("POST", "/api/pair/hello", { base, body: { code } }),
   complete: (base: string, body: { code: string; account_id: string; secret: string; device_name: string }) =>
     request<SignInResponse>("POST", "/api/pair/complete", { base, body }),
+  accept: (base: string, body: { code: string; secret: string; device_name: string }) =>
+    request<SignInResponse>("POST", "/api/pair/accept", { base, body }),
   me: (base: string, token: string) =>
     request<{ account: Account; session: Session }>("GET", "/api/me", { base, token }),
-  /** Use this server from now on; the app restarts into it. */
-  async switchTo(p: { host: string; port: number; fingerprint: string; name: string; token: string | null }) {
+  /** Use this server from now on, signed in as this person; the app restarts into it. */
+  async switchTo(p: {
+    host: string;
+    port: number;
+    fingerprint: string;
+    name: string;
+    token: string | null;
+    person: Person | null;
+  }) {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("save_server", p);
     const { relaunch } = await import("@tauri-apps/plugin-process");
@@ -444,6 +498,8 @@ export const serverSetup = {
 export const api = {
   health: () => request<Health>("GET", "/api/health"),
   me: (token: string) => request<{ account: Account; session: Session }>("GET", "/api/me", { token }),
+  /** Is this the PIN of the account `token` belongs to? (Picking an account on a shared PC.) */
+  checkPin: (token: string, pin: string) => send<void>("POST", "/api/me/check-pin", { token, pin }),
   directory: () => request<DirectoryEntry[]>("GET", "/api/accounts/directory"),
   setupOwner: (name: string, secret: string) =>
     request<SignInResponse>("POST", "/api/setup/owner", { body: { name, secret } }),
@@ -508,6 +564,9 @@ export const api = {
       body: { lan_access: lanAccess, tailscale_access: tailscaleAccess ?? null },
     }),
   createPairing: (token: string) => request<PairingView>("POST", "/api/pairing", { token }),
+  /** Invite someone new (`name`, `role`), or send a PIN reset (`account_id`). */
+  createInvite: (token: string, body: { name?: string; role?: Role; account_id?: string }) =>
+    request<PairingView>("POST", "/api/invites", { token, body }),
   pairingStatus: (token: string, id: string) =>
     request<PairingStatus>("GET", `/api/pairing/${encodeURIComponent(id)}`, { token }),
   devices: (token: string, all = false) => request<DeviceView[]>("GET", `/api/devices${all ? "?all=true" : ""}`, { token }),

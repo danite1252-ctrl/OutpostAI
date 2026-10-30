@@ -4,6 +4,7 @@ import { EnginesPanel } from "../components/engines";
 import { DiagnosticsPanel, UpdatesPanel, WindowPanel } from "../components/system";
 import { Avatar, Button, ErrorNote, Field } from "../components/ui";
 import { ServerPanel } from "../components/server";
+import { PairDialog } from "./Connections";
 
 const ROLES: { value: Role; label: string; hint: string }[] = [
   { value: "member", label: "Member", hint: "Full use; can't manage the Outpost" },
@@ -23,6 +24,7 @@ export default function Settings({
   onEnginesChanged,
   onSignedOut,
   onUseServer,
+  onAddPerson,
 }: {
   auth: SignInResponse;
   version: string;
@@ -30,6 +32,7 @@ export default function Settings({
   onEnginesChanged: () => void;
   onSignedOut: () => void;
   onUseServer: () => void;
+  onAddPerson?: () => void;
 }) {
   const isOwner = auth.account.role === "owner";
   return (
@@ -44,7 +47,7 @@ export default function Settings({
         App keys, paired phones and network access are under <b className="text-ink">Connections</b> in the side bar.
       </p>
       <ChangeMySecret token={auth.token} onChanged={onSignedOut} />
-      <ServerPanel isOwner={isOwner} onConnect={onUseServer} />
+      <ServerPanel token={auth.token} isOwner={isOwner} onConnect={onUseServer} onAddPerson={onAddPerson} />
       <WindowPanel />
       <UpdatesPanel token={auth.token} canManage={isOwner} />
       {isOwner && <DiagnosticsPanel token={auth.token} />}
@@ -59,6 +62,8 @@ function AccountsPanel({ token, selfId }: { token: string; selfId: string }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [resetFor, setResetFor] = useState<Account | null>(null);
+  // An invite to show: someone new, or a PIN reset they do on their own device.
+  const [invite, setInvite] = useState<{ title: string; body: { name?: string; role?: Role; account_id?: string } } | null>(null);
 
   const load = useCallback(() => {
     api.listAccounts(token).then(setAccounts, (e) => setError(message(e)));
@@ -90,6 +95,15 @@ function AccountsPanel({ token, selfId }: { token: string; selfId: string }) {
               <span className="text-xs text-muted capitalize">{a.role}</span>
             </span>
             {a.role !== "service" && (
+              <Button
+                variant="ghost"
+                title="A code they use on their own device to pick a new PIN"
+                onClick={() => setInvite({ title: `PIN reset for ${a.name}`, body: { account_id: a.id } })}
+              >
+                Send PIN reset
+              </Button>
+            )}
+            {a.role !== "service" && (
               <Button variant="ghost" onClick={() => setResetFor(a)}>
                 Set new PIN
               </Button>
@@ -105,21 +119,50 @@ function AccountsPanel({ token, selfId }: { token: string; selfId: string }) {
       {resetFor && (
         <ResetSecret token={token} account={resetFor} onClose={() => setResetFor(null)} />
       )}
-      <AddAccount token={token} onAdded={load} />
+      <AddAccount token={token} onAdded={load} onInvite={(name, role) => setInvite({ title: `Invite ${name}`, body: { name, role } })} />
+      {invite && (
+        <PairDialog
+          token={token}
+          title={invite.title}
+          make={() => api.createInvite(token, invite.body)}
+          onClose={() => {
+            setInvite(null);
+            load();
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function AddAccount({ token, onAdded }: { token: string; onAdded: () => void }) {
+function AddAccount({
+  token,
+  onAdded,
+  onInvite,
+}: {
+  token: string;
+  onAdded: () => void;
+  onInvite: (name: string, role: Role) => void;
+}) {
   const [name, setName] = useState("");
   const [role, setRole] = useState<Role>("member");
   const [secret, setSecret] = useState("");
+  // Most people pick their own PIN on their own device (an invite).
+  const [byInvite, setByInvite] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     const isService = role === "service";
+    if (byInvite && !isService) {
+      if (!name.trim()) return setError("Enter a name.");
+      setError(null);
+      onInvite(name.trim(), role);
+      setName("");
+      setRole("member");
+      return;
+    }
     const problem = !name.trim() ? "Enter a name." : isService ? null : secretProblem(secret);
     if (problem) return setError(problem);
     setBusy(true);
@@ -142,7 +185,7 @@ function AddAccount({ token, onAdded }: { token: string; onAdded: () => void }) 
       <h3 className="font-medium">Add an account</h3>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Field label="Name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} />
-        {role !== "service" && (
+        {role !== "service" && !byInvite && (
           <Field
             label="Their PIN or password"
             type="password"
@@ -178,9 +221,15 @@ function AddAccount({ token, onAdded }: { token: string; onAdded: () => void }) 
           ))}
         </div>
       </fieldset>
+      {role !== "service" && (
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={byInvite} onChange={(e) => setByInvite(e.target.checked)} className="accent-ember" />
+          Send them an invite, so they pick their own PIN on their phone or PC
+        </label>
+      )}
       <ErrorNote>{error}</ErrorNote>
       <Button type="submit" disabled={busy} className="self-start">
-        {busy ? "Adding…" : "Add account"}
+        {busy ? "Adding…" : byInvite && role !== "service" ? "Make an invite" : "Add account"}
       </Button>
     </form>
   );

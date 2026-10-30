@@ -98,6 +98,9 @@ export default function Pair({ onPaired }: { onPaired: (s: Saved) => void }) {
         />
       );
     case "accounts":
+      if (step.hello.invite) {
+        return <NewPin step={step} invite={step.hello.invite} onBack={() => go({ kind: "find" })} onPaired={onPaired} />;
+      }
       return (
         <View style={s.screen}>
           <ScrollView contentContainerStyle={s.pad}>
@@ -355,6 +358,88 @@ function Pin({
       </Pressable>
       <Field label="Name this phone" value={device} onChangeText={setDevice} maxLength={60} />
       <Button title="Pair" busy={busy} disabled={!pin} onPress={() => void pair()} />
+      <Button kind="ghost" title="Back" onPress={onBack} />
+      <ErrorText>{error}</ErrorText>
+    </View>
+  );
+}
+
+/** An invite: the person picks their own PIN, which makes their account (or resets it). */
+function NewPin({
+  step,
+  invite,
+  onBack,
+  onPaired,
+}: {
+  step: Extract<Step, { kind: "accounts" }>;
+  invite: NonNullable<HelloResponse["invite"]>;
+  onBack: () => void;
+  onPaired: (s: Saved) => void;
+}) {
+  const [pin, setPin] = useState("");
+  const [again, setAgain] = useState("");
+  const [numeric, setNumeric] = useState(true);
+  const [device, setDevice] = useState(defaultDevice);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function join() {
+    if (pin !== again) return setError("The two entries don't match.");
+    const ok = numeric ? /^\d{4,12}$/.test(pin) : pin.length >= 6;
+    if (!ok) return setError(numeric ? "A PIN is 4 to 12 digits." : "A password needs at least 6 characters.");
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await new Outpost(step.target).json<SignInResponse>("POST", "/api/pair/accept", {
+        code: step.code,
+        secret: pin,
+        device_name: device.trim() || "Phone",
+      });
+      onPaired({
+        ...step.target,
+        name: step.hello.name,
+        token: r.token,
+        account: r.account,
+        sessionId: r.session.id,
+        device: r.session.label,
+      });
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <View style={[s.screen, s.pad]}>
+      <H1>{invite.kind === "join" ? `Welcome, ${invite.name}` : `New PIN for ${invite.name}`}</H1>
+      <P muted>
+        {invite.kind === "join"
+          ? `You're joining ${step.hello.name}. Pick your own PIN: this phone stays signed in, and asks for it before big changes.`
+          : "Pick a new PIN. It replaces the old one, and your other devices will need to sign in again."}
+      </P>
+      <Field
+        label={numeric ? "PIN" : "Password"}
+        value={pin}
+        onChangeText={setPin}
+        secureTextEntry
+        autoFocus
+        autoCapitalize="none"
+        keyboardType={numeric ? "number-pad" : "default"}
+      />
+      <Field
+        label="Again"
+        value={again}
+        onChangeText={setAgain}
+        secureTextEntry
+        autoCapitalize="none"
+        keyboardType={numeric ? "number-pad" : "default"}
+      />
+      <Pressable accessibilityRole="button" onPress={() => setNumeric((n) => !n)}>
+        <Text style={{ color: C.ember }}>{numeric ? "Use a password instead" : "Use a PIN"}</Text>
+      </Pressable>
+      <Field label="Name this phone" value={device} onChangeText={setDevice} maxLength={60} />
+      <Button title={invite.kind === "join" ? "Join" : "Save my new PIN"} busy={busy} disabled={!pin || !again} onPress={() => void join()} />
       <Button kind="ghost" title="Back" onPress={onBack} />
       <ErrorText>{error}</ErrorText>
     </View>
