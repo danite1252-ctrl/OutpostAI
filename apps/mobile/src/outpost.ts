@@ -321,6 +321,8 @@ export interface Pack {
   inputs: PackInput[];
   models: { ready: boolean; missing_gb: number };
   missing_nodes: string[];
+  /** The helper PC that runs it (the server can't): "Runs on Dan's PC". */
+  runs_on?: string | null;
 }
 
 export interface Media {

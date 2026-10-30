@@ -23,6 +23,7 @@ function defaults(p: Pack): Values {
 }
 
 function fitText(p: Pack) {
+  if (p.runs_on) return { text: `Runs on ${p.runs_on}`, color: C.ok };
   if (p.missing_nodes.length) return { text: "Needs a newer ComfyUI", color: C.muted };
   if (p.fit === "too_large") return { text: "Too big for the PC", color: C.danger };
   if (p.fit === "partial") return { text: "Runs slowly", color: C.warn };
@@ -84,7 +85,12 @@ export default function Create({
     () =>
       packs
         .filter((p) => p.task === task)
-        .sort((a, b) => Number(b.recommended) - Number(a.recommended) || b.rank - a.rank),
+        .sort(
+          (a, b) =>
+            Number(!!b.runs_on || b.models.ready) - Number(!!a.runs_on || a.models.ready) ||
+            Number(b.recommended) - Number(a.recommended) ||
+            b.rank - a.rank,
+        ),
     [packs, task],
   );
   const pack = options.find((p) => p.id === chosen[task]) ?? options[0] ?? null;
@@ -132,7 +138,9 @@ export default function Create({
     }
   }
 
-  const usable = pack && pack.models.ready && pack.missing_nodes.length === 0 && pack.fit !== "too_large";
+  // On the server, or on a helper PC that lends its graphics card.
+  const usable =
+    pack && (!!pack.runs_on || (pack.models.ready && pack.missing_nodes.length === 0 && pack.fit !== "too_large"));
   const missing = pack?.inputs.some((i) => i.required && !values[i.key]) ?? true;
   const basic = pack?.inputs.filter((i) => !i.advanced) ?? [];
   const advanced = pack?.inputs.filter((i) => i.advanced) ?? [];
@@ -160,7 +168,7 @@ export default function Create({
           <Text style={s.label}>Model</Text>
           {options.map((p) => {
             const f = fitText(p);
-            const blocked = p.fit === "too_large" || p.missing_nodes.length > 0;
+            const blocked = !p.runs_on && (p.fit === "too_large" || p.missing_nodes.length > 0);
             return (
               <Pressable
                 key={p.id}
@@ -173,7 +181,7 @@ export default function Create({
                 <Text style={{ color: C.ink, fontWeight: "600" }}>{p.name}</Text>
                 <Text style={{ color: f.color, fontSize: 13 }}>
                   {f.text}
-                  {p.models.ready ? "" : ` · ${p.models.missing_gb.toFixed(1)} GB to download on the PC`}
+                  {p.models.ready || p.runs_on ? "" : ` · ${p.models.missing_gb.toFixed(1)} GB to download on the PC`}
                 </Text>
               </Pressable>
             );
@@ -183,7 +191,7 @@ export default function Create({
       {pack && (
         <>
           <P muted>{pack.description}</P>
-          {!pack.models.ready ? (
+          {!pack.models.ready && !pack.runs_on ? (
             <P muted>Its models aren't downloaded yet. Download them in Create on the PC, then come back.</P>
           ) : pack.missing_nodes.length > 0 ? (
             <P muted>This workflow needs a newer ComfyUI. Update it in Settings › Engines on the PC.</P>
