@@ -26,6 +26,8 @@ export interface Person {
   token: string;
 }
 export let SERVER: ServerInfo | null = null;
+/** A server this app used before (it now runs Outpost on this PC); going back needs no pairing. */
+export let SAVED_SERVER: ServerInfo | null = null;
 
 const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -35,6 +37,7 @@ export async function initGateway() {
   const { invoke } = await import("@tauri-apps/api/core");
   GATEWAY = await invoke<string>("gateway_url");
   SERVER = await invoke<ServerInfo | null>("server_status");
+  SAVED_SERVER = SERVER ? null : await invoke<ServerInfo | null>("saved_server").catch(() => null);
 }
 
 /** Switch to (or with null, sign out of) a sign-in on this app's server. Signing out also
@@ -506,12 +509,26 @@ export const serverSetup = {
     const { relaunch } = await import("@tauri-apps/plugin-process");
     await relaunch();
   },
-  /** Go back to running Outpost on this PC; the app restarts. */
+  /** Go back to running Outpost on this PC; the app restarts. The server stays saved
+   * (sign-ins and all), so switching back later needs no pairing. */
   async useThisPc() {
     const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("forget_server");
+    await invoke("forget_server", { keep: true });
     const { relaunch } = await import("@tauri-apps/plugin-process");
     await relaunch();
+  },
+  /** Use the saved server again; the app restarts, still signed in. */
+  async goBack() {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("use_saved_server");
+    const { relaunch } = await import("@tauri-apps/plugin-process");
+    await relaunch();
+  },
+  /** Forget the saved server completely (connecting again then means pairing again). */
+  async forgetSaved() {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("forget_server", { keep: false });
+    SAVED_SERVER = null;
   },
 };
 

@@ -135,6 +135,14 @@ struct Server {
     /// as it reports them. `host` (what was typed) is tried too.
     #[serde(default)]
     hosts: Vec<String>,
+    /// In use. "Use Outpost on this PC instead" switches it off but keeps it, sign-ins and
+    /// all, so going back needs no pairing.
+    #[serde(default = "in_use")]
+    active: bool,
+}
+
+fn in_use() -> bool {
+    true
 }
 
 impl Server {
@@ -177,7 +185,13 @@ fn server_file() -> PathBuf {
     data_dir().join("remote.json")
 }
 
+/// The server this app uses now (none while it runs Outpost on this PC).
 fn load_server() -> Option<Server> {
+    load_saved().filter(|s| s.active)
+}
+
+/// The saved server, in use or not.
+fn load_saved() -> Option<Server> {
     let text = std::fs::read_to_string(server_file()).ok()?;
     serde_json::from_str(&text).ok()
 }
@@ -248,14 +262,14 @@ fn save_server(
     token: Option<String>,
     person: Option<Person>,
 ) -> Result<(), String> {
-    let same = load_server().filter(|old| old.fingerprint.eq_ignore_ascii_case(&fingerprint));
+    let same = load_saved().filter(|old| old.fingerprint.eq_ignore_ascii_case(&fingerprint));
     let hosts = same.as_ref().map(|old| old.hosts.clone()).unwrap_or_default();
     let mut people = same.map(|old| old.people).unwrap_or_default();
     if let Some(p) = person {
         people.retain(|q| q.account_id != p.account_id);
         people.push(p);
     }
-    write_server(&Server { host, port, fingerprint, name, token, people, hosts })
+    write_server(&Server { host, port, fingerprint, name, token, people, hosts, active: true })
 }
 
 /// The server's current addresses (from `GET /api/connection`), best first: kept for next
@@ -309,12 +323,43 @@ fn forget_person(account_id: String) -> Result<(), String> {
 
 /// Go back to running Outpost on this PC (the window then restarts the app).
 #[tauri::command]
-fn forget_server() -> Result<(), String> {
+fn forget_server(keep: Option<bool>) -> Result<(), String> {
+    // Kept (the default): switched off, so going back later needs no pairing.
+    if keep.unwrap_or(true) {
+        if let Some(mut server) = load_saved() {
+            server.active = false;
+            return write_server(&server);
+        }
+        return Ok(());
+    }
     match std::fs::remove_file(server_file()) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// The server this app used before, while it runs Outpost on this PC (to go back to it).
+#[tauri::command]
+fn saved_server() -> Option<ServerView> {
+    load_saved().filter(|s| !s.active).map(|s| ServerView {
+        hosts: s.all_hosts(),
+        words: remote::words(&s.fingerprint),
+        host: s.host,
+        port: s.port,
+        name: s.name,
+        fingerprint: s.fingerprint,
+        token: None,
+        people: Vec::new(),
+    })
+}
+
+/// Use the saved server again (the window then restarts the app); its sign-ins still work.
+#[tauri::command]
+fn use_saved_server() -> Result<(), String> {
+    let mut server = load_saved().ok_or("There's no saved server.")?;
+    server.active = true;
+    write_server(&server)
 }
 
 // ------------------------------------------------ this PC's gallery, for copying to a server
@@ -548,6 +593,8 @@ pub fn run() {
             save_server,
             save_server_token,
             save_server_hosts,
+            saved_server,
+            use_saved_server,
             forget_person,
             forget_server,
             local_galleries,

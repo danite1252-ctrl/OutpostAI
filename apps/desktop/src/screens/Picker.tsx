@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type DirectoryEntry } from "../api";
+import { api, SAVED_SERVER, serverSetup, type DirectoryEntry } from "../api";
 import { Avatar, ErrorNote, Mark, Wordmark } from "../components/ui";
 
 const roleLabel = { owner: "Owner", member: "Member", restricted: "Restricted", service: "Service" } as const;
@@ -46,9 +46,19 @@ export default function Picker({
         ))}
       </ul>
       {machineName && <p className="text-xs text-muted">Running on {machineName}</p>}
-      <button type="button" onClick={onUseServer} className="text-xs text-muted underline-offset-2 hover:text-ink hover:underline">
-        Connect to an Outpost server instead
-      </button>
+      {SAVED_SERVER ? (
+        <button
+          type="button"
+          onClick={() => void serverSetup.goBack()}
+          className="text-xs text-muted underline-offset-2 hover:text-ink hover:underline"
+        >
+          Go back to {SAVED_SERVER.name} (your server)
+        </button>
+      ) : (
+        <button type="button" onClick={onUseServer} className="text-xs text-muted underline-offset-2 hover:text-ink hover:underline">
+          Connect to an Outpost server instead
+        </button>
+      )}
     </main>
   );
 }

@@ -128,4 +128,6 @@ address and use it when they're away from home.
 ## Going back
 
 **Settings › Server › Use Outpost on this PC instead** makes the desktop app run Outpost on that
-PC again, with the data it had there before (nothing is moved or deleted either way).
+PC again, with the data it had there before (nothing is moved or deleted either way). The server
+stays saved, still paired: **Go back to Outpost** (in Settings › Server, or under the account
+picker) switches back with no code. **Forget it** clears it, so connecting again means pairing.

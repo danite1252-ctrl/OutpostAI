@@ -12,6 +12,7 @@ import {
   forgetPerson,
   GATEWAY,
   saveServerToken,
+  SAVED_SERVER,
   SERVER,
   systemApi,
   waitForServer,
@@ -535,6 +536,7 @@ export function ServerPanel({
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [restarting, setRestarting] = useState<string | null>(null);
+  const [forgotten, setForgotten] = useState(false);
   return (
     <div className="flex flex-col gap-4">
       <h2 className="text-lg font-semibold">Server</h2>
@@ -595,7 +597,9 @@ export function ServerPanel({
             </div>
             {confirming ? (
               <div className="flex flex-wrap items-center gap-3">
-                <span className="text-sm">Stop using the server and run Outpost on this PC again?</span>
+                <span className="text-sm">
+                  Run Outpost on this PC again? The server stays saved here, so you can come back without pairing.
+                </span>
                 <Button onClick={() => void serverSetup.useThisPc().catch((e) => setError(message(e)))}>Yes, restart</Button>
                 <Button variant="ghost" onClick={() => setConfirming(false)}>
                   Cancel
@@ -616,6 +620,29 @@ export function ServerPanel({
               its chats, pictures, models and graphics card. Outpost on this PC stops while it does, and this PC's
               own data stays here, untouched.
             </p>
+            {SAVED_SERVER && !forgotten && (
+              <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line p-3">
+                <span className="flex-1 text-sm">
+                  This app used <b>{SAVED_SERVER.name}</b> ({SAVED_SERVER.host}) before. It's still paired, so going
+                  back needs no code.
+                </span>
+                <Button onClick={() => void serverSetup.goBack().catch((e) => setError(message(e)))}>
+                  Go back to {SAVED_SERVER.name}
+                </Button>
+                <Button
+                  variant="ghost"
+                  title="Connecting again would then need pairing"
+                  onClick={() =>
+                    void serverSetup
+                      .forgetSaved()
+                      .then(() => setForgotten(true))
+                      .catch((e) => setError(message(e)))
+                  }
+                >
+                  Forget it
+                </Button>
+              </div>
+            )}
             {isOwner && (
               <div>
                 <Button variant="ghost" onClick={onConnect}>
