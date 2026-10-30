@@ -203,6 +203,13 @@ pub struct SendRequest {
     /// `data:image/...;base64,` URLs. The chat's model must have vision.
     #[serde(default)]
     pub images: Vec<String>,
+    /// The app's clock: minutes ahead of UTC (Sydney in summer: 660), so the model knows
+    /// the user's date and time. Remembered for the account.
+    #[serde(default)]
+    pub utc_offset_minutes: Option<i32>,
+    /// Its time zone's name, e.g. "Australia/Sydney".
+    #[serde(default)]
+    pub time_zone: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -299,6 +306,9 @@ pub async fn send_message(
         ));
     }
     let model = resolved.model.clone();
+    if let Some(clock) = llm::UserClock::from_app(req.utc_offset_minutes, req.time_zone.as_deref()) {
+        clock.save(&state, &account_id).await;
+    }
     let system = llm::system_prompt(&state, &account_id, persona.as_ref(), Some(&content)).await?;
 
     // First message names the chat.
@@ -694,7 +704,7 @@ pub async fn plan_pictures(state: &AppState, account_id: &str, prompt: &str) -> 
             "You have {waiting} pictures waiting already, so there's room for {room} more. Let some finish first."
         )));
     }
-    let loras = state.assets.loras();
+    let loras = crate::routes::create::visible_loras(state, account_id).await;
     // The picture workflow for scenes without a character: Outpost's pick among ready ones.
     let picture_pack = {
         let hw = crate::routes::models::measure(state).await;

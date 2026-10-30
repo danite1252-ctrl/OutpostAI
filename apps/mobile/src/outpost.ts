@@ -384,3 +384,14 @@ export function eta(secs: number) {
   const m = Math.round(secs / 60);
   return m < 60 ? `${m} min left` : `${Math.floor(m / 60)} h ${m % 60} min left`;
 }
+
+/** This phone's clock, so the model knows the user's date and time. */
+export function clock(): { utc_offset_minutes: number; time_zone?: string } {
+  let zone: string | undefined;
+  try {
+    zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    zone = undefined;
+  }
+  return { utc_offset_minutes: -new Date().getTimezoneOffset(), time_zone: zone };
+}

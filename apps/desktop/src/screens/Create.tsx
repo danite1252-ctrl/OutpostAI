@@ -829,7 +829,7 @@ function InputField({
                   .filter((l) => !loras.characters.some((c) => c.lora_file === l))
                   .map((l) => (
                     <option key={l} value={l}>
-                      {l.replace(/\.safetensors$/i, "")}
+                      {l.split("/").pop()!.replace(/\.safetensors$/i, "")}
                     </option>
                   ))}
               </optgroup>

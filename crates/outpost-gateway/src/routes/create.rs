@@ -147,7 +147,69 @@ pub struct LoraList {
     pub characters: Vec<outpost_core::training::Character>,
 }
 
-/// LoRA files in Outpost's LoRA folder.
+/// The LoRAs an account may see and use, like personas: its own (uploaded or trained, in
+/// `loras/<account id>/`), plus shared ones at the top of the LoRA folder, except a shared
+/// file that is someone else's character.
+pub async fn visible_loras(state: &AppState, account_id: &str) -> Vec<String> {
+    let everyone = outpost_core::training::characters(&state.pool, None).await.unwrap_or_default();
+    let mut out = state.assets.account_loras(account_id);
+    out.extend(
+        state
+            .assets
+            .loras()
+            .into_iter()
+            .filter(|f| !everyone.iter().any(|c| &c.lora_file == f && c.account_id != account_id)),
+    );
+    out
+}
+
+/// LoRAs used to share one folder. At start-up, move each shared LoRA that clearly belongs to
+/// someone into their own folder: a character's LoRA goes to the character's owner, and an
+/// uploaded one to whoever uploaded it (from the audit log). Ones with no known owner stay
+/// shared. Returns how many moved.
+pub async fn claim_shared_loras(state: &AppState) -> usize {
+    let mut moved = 0;
+    for file in state.assets.loras() {
+        let owner = match outpost_core::training::character_by_lora(&state.pool, &file).await {
+            Ok(Some(c)) => Some(c.account_id),
+            _ => sqlx::query_scalar::<_, Option<String>>(
+                "SELECT account_id FROM audit_log WHERE action = 'lora_upload' AND detail = ? ORDER BY at DESC LIMIT 1",
+            )
+            .bind(&file)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+            .flatten(),
+        };
+        let Some(owner) = owner else { continue };
+        if outpost_core::accounts::get(&state.pool, &owner).await.is_err() {
+            continue;
+        }
+        let dir = state.assets.account_loras_dir(&owner);
+        let (from, to) = (state.assets.loras_dir().join(&file), dir.join(&file));
+        if to.exists() || std::fs::create_dir_all(&dir).is_err() {
+            continue;
+        }
+        if let Err(e) = std::fs::rename(&from, &to) {
+            tracing::warn!(%file, error = %e, "couldn't move a LoRA into its owner's folder");
+            continue;
+        }
+        let rel = format!("{owner}/{file}");
+        if let Err(e) = outpost_core::training::move_character_lora(&state.pool, &file, &rel).await {
+            // Put it back, so the character keeps working.
+            let _ = std::fs::rename(&to, &from);
+            tracing::warn!(%file, error = %e, "couldn't update a character's LoRA");
+            continue;
+        }
+        outpost_core::audit::log_quiet(&state.pool, Some(&owner), None, "lora_made_private", Some(&rel)).await;
+        tracing::info!(%file, "moved a LoRA into its owner's own folder");
+        moved += 1;
+    }
+    moved
+}
+
+/// My LoRAs (and shared ones), with which are my characters.
 #[utoipa::path(get, path = "/api/loras", tag = "create", security(("bearer" = [])),
     responses((status = 200, description = "LoRAs", body = LoraList)))]
 pub async fn list_loras(State(state): State<AppState>, auth: Auth) -> Json<LoraList> {
@@ -158,8 +220,8 @@ pub async fn list_loras(State(state): State<AppState>, auth: Auth) -> Json<LoraL
         let _ = outpost_core::training::fill_subject(&state.pool, c).await;
     }
     Json(LoraList {
-        loras: state.assets.loras(),
-        folder: state.assets.loras_dir().to_string_lossy().to_string(),
+        loras: visible_loras(&state, &auth.account.id).await,
+        folder: state.assets.account_loras_dir(&auth.account.id).to_string_lossy().to_string(),
         characters,
     })
 }
@@ -216,8 +278,9 @@ fn looks_like_safetensors(start: &[u8], total: u64) -> bool {
     n >= 2 && n < 100 * 1024 * 1024 && 8 + n <= total && start[8] == b'{'
 }
 
-/// Upload a LoRA you already have (trained elsewhere, or on another Outpost) into the LoRA
-/// folder, and optionally make it one of your characters. The body is the file itself.
+/// Upload a LoRA you already have (trained elsewhere, or on another Outpost) into your own
+/// LoRA folder (only you see it), and optionally make it one of your characters. The body
+/// is the file itself; the reply's `file` (`<account id>/<name>`) is what packs take.
 #[utoipa::path(post, path = "/api/loras", tag = "create", security(("bearer" = [])),
     params(LoraUpload),
     request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "The .safetensors file"),
@@ -251,16 +314,19 @@ pub async fn upload_lora(
         (Some(_), None) => return Err(ApiError::bad_request("A character needs its trigger word.")),
         _ => None,
     };
-    let dir = state.assets.loras_dir();
+    // Into my own LoRA folder: only I see and use it.
+    let dir = state.assets.account_loras_dir(&auth.account.id);
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| ApiError::conflict(format!("Couldn't make the LoRA folder: {e}")))?;
     let target = dir.join(&file);
+    let name = file.clone();
+    let file = format!("{}/{name}", auth.account.id);
     if target.exists() && !q.replace.unwrap_or(false) {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "exists",
-            format!("There's already a LoRA called {file}. Replace it, or rename yours."),
+            format!("You already have a LoRA called {file}. Replace it, or rename yours."),
         ));
     }
     // Into a hidden part file first, so a half-finished upload never shows up as a LoRA.
@@ -423,7 +489,7 @@ pub async fn create_job(
         inputs.insert(input.key.clone(), serde_json::json!({ "$file": rel }));
     }
     // Validate by building once (the real build happens when the job runs).
-    if let Err(e) = pack.build(&inputs, || 0, &uploaded, &state.assets.loras()) {
+    if let Err(e) = pack.build(&inputs, || 0, &uploaded, &visible_loras(&state, &auth.account.id).await) {
         attachments::remove_files(&saved).await;
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid", e.to_string()));
     }

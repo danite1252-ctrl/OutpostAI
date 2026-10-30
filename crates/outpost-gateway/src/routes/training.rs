@@ -771,27 +771,21 @@ pub async fn use_checkpoint(
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "That checkpoint isn't saved."))?;
     let src = trainer::checkpoint_path(&run_dir, &cp.file)
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "That checkpoint's file is missing."))?;
-    let lora_file = format!("{}.safetensors", t.trigger_word);
+    // Into my own LoRA folder, so only I see and use it.
+    let name = format!("{}.safetensors", t.trigger_word);
+    let lora_file = format!("{}/{name}", auth.account.id);
     let existing = training::character_by_lora(&state.pool, &lora_file).await?;
-    match &existing {
-        Some(c) if c.account_id != auth.account.id => {
-            return Err(ApiError::conflict(format!(
-                "Someone else's character already uses {lora_file}. Change the trigger word and train again."
-            )))
-        }
-        None if state.assets.loras().contains(&lora_file) => {
-            return Err(ApiError::conflict(format!(
-                "There's already a {lora_file} in the LoRA folder. Move it, or change the trigger word."
-            )))
-        }
-        _ => {}
+    let dir = state.assets.account_loras_dir(&auth.account.id);
+    if existing.is_none() && dir.join(&name).exists() {
+        return Err(ApiError::conflict(format!(
+            "You already have a LoRA called {name}. Change the trigger word, or replace it with Add LoRA."
+        )));
     }
-    let dir = state.assets.loras_dir();
     let copy = async {
         tokio::fs::create_dir_all(&dir).await?;
-        let part = dir.join(format!("{lora_file}.part"));
+        let part = dir.join(format!(".{name}.part"));
         tokio::fs::copy(&src, &part).await?;
-        tokio::fs::rename(&part, dir.join(&lora_file)).await
+        tokio::fs::rename(&part, dir.join(&name)).await
     };
     copy.await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", format!("Couldn't copy the LoRA: {e}")))?;
@@ -861,15 +855,14 @@ pub struct LoraFile {
     pub character: Option<String>,
 }
 
-/// LoRA files in the LoRA folder, with what each says about itself, for adding one
+/// My LoRA files (and shared ones), with what each says about itself, for adding one
 /// trained elsewhere as a character.
 #[utoipa::path(get, path = "/api/characters/lora-files", tag = "training", security(("bearer" = [])),
     responses((status = 200, description = "LoRA files", body = [LoraFile])))]
-pub async fn lora_files(State(state): State<AppState>, _auth: Auth) -> ApiResult<Json<Vec<LoraFile>>> {
+pub async fn lora_files(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<Vec<LoraFile>>> {
     let everyone = training::characters(&state.pool, None).await?;
-    let out = state
-        .assets
-        .loras()
+    let out = crate::routes::create::visible_loras(&state, &auth.account.id)
+        .await
         .into_iter()
         .map(|file| LoraFile {
             info: state.assets.lora_info(&file).unwrap_or_default(),
@@ -905,9 +898,8 @@ pub async fn add_character(
     Json(req): Json<NewCharacterRequest>,
 ) -> ApiResult<(StatusCode, Json<Character>)> {
     require_person(&auth)?;
-    let info = state
-        .assets
-        .loras()
+    let info = crate::routes::create::visible_loras(&state, &auth.account.id)
+        .await
         .contains(&req.lora_file)
         .then(|| state.assets.lora_info(&req.lora_file))
         .flatten()

@@ -1528,7 +1528,7 @@ async fn upload(app: &Router, uri: &str, token: &str, bytes: Vec<u8>) -> (Status
 #[tokio::test]
 async fn loras_i_already_have_can_be_uploaded() {
     let app = app().await;
-    let (owner, _) = setup_owner(&app).await;
+    let (owner, dan) = setup_owner(&app).await;
     // A tiny but well-formed safetensors file: header length, then a JSON header.
     let header = br#"{"__metadata__":{"ss_network_module":"lora"}}"#;
     let mut lora = (header.len() as u64).to_le_bytes().to_vec();
@@ -1543,11 +1543,13 @@ async fn loras_i_already_have_can_be_uploaded() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
-    assert_eq!(body["file"], "Kat_v2.safetensors");
+    // In my own LoRA folder.
+    let kat = format!("{dan}/Kat_v2.safetensors");
+    assert_eq!(body["file"], kat.as_str());
     assert_eq!(body["character"]["trigger_word"], "k4tt");
 
     let (_, list) = call(&app, "GET", "/api/loras", Some(&owner), None).await;
-    assert!(list["loras"].as_array().unwrap().iter().any(|l| l == "Kat_v2.safetensors"), "{list}");
+    assert!(list["loras"].as_array().unwrap().iter().any(|l| l == kat.as_str()), "{list}");
     assert!(list["characters"].as_array().unwrap().iter().any(|c| c["name"] == "Kat"));
     // No half-finished files are left behind or listed.
     assert_eq!(list["loras"].as_array().unwrap().len(), 1);
@@ -1569,4 +1571,39 @@ async fn loras_i_already_have_can_be_uploaded() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let (_, list) = call(&app, "GET", "/api/loras", Some(&owner), None).await;
     assert_eq!(list["loras"].as_array().unwrap().len(), 1, "{list}");
+
+    // Like personas, my LoRAs are mine: Sam neither sees nor uses them.
+    let (status, sam) = call(
+        &app,
+        "POST",
+        "/api/accounts",
+        Some(&owner),
+        Some(json!({"name": "Sam", "role": "member", "secret": "2468"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sam}");
+    let (_, signed) = call(
+        &app,
+        "POST",
+        "/api/auth/sign-in",
+        None,
+        Some(json!({"account_id": sam["id"], "secret": "2468"})),
+    )
+    .await;
+    let sam_token = signed["token"].as_str().unwrap().to_string();
+    let (_, theirs) = call(&app, "GET", "/api/loras", Some(&sam_token), None).await;
+    assert!(theirs["loras"].as_array().unwrap().is_empty(), "{theirs}");
+    assert!(theirs["characters"].as_array().unwrap().is_empty());
+    // (Jobs check LoRAs against this same list, so Sam can't name Dan's either.)
+    let (_, files) = call(&app, "GET", "/api/characters/lora-files", Some(&sam_token), None).await;
+    assert!(files.as_array().unwrap().is_empty(), "{files}");
+    // Sam's upload of the same name is Sam's own, beside Dan's.
+    let mut other = 2u64.to_le_bytes().to_vec();
+    other.extend(b"{}");
+    let (status, body) = upload(&app, "/api/loras?name=Kat_v2.safetensors", &sam_token, other).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (_, theirs) = call(&app, "GET", "/api/loras", Some(&sam_token), None).await;
+    assert_eq!(theirs["loras"].as_array().unwrap().len(), 1);
+    let (_, mine) = call(&app, "GET", "/api/loras", Some(&owner), None).await;
+    assert_eq!(mine["loras"].as_array().unwrap().len(), 1);
 }

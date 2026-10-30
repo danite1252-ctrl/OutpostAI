@@ -145,27 +145,43 @@ impl AssetStore {
         self.setups().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
-    /// LoRA files in the LoRA folder (`.safetensors`), by name, for packs to offer.
+    /// LoRA files at the top of the LoRA folder (`.safetensors`): the shared ones.
     pub fn loras(&self) -> Vec<String> {
-        let mut out: Vec<String> = std::fs::read_dir(self.loras_dir())
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|e| e.path().is_file())
-            .filter_map(|e| e.file_name().into_string().ok())
-            .filter(|n| n.to_ascii_lowercase().ends_with(".safetensors"))
-            .collect();
-        out.sort_by_key(|n| n.to_lowercase());
-        out
+        list_safetensors(&self.loras_dir())
     }
 
-    /// What a LoRA file in the LoRA folder says about itself (from its header): the
-    /// model it was trained for and its trigger word, when it recorded them.
-    pub fn lora_info(&self, file: &str) -> Option<LoraInfo> {
-        if file.contains(['/', '\\']) || file.contains("..") || !file.to_ascii_lowercase().ends_with(".safetensors") {
+    /// One account's own LoRA folder (`loras/<account id>`).
+    pub fn account_loras_dir(&self, account_id: &str) -> PathBuf {
+        self.loras_dir().join(account_id)
+    }
+
+    /// An account's own LoRAs, named `<account id>/<file>` as ComfyUI sees them.
+    pub fn account_loras(&self, account_id: &str) -> Vec<String> {
+        if !safe_part(account_id) {
+            return Vec::new();
+        }
+        list_safetensors(&self.account_loras_dir(account_id))
+            .into_iter()
+            .map(|f| format!("{account_id}/{f}"))
+            .collect()
+    }
+
+    /// Where a LoRA lives: `file` (shared) or `<account id>/file` (someone's own).
+    pub fn lora_path(&self, rel: &str) -> Option<PathBuf> {
+        if !rel.to_ascii_lowercase().ends_with(".safetensors") || rel.contains('\\') {
             return None;
         }
-        lora_info_at(&self.loras_dir().join(file))
+        let parts: Vec<&str> = rel.split('/').collect();
+        if parts.len() > 2 || !parts.iter().all(|p| safe_part(p)) {
+            return None;
+        }
+        Some(parts.iter().fold(self.loras_dir(), |p, part| p.join(part)))
+    }
+
+    /// What a LoRA file says about itself (from its header): the model it was trained for
+    /// and its trigger word, when it recorded them.
+    pub fn lora_info(&self, file: &str) -> Option<LoraInfo> {
+        lora_info_at(&self.lora_path(file)?)
     }
 
     /// Download the pack's missing files in the background.
@@ -497,6 +513,24 @@ pub struct LoraInfo {
 
 /// Read a `.safetensors` header: an 8-byte length, then JSON naming every tensor, with
 /// the trainer's notes under `__metadata__`.
+/// A plain file or folder name: no separators, no `..`, nothing hidden.
+fn safe_part(p: &str) -> bool {
+    !p.is_empty() && !p.starts_with('.') && !p.contains(['/', '\\', ':']) && p != ".."
+}
+
+fn list_safetensors(dir: &Path) -> Vec<String> {
+    let mut out: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.to_ascii_lowercase().ends_with(".safetensors") && !n.starts_with('.'))
+        .collect();
+    out.sort_by_key(|n| n.to_lowercase());
+    out
+}
+
 pub fn lora_info_at(path: &Path) -> Option<LoraInfo> {
     use std::io::Read;
     let mut f = std::fs::File::open(path).ok()?;

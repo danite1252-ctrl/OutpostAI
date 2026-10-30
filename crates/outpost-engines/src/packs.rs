@@ -438,7 +438,7 @@ impl Pack {
                     };
                     if !loras.iter().any(|l| l == name) {
                         return Err(PackError::Invalid(format!(
-                            "The LoRA {name} isn't in your LoRA folder."
+                            "The LoRA {name} isn't one of yours (or it was removed)."
                         )));
                     }
                     let Some(hook) = &input.lora else { continue };
@@ -452,7 +452,9 @@ impl Pack {
                         "class_type": "LoraLoaderModelOnly",
                         "inputs": {
                             "model": [hook.model_from.0, hook.model_from.1],
-                            "lora_name": name,
+                            // Someone's own LoRA is `<account>/<file>`; ComfyUI lists
+                            // subfolders with this computer's separator (\\ on Windows).
+                            "lora_name": name.replace('/', std::path::MAIN_SEPARATOR_STR),
                             "strength_model": strength
                         }
                     });

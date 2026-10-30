@@ -241,7 +241,12 @@ async fn run(state: AppState, job: Job) -> Result<(), ComfyError> {
         uploaded.insert(input.key.clone(), comfy_name);
     }
     let built = pack
-        .build(&values, jobs::random_seed, &uploaded, &state.assets.loras())
+        .build(
+            &values,
+            jobs::random_seed,
+            &uploaded,
+            &crate::routes::create::visible_loras(state, &job.account_id).await,
+        )
         .map_err(|e| ComfyError::Rejected(e.to_string()))?;
     if let Some(seed) = built.seed {
         let _ = jobs::set_seed(&state.pool, &job.id, seed).await;

@@ -380,6 +380,17 @@ async function send<T>(
   return data as T;
 }
 
+/** This computer's clock, so the model knows the user's date and time. */
+export function clock(): { utc_offset_minutes: number; time_zone?: string } {
+  let zone: string | undefined;
+  try {
+    zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    zone = undefined;
+  }
+  return { utc_offset_minutes: -new Date().getTimezoneOffset(), time_zone: zone };
+}
+
 /** What the first look at a server found (from the app shell). */
 export interface ServerProbe {
   host: string;
@@ -535,7 +546,7 @@ export async function streamMessage(
     res = await fetch(`${GATEWAY}/api/chats/${chatId}/messages`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ content, images }),
+      body: JSON.stringify({ content, images, ...clock() }),
       signal,
     });
   } catch {

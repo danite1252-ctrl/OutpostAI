@@ -333,6 +333,8 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     }
     let starter = engines.clone();
     tokio::spawn(async move { starter.init().await });
+    // LoRAs are per account now: move the ones with a known owner out of the shared folder.
+    routes::create::claim_shared_loras(&state).await;
     tokio::spawn(create::worker(state.clone()));
     // The one call to the internet: a daily look for a newer release (can be switched off).
     tokio::spawn(updates::background(state.clone()));
@@ -345,9 +347,7 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(async {
-        let _ = tokio::signal::ctrl_c().await;
-    })
+    .with_graceful_shutdown(shutdown_signal())
     .await;
     // Stop the encrypted port, the Tailscale listener and the announcement with the main one.
     for handle in background {
@@ -356,6 +356,26 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     engines.shutdown();
     result?;
     Ok(())
+}
+
+/// Ctrl+C, or (on Linux) the stop signal a service manager sends: `systemctl stop`, a
+/// reboot. Either way Outpost closes normally, so the next start doesn't report a crash.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => tracing::info!("asked to stop: closing Outpost"),
+                }
+                return;
+            }
+            Err(e) => tracing::warn!(error = %e, "can't listen for the stop signal"),
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 /// The port phones use: the API port plus one (7421 by default).

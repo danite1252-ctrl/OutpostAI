@@ -103,21 +103,107 @@ pub async fn history_images(state: &AppState, account_id: &str, history: &[Messa
     out
 }
 
-/// The persona's prompt plus memories, if it uses them. `query` (the user's
-/// message) picks which learned memories are relevant.
+/// Where the user's clock is: minutes ahead of UTC, and the zone's name if known.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserClock {
+    pub offset_minutes: i32,
+    pub zone: Option<String>,
+}
+
+impl UserClock {
+    /// From what an app sent; nonsense is ignored.
+    pub fn from_app(offset_minutes: Option<i32>, zone: Option<&str>) -> Option<UserClock> {
+        let offset_minutes = offset_minutes.filter(|m| (-14 * 60..=14 * 60).contains(m))?;
+        let zone = zone
+            .map(str::trim)
+            .filter(|z| !z.is_empty() && z.len() <= 64)
+            .filter(|z| z.chars().all(|c| c.is_ascii_alphanumeric() || "/_+-".contains(c)))
+            .map(str::to_string);
+        Some(UserClock { offset_minutes, zone })
+    }
+
+    fn setting_key(account_id: &str) -> String {
+        format!("clock.{account_id}")
+    }
+
+    /// Remember an account's clock, so apps that don't send one (the API, MCP) use it too.
+    pub async fn save(&self, state: &AppState, account_id: &str) {
+        let value = format!("{}|{}", self.offset_minutes, self.zone.as_deref().unwrap_or(""));
+        let _ = outpost_core::settings::set(&state.pool, &Self::setting_key(account_id), &value).await;
+    }
+
+    pub async fn load(state: &AppState, account_id: &str) -> Option<UserClock> {
+        let v = outpost_core::settings::get(&state.pool, &Self::setting_key(account_id)).await.ok()??;
+        let (offset, zone) = v.split_once('|')?;
+        UserClock::from_app(offset.parse().ok(), Some(zone))
+    }
+}
+
+const CLOCK_PREFIX: &str = "Current date and time for the user:";
+
+/// Takes the clock line off the end of a system prompt (see [`system_prompt`]).
+fn split_clock(system: &str) -> (&str, Option<&str>) {
+    match system.rfind(CLOCK_PREFIX) {
+        Some(i) => (system[..i].trim_end(), Some(&system[i..])),
+        None => (system, None),
+    }
+}
+
+/// "Current date and time for the user: Friday, 30 October 2026, 12:14 pm (Australia/Sydney,
+/// UTC+11:00)." Models have no clock of their own, so without this they guess (usually
+/// the date their training ended).
+pub fn clock_line(now: i64, clock: Option<&UserClock>) -> String {
+    const DAYS: [&str; 7] = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"];
+    const MONTHS: [&str; 12] = [
+        "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November",
+        "December",
+    ];
+    let offset = clock.map(|c| c.offset_minutes).unwrap_or(0);
+    let local = now + i64::from(offset) * 60;
+    let days = local.div_euclid(86_400);
+    let secs = local.rem_euclid(86_400);
+    // The date part of diagnostics::rfc3339 (YYYY-MM-DD...).
+    let date = crate::diagnostics::rfc3339(days * 86_400);
+    let (y, m, d) = (&date[0..4], date[5..7].parse::<usize>().unwrap_or(1), date[8..10].parse::<u32>().unwrap_or(1));
+    let (h, min) = (secs / 3600, secs % 3600 / 60);
+    let (h12, ampm) = match h {
+        0 => (12, "am"),
+        1..=11 => (h, "am"),
+        12 => (12, "pm"),
+        _ => (h - 12, "pm"),
+    };
+    let sign = if offset < 0 { '-' } else { '+' };
+    let utc = format!("UTC{sign}{:02}:{:02}", offset.abs() / 60, offset.abs() % 60);
+    let zone = match clock {
+        Some(UserClock { zone: Some(z), .. }) => format!("{z}, {utc}"),
+        Some(_) => utc,
+        None => "UTC; the user's own time zone isn't known".into(),
+    };
+    format!(
+        "{CLOCK_PREFIX} {}, {d} {} {y}, {h12}:{min:02} {ampm} ({zone}). \
+         Use this whenever the date, day or time matters.",
+        DAYS[days.rem_euclid(7) as usize],
+        MONTHS[m.clamp(1, 12) - 1],
+    )
+}
+
+/// The persona's prompt plus memories, if it uses them, and the user's date and time.
+/// `query` (the user's message) picks which learned memories are relevant.
 pub async fn system_prompt(
     state: &AppState,
     account_id: &str,
     persona: Option<&Persona>,
     query: Option<&str>,
 ) -> Result<String, ApiError> {
-    let Some(p) = persona else { return Ok(String::new()) };
+    let clock = clock_line(outpost_core::now(), UserClock::load(state, account_id).await.as_ref());
+    let Some(p) = persona else { return Ok(clock) };
     let memories = if p.use_memory {
         crate::memory::recall(state, account_id, p, query).await?
     } else {
         Vec::new()
     };
-    Ok(outpost_core::memory::compose_system_prompt(&p.system_prompt, &memories))
+    let prompt = outpost_core::memory::compose_system_prompt(&p.system_prompt, &memories);
+    Ok(if prompt.is_empty() { clock } else { format!("{prompt}\n\n{clock}") })
 }
 
 /// Body for Ollama's native `/api/chat`, streaming.
@@ -142,6 +228,9 @@ pub fn ollama_chat_body(
     persona: Option<&Persona>,
 ) -> Value {
     let mut messages = Vec::new();
+    // The clock goes beside the newest message instead: in a long chat, small models
+    // otherwise repeat a wrong date from their own earlier replies.
+    let (system, clock) = split_clock(system);
     if !system.is_empty() {
         messages.push(json!({ "role": "system", "content": system }));
     }
@@ -154,6 +243,13 @@ pub fn ollama_chat_body(
             }
             messages.push(msg);
         }
+    }
+    if let Some(clock) = clock {
+        let note = format!(
+            "{clock} Earlier messages in this chat may give other dates or times; they are out of date or wrong."
+        );
+        let at = messages.iter().rposition(|m| m["role"] == "user").unwrap_or(messages.len());
+        messages.insert(at, json!({ "role": "system", "content": note }));
     }
     let mut body = json!({ "model": model, "messages": messages, "stream": true });
     // Only thinking models accept `think`; for them, follow the persona's switch.
@@ -169,6 +265,36 @@ pub fn ollama_chat_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_clock_reads_like_a_person_would_say_it() {
+        // 2026-10-30 01:14 UTC is 12:14 pm in Sydney (UTC+11).
+        let now = 1_793_322_840;
+        let sydney = UserClock::from_app(Some(660), Some("Australia/Sydney"));
+        assert_eq!(
+            clock_line(now, sydney.as_ref()),
+            "Current date and time for the user: Friday, 30 October 2026, 12:14 pm (Australia/Sydney, UTC+11:00). \
+             Use this whenever the date, day or time matters."
+        );
+        // West of UTC, the date can still be the day before.
+        let la = UserClock::from_app(Some(-420), Some("America/Los_Angeles"));
+        assert!(clock_line(now, la.as_ref()).contains("Thursday, 29 October 2026, 6:14 pm (America/Los_Angeles, UTC-07:00)"));
+        assert!(clock_line(now, None).contains("1:14 am (UTC; the user's own time zone isn't known)"));
+        // Midnight and noon.
+        assert!(clock_line(1_793_318_400 - 11 * 3600, sydney.as_ref()).contains("12:00 am"));
+        // In a chat, the clock sits just before the newest message, not at the top.
+        let history = vec![msg(1, "user", "date?"), msg(2, "assistant", "23 September 2025"), msg(3, "user", "and now?")];
+        let system = format!("Be terse.\n\n{}", clock_line(now, sydney.as_ref()));
+        let body = ollama_chat_body("m", &system, &history, &HashMap::new(), false, None);
+        let m = body["messages"].as_array().unwrap();
+        assert_eq!(m[0]["content"], "Be terse.");
+        assert_eq!(m[3]["role"], "system");
+        assert!(m[3]["content"].as_str().unwrap().starts_with("Current date and time for the user: Friday, 30 October 2026"));
+        assert_eq!(m[4]["content"], "and now?");
+        // Nonsense from an app is ignored.
+        assert!(UserClock::from_app(Some(5000), None).is_none());
+        assert_eq!(UserClock::from_app(Some(60), Some("Not a zone!")).unwrap().zone, None);
+    }
 
     fn msg(seq: i64, role: &str, content: &str) -> Message {
         Message {

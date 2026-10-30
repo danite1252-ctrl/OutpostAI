@@ -682,6 +682,16 @@ pub async fn save_character(pool: &SqlitePool, account_id: &str, c: NewCharacter
     get_character(pool, account_id, &id).await
 }
 
+/// A character's LoRA file moved (e.g. into its owner's own LoRA folder).
+pub async fn move_character_lora(pool: &SqlitePool, from: &str, to: &str) -> CoreResult<()> {
+    sqlx::query("UPDATE characters SET lora_file = ? WHERE lora_file = ?")
+        .bind(to)
+        .bind(from)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn get_character(pool: &SqlitePool, account_id: &str, id: &str) -> CoreResult<Character> {
     sqlx::query_as(&format!("SELECT {CHARACTER_COLS} FROM characters WHERE id = ? AND account_id = ?"))
         .bind(id)

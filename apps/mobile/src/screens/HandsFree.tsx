@@ -1,3 +1,4 @@
+import { clock } from "../outpost";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BackHandler, Modal, ScrollView, Text, View } from "react-native";
 import OutpostNet, { type ConverseEvent } from "../../modules/outpost-net";
@@ -106,7 +107,7 @@ export default function HandsFree({
     (text: string) =>
       new Promise<string>((resolve) => {
         let said = "";
-        stopStream.current = api.stream(`/api/chats/${chatId}/messages`, { content: text, images: [] }, {
+        stopStream.current = api.stream(`/api/chats/${chatId}/messages`, { content: text, images: [], ...clock() }, {
           event: (name, data) => {
             const d = data as { text?: string; message?: Message | string; error?: string | null };
             if (name === "token") {

@@ -80,6 +80,8 @@ pub async fn delete(
     }
     accounts::delete(&state.pool, &id).await?;
     outpost_core::attachments::remove_account_files(&state.config.files_dir(), &id).await;
+    // Their own LoRAs go with them.
+    let _ = tokio::fs::remove_dir_all(state.assets.account_loras_dir(&id)).await;
     outpost_core::audit::log_quiet(
         &state.pool,
         Some(&auth.account.id),

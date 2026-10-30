@@ -1,7 +1,8 @@
 // Adding a LoRA you already have (trained elsewhere, or on your old Outpost) by uploading
 // its .safetensors file, optionally as one of your characters.
 
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type SyntheticEvent } from "react";
+import { createPortal } from "react-dom";
 import { ApiError, uploadLora, type LoraUploaded } from "../api";
 import { Button, ErrorNote, Field } from "./ui";
 
@@ -30,8 +31,10 @@ export function AddLora({
     if (f && !name) setName(f.name.replace(/\.safetensors$/i, "").replace(/[_-]+/g, " ").trim());
   }
 
-  async function submit(e: FormEvent, replace = false) {
+  async function submit(e: FormEvent | SyntheticEvent, replace = false) {
+    // This dialog opens from inside Create's form: keep its submit from reaching that form.
     e.preventDefault();
+    e.stopPropagation();
     if (!file) return setError("Pick the LoRA's .safetensors file.");
     if (!/\.safetensors$/i.test(file.name)) return setError("A LoRA is a .safetensors file.");
     if (isCharacter && (!name.trim() || trigger.trim().length < 2))
@@ -55,13 +58,14 @@ export function AddLora({
   }
 
   const uploading = progress !== null;
-  return (
+  // Drawn at the top of the page, outside Create's form (a form can't hold another form).
+  return createPortal(
     <div role="dialog" aria-modal="true" aria-label="Add a LoRA" className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
       <form onSubmit={(e) => void submit(e)} className="flex w-full max-w-md flex-col gap-4 rounded-2xl border border-line bg-night p-6" noValidate>
         <h2 className="text-lg font-semibold">Add a LoRA</h2>
         <p className="text-sm text-muted">
-          Upload a <span className="font-mono">.safetensors</span> LoRA you already have. It goes into Outpost's LoRA
-          folder for everyone's Create workflows.
+          Upload a <span className="font-mono">.safetensors</span> LoRA you already have. Like your personas, it's
+          yours: other accounts don't see or use it.
         </p>
         <label className="flex flex-col gap-1.5 text-sm text-muted">
           LoRA file
@@ -111,6 +115,7 @@ export function AddLora({
           </Button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body,
   );
 }

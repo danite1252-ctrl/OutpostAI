@@ -961,7 +961,7 @@ function ImportCharacter({ token, onClose, onAdded }: { token: string; onClose: 
     // Fill in what the file knows; the name is a guess to edit.
     if (info?.trigger) setTrigger(info.trigger);
     if (!name.trim() && info) {
-      const guess = (info.trigger ?? info.file.replace(/\.safetensors$/i, ""))
+      const guess = (info.trigger ?? info.file.split("/").pop()!.replace(/\.safetensors$/i, ""))
         .replace(/^char_|_?z_?image$/gi, "")
         .replace(/zzz_?/gi, "")
         .replace(/[_-]+/g, " ")
@@ -995,8 +995,8 @@ function ImportCharacter({ token, onClose, onAdded }: { token: string; onClose: 
       >
         <h2 className="text-xl font-semibold">Add a character from a LoRA file</h2>
         <p className="text-sm text-muted">
-          For a Z-Image LoRA trained somewhere else. Copy its <span className="font-mono">.safetensors</span> file into the LoRA folder
-          first, then pick it here.
+          For a Z-Image LoRA trained somewhere else. Upload its <span className="font-mono">.safetensors</span> file first with{" "}
+          <b className="text-ink">Add LoRA</b> in Create (which can make it a character in one go), then pick it here.
         </p>
         <label className="flex flex-col gap-1.5 text-sm text-muted">
           LoRA file
@@ -1004,14 +1004,14 @@ function ImportCharacter({ token, onClose, onAdded }: { token: string; onClose: 
             <option value="">{files == null ? "Looking…" : usable.length ? "Pick one" : "No new Z-Image LoRAs in the folder"}</option>
             {usable.map((f) => (
               <option key={f.file} value={f.file}>
-                {f.file.replace(/\.safetensors$/i, "")}
+                {f.file.split("/").pop()!.replace(/\.safetensors$/i, "")}
               </option>
             ))}
             {other.length > 0 && (
               <optgroup label="Can't be added">
                 {other.map((f) => (
                   <option key={f.file} value={f.file} disabled>
-                    {f.file.replace(/\.safetensors$/i, "")} ({f.character ? `already ${f.character}` : "not for Z-Image"})
+                    {f.file.split("/").pop()!.replace(/\.safetensors$/i, "")} ({f.character ? `already ${f.character}` : "not for Z-Image"})
                   </option>
                 ))}
               </optgroup>

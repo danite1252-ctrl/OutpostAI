@@ -300,7 +300,7 @@ function Input({
           <View style={[s.row, { flexWrap: "wrap" }]}>
             {!i.required && <Chip label="None" active={!value} onPress={() => onChange(null)} />}
             {loras.map((l) => (
-              <Chip key={l} label={names[l]?.name ?? l.replace(/\.safetensors$/i, "")} active={value === l} onPress={() => onChange(l)} />
+              <Chip key={l} label={names[l]?.name ?? l.split("/").pop()!.replace(/\.safetensors$/i, "")} active={value === l} onPress={() => onChange(l)} />
             ))}
           </View>
           {loras.length === 0 && <P muted>No LoRAs yet: copy them into the LoRA folder on the PC.</P>}
