@@ -124,8 +124,10 @@ graphics card**:
 
 ## Updates
 
-The server checks for a new release a minute after it starts and once a day. When there is one,
-owners see it in the desktop app (the banner, and Settings › Updates): **Update the server**
+The server checks for a new release every minute. With **Install server updates automatically**
+on (the default; Settings › Updates), it installs a new release by itself as soon as nothing is
+running (no Create job here or on a helper PC, no training, no chat for two minutes), checking its
+signature first, and restarts. With it off, owners see a new release in the desktop app (the banner, and Settings › Updates): **Update the server**
 downloads it, checks its signature against Outpost's release key, swaps it in and restarts.
 The desktop app checks for its own update at start and once a day too. **Check now** looks at
 once. **Settings › Server › Restart the server** restarts Outpost (e.g. after a network change).

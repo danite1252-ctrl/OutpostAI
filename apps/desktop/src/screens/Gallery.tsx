@@ -90,6 +90,13 @@ export default function Gallery({
   useEffect(() => {
     void createApi.searchStatus(token).then(setStatus, () => undefined);
   }, [token]);
+  // Follow a model download started from here until it's installed (then its button goes).
+  const downloading = !!(status?.get_describer?.downloading || status?.get_embedder?.downloading);
+  useEffect(() => {
+    if (!downloading) return;
+    const t = window.setInterval(() => void createApi.searchStatus(token).then(setStatus, () => undefined), 2500);
+    return () => window.clearInterval(t);
+  }, [downloading, token]);
   // Search a moment after typing stops.
   useEffect(() => {
     const q = query.trim();
@@ -230,7 +237,19 @@ export default function Gallery({
             aria-label="Search my gallery"
             className="min-h-11 rounded-xl border border-line bg-surface px-3.5 text-base text-ink placeholder:text-muted/60 focus:border-ember focus:outline-none"
           />
-          {status && <SearchNote status={status} isOwner={isOwner} onToggle={(on) => void createApi.setSearch(token, on).then(setStatus, fail)} />}
+          {status && (
+            <SearchNote
+              status={status}
+              isOwner={isOwner}
+              onToggle={(on) => void createApi.setSearch(token, on).then(setStatus, fail)}
+              onGet={(model) =>
+                void api
+                  .pullModel(token, model)
+                  .then(() => createApi.searchStatus(token))
+                  .then(setStatus, fail)
+              }
+            />
+          )}
         </div>
       )}
       <ErrorNote>{error}</ErrorNote>
@@ -275,11 +294,21 @@ export default function Gallery({
   );
 }
 
-/** Under the search box: how much of the gallery search can see into. */
-function SearchNote({ status, isOwner, onToggle }: { status: SearchStatus; isOwner: boolean; onToggle: (on: boolean) => void }) {
+/** Under the search box: how much of the gallery search can see into, and the models to get. */
+function SearchNote({
+  status,
+  isOwner,
+  onToggle,
+  onGet,
+}: {
+  status: SearchStatus;
+  isOwner: boolean;
+  onToggle: (on: boolean) => void;
+  onGet: (model: string) => void;
+}) {
   let text: string;
   if (!status.describer) {
-    text = "Searching prompts only. Get a model that can see pictures (the eye badge in Models) and Outpost describes each picture so you can search by what's in it.";
+    text = "Searching prompts only, until there's a model that can see pictures to describe them.";
   } else if (!status.enabled) {
     text = "Searching prompts and the pictures described so far; describing is turned off.";
   } else if (status.waiting > 0) {
@@ -287,18 +316,42 @@ function SearchNote({ status, isOwner, onToggle }: { status: SearchStatus; isOwn
   } else {
     text = "Searching what's in every picture, and its prompt.";
   }
+  const offers = [
+    status.get_describer && { m: status.get_describer, why: "to describe pictures, so you can search by what's in them" },
+    status.get_embedder && { m: status.get_embedder, why: "to find pictures by meaning, not just matching words (memory uses it too)" },
+  ].filter((o): o is { m: NonNullable<SearchStatus["get_embedder"]>; why: string } => !!o);
   return (
-    <p className="text-xs text-muted">
-      {text}
-      {!status.embedder && " Install an embedding model (Qwen3 Embedding 0.6B in Models) to find pictures by meaning, not just matching words."}
-      {isOwner && status.describer && (
-        <>
-          {" "}
-          <button type="button" className="underline hover:text-ink" onClick={() => onToggle(!status.enabled)}>
-            {status.enabled ? "Stop describing" : "Start describing"}
-          </button>
-        </>
-      )}
-    </p>
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-muted">
+        {text}
+        {isOwner && status.describer && (
+          <>
+            {" "}
+            <button type="button" className="underline hover:text-ink" onClick={() => onToggle(!status.enabled)}>
+              {status.enabled ? "Stop describing" : "Start describing"}
+            </button>
+          </>
+        )}
+      </p>
+      {offers.map(({ m, why }) => (
+        <div key={m.model} className="flex flex-wrap items-center gap-3 rounded-xl border border-line px-3 py-2 text-sm">
+          <span className="min-w-0 flex-1">
+            <b>{m.name}</b> ({m.size_gb < 1 ? `${Math.round(m.size_gb * 1000)} MB` : `${m.size_gb.toFixed(1)} GB`}) {why}.
+            {m.error && <span className="block text-xs text-danger">The last download failed: {m.error}</span>}
+          </span>
+          {m.downloading ? (
+            <span className="text-xs text-muted" aria-live="polite">
+              Downloading{m.percent != null ? ` ${Math.round(m.percent)}%` : "…"}
+            </span>
+          ) : isOwner ? (
+            <Button variant="ghost" className="min-h-9 px-3" onClick={() => onGet(m.model)}>
+              Get it
+            </Button>
+          ) : (
+            <span className="text-xs text-muted">Ask an owner to get it.</span>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }

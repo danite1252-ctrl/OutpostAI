@@ -35,14 +35,44 @@ pub fn chat_active() {
     LAST_CHAT.store(outpost_core::now(), Ordering::Relaxed);
 }
 
+/// A chat reply started in the last `secs` seconds.
+pub fn chat_recently(secs: i64) -> bool {
+    outpost_core::now() - LAST_CHAT.load(Ordering::Relaxed) < secs
+}
+
 /// Describing is on (until the owner turns it off).
 pub async fn enabled(state: &AppState) -> bool {
     settings::get(&state.pool, settings::GALLERY_DESCRIBE).await.ok().flatten().as_deref() != Some("off")
 }
 
-/// The vision model that describes pictures, if one is installed.
+/// Small vision models that describe pictures well, preferred in this order when installed.
+pub const DESCRIBERS: [&str; 4] = ["qwen3.5:4b", "huihui_ai/qwen3.5-abliterated:4b", "qwen3.5:2b", "huihui_ai/qwen3.5-abliterated:2b"];
+/// The ones suggested for download when there's no vision model (the first that fits).
+pub const SUGGESTED_DESCRIBERS: [&str; 2] = ["qwen3.5:4b", "qwen3.5:2b"];
+/// The embedding model suggested for search (and memory).
+pub const EMBEDDER: &str = "qwen3-embedding:0.6b";
+
+/// The vision model that describes pictures, if one is installed: a small one of
+/// [`DESCRIBERS`] if there, else the smallest that can see from 2 GB up (lightest on the card,
+/// but not one too small to describe well).
 pub async fn describer(state: &AppState) -> Option<String> {
-    crate::routes::training::vision_models(state).await.into_iter().next()
+    let mut seeing: Vec<(String, u64)> = state
+        .models
+        .installed()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| {
+            m.badges.contains(&outpost_engines::catalog::Badge::Vision)
+                && !m.badges.contains(&outpost_engines::catalog::Badge::Embedding)
+        })
+        .map(|m| (m.model, m.size_bytes))
+        .collect();
+    if let Some(pick) = DESCRIBERS.iter().find(|d| seeing.iter().any(|(m, _)| m == *d)) {
+        return Some(pick.to_string());
+    }
+    seeing.sort_by_key(|(_, size)| (*size < 2_000_000_000, *size));
+    seeing.into_iter().next().map(|(m, _)| m)
 }
 
 /// Run forever: describe pictures, then embed what needs it.
@@ -82,7 +112,7 @@ async fn pass(state: &AppState) -> bool {
 
 /// Nothing else wants the graphics card right now.
 async fn card_free(state: &AppState) -> bool {
-    if outpost_core::now() - LAST_CHAT.load(Ordering::Relaxed) < CHAT_QUIET_SECS {
+    if chat_recently(CHAT_QUIET_SECS) {
         return false;
     }
     if state.queue.running().is_some() {

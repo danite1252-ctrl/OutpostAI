@@ -93,6 +93,19 @@ async fn the_gallery_is_searched_by_prompt_and_description() {
     assert_eq!(st["described"], 2, "{st}");
     assert_eq!(st["total"], 3);
     assert_eq!(st["enabled"], true);
+    // A missing model is suggested; one that's there isn't. (What's installed depends on
+    // the machine running the test.)
+    if st["embedder"].is_null() {
+        assert_eq!(st["get_embedder"]["model"], "qwen3-embedding:0.6b", "{st}");
+    } else {
+        assert!(st["get_embedder"].is_null(), "{st}");
+    }
+    if st["describer"].is_null() {
+        let d = st["get_describer"]["model"].as_str().unwrap();
+        assert!(d == "qwen3.5:4b" || d == "qwen3.5:2b", "{d}");
+    } else {
+        assert!(st["get_describer"].is_null(), "{st}");
+    }
     let (status, st) = call(&app, "PUT", "/api/gallery/search/settings", &dan, Some(json!({"enabled": false}))).await;
     assert_eq!(status, StatusCode::OK, "{st}");
     assert_eq!(st["enabled"], false);

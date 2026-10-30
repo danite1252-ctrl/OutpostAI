@@ -298,14 +298,26 @@ export function UpdatesPanel({ token, canManage }: { token: string; canManage: b
           )}
           {status.checked_at && <span className="text-xs text-muted">Last checked {when(status.checked_at)}</span>}
         </div>
+        {canManage && SERVER && status.enabled && (
+          <ToggleRow
+            title="Install server updates automatically"
+            hint="The server checks every minute and installs a new release by itself as soon as nothing is running (no Create job, training or chat in the last two minutes). It's back a few seconds later."
+            checked={status.auto_install ?? false}
+            onChange={(on) => {
+              setError(null);
+              systemApi.setUpdates(token, status.enabled, on).then(setStatus, (e) => setError(message(e)));
+            }}
+          />
+        )}
         {canManage && (
           <ToggleRow
             title="Check for updates"
             hint={
               <>
-                Once a day Outpost asks github.com/{status.repo} whether there's a newer version. It's the only time Outpost
-                goes on the internet by itself, and nothing about you or your PC is sent. Updates only install when you press
-                Update, and only if they're signed with Outpost's key.
+                {SERVER ? "Every minute the server asks" : "Once a day Outpost asks"} github.com/{status.repo} whether there's a
+                newer version. It's the only time Outpost goes on the internet by itself, and nothing about you or your PC is
+                sent. Updates only install if they're signed with Outpost's key
+                {SERVER ? "" : ", and only when you press Update"}.
               </>
             }
             checked={status.enabled}

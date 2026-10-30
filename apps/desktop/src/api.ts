@@ -881,6 +881,19 @@ export interface SearchStatus {
   described: number;
   total: number;
   waiting: number;
+  /** A vision model to get when there's none (and its download, if under way). */
+  get_describer: SuggestedModel | null;
+  /** The embedding model to get when there's none. */
+  get_embedder: SuggestedModel | null;
+}
+
+export interface SuggestedModel {
+  model: string;
+  name: string;
+  size_gb: number;
+  downloading: boolean;
+  percent: number | null;
+  error: string | null;
 }
 
 /** A shared-gallery item, with who shared it. */
@@ -1256,6 +1269,8 @@ export interface UpdateStatus {
   server_can_install?: boolean;
   /** A server install in progress, or "Failed: ..." */
   installing?: string | null;
+  /** A server installs updates by itself at a quiet moment (checking every minute). */
+  auto_install?: boolean;
   error: string | null;
 }
 
@@ -1268,7 +1283,8 @@ export const systemApi = {
   recentLog: (token: string) => request<{ text: string }>("GET", "/api/diagnostics/log", { token }),
   updates: (token: string) => request<UpdateStatus>("GET", "/api/updates", { token }),
   checkUpdates: (token: string) => request<UpdateStatus>("POST", "/api/updates/check", { token }),
-  setUpdates: (token: string, enabled: boolean) => request<UpdateStatus>("PUT", "/api/updates/settings", { token, body: { enabled } }),
+  setUpdates: (token: string, enabled: boolean, autoInstall?: boolean) =>
+    request<UpdateStatus>("PUT", "/api/updates/settings", { token, body: { enabled, auto_install: autoInstall } }),
   /** Install the newest release on the server and restart it (a server only). */
   installServer: (token: string) => request<void>("POST", "/api/updates/install", { token }),
   /** Restart Outpost on the server (a server only). */

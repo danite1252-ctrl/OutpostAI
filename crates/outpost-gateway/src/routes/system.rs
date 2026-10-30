@@ -169,8 +169,11 @@ pub async fn restart(State(state): State<AppState>, auth: Auth, headers: axum::h
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateSettings {
-    /// Check GitHub for updates (at start and once a day).
+    /// Check GitHub for updates (at start and once a day; a server every minute).
     pub enabled: bool,
+    /// A server installs updates by itself at a quiet moment. Left out: unchanged.
+    #[serde(default)]
+    pub auto_install: Option<bool>,
 }
 
 /// Turn update checks on or off. (Owner.)
@@ -184,5 +187,8 @@ pub async fn update_settings(
 ) -> ApiResult<Json<UpdateStatus>> {
     auth.require_owner()?;
     outpost_core::settings::set_bool(&state.pool, updates::UPDATES_OFF, !req.enabled).await?;
+    if let Some(on) = req.auto_install {
+        outpost_core::settings::set_bool(&state.pool, updates::AUTO_INSTALL, on).await?;
+    }
     Ok(Json(updates::status(&state).await))
 }

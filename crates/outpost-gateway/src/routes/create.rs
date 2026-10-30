@@ -954,6 +954,40 @@ pub struct SearchStatus {
     pub total: i64,
     /// Still to describe.
     pub waiting: i64,
+    /// A vision model to get when there's none (with its download, if it's downloading).
+    pub get_describer: Option<Suggested>,
+    /// The embedding model to get when there's none.
+    pub get_embedder: Option<Suggested>,
+}
+
+/// A model worth downloading, from the catalogue.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct Suggested {
+    pub model: String,
+    pub name: String,
+    pub size_gb: f32,
+    /// Downloading now: how far (0-100, once known).
+    pub downloading: bool,
+    pub percent: Option<f32>,
+    /// Why the last download failed.
+    pub error: Option<String>,
+}
+
+fn suggest(state: &AppState, choices: &[&str], hw: &outpost_engines::hardware::Hardware) -> Option<Suggested> {
+    let entry = choices
+        .iter()
+        .filter_map(|m| outpost_engines::catalog::CATALOG.iter().find(|e| e.model == *m))
+        .find(|e| outpost_engines::catalog::fit(e.size_gb, hw) == Fit::Fits)
+        .or_else(|| outpost_engines::catalog::CATALOG.iter().find(|e| Some(&e.model) == choices.last()))?;
+    let pull = state.models.pull_states().into_iter().find(|p| p.model == entry.model);
+    Some(Suggested {
+        model: entry.model.into(),
+        name: entry.name.into(),
+        size_gb: entry.size_gb,
+        downloading: pull.as_ref().is_some_and(|p| !p.done),
+        percent: pull.as_ref().filter(|p| !p.done).and_then(|p| p.percent),
+        error: pull.and_then(|p| p.error),
+    })
 }
 
 /// How far describing pictures for search has got.
@@ -961,10 +995,15 @@ pub struct SearchStatus {
     responses((status = 200, description = "Status", body = SearchStatus)))]
 pub async fn search_status(State(state): State<AppState>, _auth: Auth) -> ApiResult<Json<SearchStatus>> {
     let (described, total, waiting) = outpost_core::media_index::progress(&state.pool).await?;
+    let describer = crate::gallery_index::describer(&state).await;
+    let embedder = crate::memory::embedding_model(&state).await;
+    let hw = crate::routes::models::measure_cached(&state).await;
     Ok(Json(SearchStatus {
         enabled: crate::gallery_index::enabled(&state).await,
-        describer: crate::gallery_index::describer(&state).await,
-        embedder: crate::memory::embedding_model(&state).await,
+        get_describer: if describer.is_none() { suggest(&state, &crate::gallery_index::SUGGESTED_DESCRIBERS, &hw) } else { None },
+        get_embedder: if embedder.is_none() { suggest(&state, &[crate::gallery_index::EMBEDDER], &hw) } else { None },
+        describer,
+        embedder,
         described,
         total,
         waiting,

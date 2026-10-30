@@ -29,6 +29,12 @@ pub const UPDATES_OFF: &str = "updates.off";
 
 /// How often to look (and once, a minute after start).
 const EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+/// A server (left running on its own) checks this often, and installs by itself.
+const SERVER_EVERY: Duration = Duration::from_secs(60);
+/// "off" to stop a server installing updates by itself (on until turned off).
+pub const AUTO_INSTALL: &str = "updates.auto_install";
+/// After a failed automatic install, wait this long before trying that version again.
+const RETRY_AFTER: i64 = 60 * 60;
 
 pub fn repo_configured() -> bool {
     !RELEASES_REPO.starts_with("OWNER/")
@@ -154,6 +160,8 @@ pub struct UpdateStatus {
     pub server_can_install: bool,
     /// A server install in progress, or why the last one failed.
     pub installing: Option<String>,
+    /// A server installs updates by itself, at a quiet moment (checking every minute).
+    pub auto_install: bool,
     /// Why the last check failed.
     pub error: Option<String>,
 }
@@ -176,6 +184,7 @@ pub async fn status(state: &AppState) -> UpdateStatus {
         checked_at: found.checked_at,
         server_can_install: state.config.server && update.is_some() && found.server.is_some(),
         installing: state.updates.installing.read().ok().and_then(|i| i.clone()),
+        auto_install: auto_install(state).await,
         update,
         mobile: found.mobile,
         error: found.error,
@@ -305,20 +314,57 @@ async fn fetch() -> Result<Manifest, String> {
         .map_err(|_| "The release information couldn't be read.".to_string())
 }
 
-/// Checks a minute after start, then once a day, while checks are on (a server left on
-/// sees a new release within a day; the apps' Check now looks at once).
+/// A server installs updates by itself (until the owner turns it off).
+pub async fn auto_install(state: &AppState) -> bool {
+    state.config.server
+        && outpost_core::settings::get(&state.pool, AUTO_INSTALL).await.ok().flatten().as_deref() != Some("off")
+}
+
+/// Checks a minute after start, then once a day (a server: every minute, installing what it
+/// finds at a quiet moment), while checks are on. The apps' Check now looks at once.
 pub async fn background(state: AppState) {
     tokio::time::sleep(Duration::from_secs(60)).await;
+    let mut announced: Option<String> = None;
+    // The version an automatic install last failed for, and when.
+    let mut failed: Option<(String, i64)> = None;
     loop {
         if enabled(&state).await {
             check(&state).await;
             let s = status(&state).await;
             if let Some(u) = &s.update {
-                tracing::info!(version = %u.version, "an Outpost update is ready");
+                if announced.as_deref() != Some(u.version.as_str()) {
+                    tracing::info!(version = %u.version, "an Outpost update is ready");
+                    announced = Some(u.version.clone());
+                }
+                let retry_ok = match &failed {
+                    Some((v, at)) if *v == u.version => outpost_core::now() - at > RETRY_AFTER,
+                    _ => true,
+                };
+                let busy = s.installing.as_deref().is_some_and(|i| !i.starts_with("Failed"));
+                if s.server_can_install && s.auto_install && !busy && retry_ok && quiet(&state).await {
+                    tracing::info!(version = %u.version, "installing the update by itself (nothing is running)");
+                    if let Err(e) = install_server(&state) {
+                        tracing::warn!(error = %e, "couldn't start the automatic update");
+                    }
+                    // The install restarts Outpost when it's done; if it fails, wait before trying again.
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    let now = status(&state).await;
+                    if now.installing.as_deref().is_some_and(|i| i.starts_with("Failed")) {
+                        failed = Some((u.version.clone(), outpost_core::now()));
+                    }
+                }
             }
         }
-        tokio::time::sleep(EVERY).await;
+        tokio::time::sleep(if state.config.server { SERVER_EVERY } else { EVERY }).await;
     }
+}
+
+/// Nothing a restart would interrupt: no job running (here or on a helper PC), no
+/// training, and no chat in the last couple of minutes.
+async fn quiet(state: &AppState) -> bool {
+    state.queue.running().is_none()
+        && state.queue.remote_runs().is_empty()
+        && !crate::gallery_index::chat_recently(120)
 }
 
 /// `a` is a newer version than `b` (`0.10.0` > `0.9.2`; `1.0.0` > `1.0.0-beta.1`).

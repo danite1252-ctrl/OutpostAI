@@ -1502,6 +1502,28 @@ async fn diagnostics_and_update_settings() {
     let (status, u) = call(&app, "PUT", "/api/updates/settings", t, Some(json!({"enabled": false}))).await;
     assert_eq!(status, StatusCode::OK, "{u}");
     assert_eq!(u["enabled"], false);
+    // A PC never installs by itself.
+    assert_eq!(u["auto_install"], false);
+}
+
+#[tokio::test]
+async fn a_server_installs_updates_by_itself_until_turned_off() {
+    let pool = outpost_core::db::open_in_memory().await.unwrap();
+    let mut config = Config::local_default();
+    config.data_dir = temp_data_dir();
+    config.ollama_url = "http://127.0.0.1:9".into();
+    config.server = true;
+    let app = router(AppState::with_pool(pool, config)).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 50000))));
+    let (token, _) = setup_owner(&app).await;
+    let t = Some(token.as_str());
+    let (_, u) = call(&app, "GET", "/api/updates", t, None).await;
+    assert_eq!(u["auto_install"], true, "{u}");
+    let (_, u) = call(&app, "PUT", "/api/updates/settings", t, Some(json!({"enabled": true, "auto_install": false}))).await;
+    assert_eq!(u["auto_install"], false, "{u}");
+    assert_eq!(u["enabled"], true);
+    // Leaving it out changes nothing.
+    let (_, u) = call(&app, "PUT", "/api/updates/settings", t, Some(json!({"enabled": true}))).await;
+    assert_eq!(u["auto_install"], false);
 }
 
 #[tokio::test]
