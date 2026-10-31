@@ -94,6 +94,9 @@ Whisper and Kokoro.
   they're made. Search it by what's in the pictures, share with the household, edit,
   animate, upscale, remove a background, make a 3D model, or delete. 3D models turn round
   with the mouse (or a finger on the phone).
+- **Names**: give a 3D model a name when you make it (Create › 3D › Name), or later with
+  **Name it** / **Rename** in the gallery (any picture or video too). Saving uses it for the
+  file (`Sheep.3mf`), and gallery search finds it.
 - **Saving**: on the PC, **Save** puts the file in your **Downloads** folder and says so,
   with **Show in folder**. On the phone it goes to Pictures, Movies or Download (an Outpost
   folder in each), then **Share it…** sends it on (to Bambu Handy for cloud printing, say).

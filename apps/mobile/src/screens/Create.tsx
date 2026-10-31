@@ -250,6 +250,14 @@ function Input({
   const help = hint ? <Text style={{ color: C.muted, fontSize: 13 }}>{hint}</Text> : null;
   switch (i.kind) {
     case "text":
+      // A short name, not a prompt: one line.
+      if (i.key === "name")
+        return (
+          <View style={{ gap: 6 }}>
+            <Field label={label} value={(value as string) ?? ""} onChangeText={onChange} maxLength={80} />
+            {help}
+          </View>
+        );
       return (
         <View style={{ gap: 6 }}>
           <Field label={label} value={(value as string) ?? ""} onChangeText={onChange} multiline maxLength={4000} style={{ minHeight: 96, textAlignVertical: "top", paddingTop: 12 }} />

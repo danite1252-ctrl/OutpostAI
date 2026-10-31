@@ -357,6 +357,9 @@ async fn run(state: AppState, job: Job) -> Result<(), ComfyError> {
         )
         .await
         .map_err(|e| ComfyError::Failed(e.to_string()))?;
+        if let Some(name) = values.get(packs::NAME).and_then(Value::as_str).filter(|n| !n.trim().is_empty()) {
+            let _ = media::set_name(&state.pool, &saved_media.id, name).await;
+        }
         if pack.print_height(&values).is_some() {
             state.queue.update(|r| r.progress.phase = "Making it ready for 3D printing".into());
             crate::print3d::after_saved(state, &pack, &values, &saved_media.id).await;

@@ -252,7 +252,7 @@ pub fn router(state: AppState) -> Router {
             "/api/media/import",
             post(create::import_media).layer(DefaultBodyLimit::max(create::MAX_IMPORT_BYTES)),
         )
-        .route("/api/media/{id}", get(create::get_media).delete(create::delete_media))
+        .route("/api/media/{id}", get(create::get_media).delete(create::delete_media).patch(create::name_media))
         .route("/api/media/{id}/print", get(create::get_media_print))
         .route("/api/downloads", get(downloads::list))
         .route("/api/pairing", post(pairing::create_code))

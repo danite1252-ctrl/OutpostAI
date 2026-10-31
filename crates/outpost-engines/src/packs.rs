@@ -350,6 +350,9 @@ pub struct Built {
     pub seed: Option<u64>,
 }
 
+/// An optional name for what's made (a 3D model): the gallery item gets it.
+pub const NAME: &str = "name";
+
 /// The tickbox that makes a 3D model ready for a slicer, and the height it's printed at.
 pub const FOR_PRINTING: &str = "for_printing";
 pub const PRINT_HEIGHT: &str = "print_height";

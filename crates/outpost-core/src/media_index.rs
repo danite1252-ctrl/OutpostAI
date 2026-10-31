@@ -15,7 +15,7 @@ use crate::CoreResult;
 pub const MAX_TRIES: i64 = 3;
 
 const MEDIA_COLS: &str =
-    "m.id, m.account_id, m.job_id, m.kind, m.mime, m.bytes, m.pack_id, m.prompt, m.seed, m.created_at, m.shared_at";
+    "m.id, m.account_id, m.job_id, m.kind, m.mime, m.bytes, m.pack_id, m.prompt, m.seed, m.created_at, m.shared_at, m.name";
 
 /// The next picture to describe (newest first), and its file.
 pub async fn next_to_describe(pool: &SqlitePool, files_dir: &Path) -> CoreResult<Option<(Media, PathBuf)>> {
@@ -148,7 +148,11 @@ pub fn search<'a>(items: &'a [Indexed], query: &str, query_embedding: Option<&[f
     let mut scored: Vec<(f32, &Indexed)> = items
         .iter()
         .map(|it| {
-            let text = search_text(it.media.prompt.as_deref(), it.description.as_deref());
+            // Its name counts too ("sheep" finds the model called Sheep).
+            let text = match &it.media.name {
+                Some(n) => format!("{n}\n{}", search_text(it.media.prompt.as_deref(), it.description.as_deref())),
+                None => search_text(it.media.prompt.as_deref(), it.description.as_deref()),
+            };
             let by_words = word_score(&words, &text, items.len());
             let score = match (&q, &it.embedding) {
                 (Some(q), Some(e)) => dot(q, e) + 0.03 * by_words.min(4.0),
@@ -198,6 +202,7 @@ mod tests {
                 seed: None,
                 created_at: 0,
                 shared_at: None,
+                name: None,
             },
             description: description.map(Into::into),
             embedding: e.map(|v| normalized(&v)),

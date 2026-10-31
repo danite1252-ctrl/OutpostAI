@@ -584,6 +584,9 @@ pub async fn result(
         },
     )
     .await?;
+    if let Some(name) = values.get(packs::NAME).and_then(Value::as_str).filter(|n| !n.trim().is_empty()) {
+        let _ = media::set_name(&state.pool, &saved.id, name).await;
+    }
     if let (Some(pack), Some(values)) = (packs::find(&job.pack_id), values.as_object()) {
         crate::print3d::after_saved(&state, &pack, values, &saved.id).await;
     }

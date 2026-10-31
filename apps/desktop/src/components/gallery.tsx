@@ -33,7 +33,7 @@ export function Thumb(props: Parameters<typeof MediaThumb>[0]) {
       aria-label={label ?? "Open 3D model"}
     >
       <ModelTile size={44} />
-      <span className="text-xs text-muted">3D model</span>
+      <span className="max-w-full truncate px-2 text-xs text-muted">{m.name || "3D model"}</span>
       {m.shared_at && !caption && (
         <span className="absolute top-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[11px] text-ink">Shared</span>
       )}
@@ -127,6 +127,7 @@ export function Viewer({
   onRequest,
   onShare,
   onDelete,
+  onNamed,
 }: {
   token: string;
   media: Media;
@@ -139,8 +140,11 @@ export function Viewer({
   onShare?: (shared: boolean) => void;
   /** Left out when you can't delete it. */
   onDelete?: () => void;
+  /** It was named (left out when you can't name it). */
+  onNamed?: (m: Media) => void;
 }) {
   const { src } = useAuthedUrl(token, `/api/media/${m.id}`);
+  const fileBase = fileName(m);
   const [big, setBig] = useState(false);
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && !big && onClose();
@@ -163,7 +167,8 @@ export function Viewer({
             ))}
         </div>
         <aside className="flex w-full flex-col gap-3 overflow-auto rounded-2xl border border-line bg-surface p-4 lg:w-72">
-          <p className="text-sm whitespace-pre-wrap">{m.prompt || (m.kind === "model" ? "3D model" : "No prompt")}</p>
+          <NameRow token={token} media={m} onNamed={onNamed} />
+          {(m.prompt || m.kind !== "model") && <p className="text-sm whitespace-pre-wrap">{m.prompt || "No prompt"}</p>}
           {m.kind === "model" && <p className="text-xs text-muted">Drag to turn it, scroll to zoom.</p>}
           {m.description && <p className="text-xs text-soft">Outpost sees: {m.description}</p>}
           <p className="font-mono text-xs text-muted">
@@ -191,12 +196,12 @@ export function Viewer({
               </Button>
             </>
           )}
-          {m.kind === "model" && <SaveForPrinting token={token} media={m} />}
+          {m.kind === "model" && <SaveForPrinting token={token} media={m} fileBase={fileBase} />}
           {src && (
             <SaveButton
               key={`copy-${m.id}`}
               label={m.kind === "model" ? "Save for games and 3D apps (.glb)" : "Save a copy"}
-              name={`outpost-${m.id.slice(0, 8)}.${extension(m.mime)}`}
+              name={`${fileBase}.${extension(m.mime)}`}
               fetchFile={async () => ({ blob: await fetch(src).then((r) => r.blob()) })}
             />
           )}
@@ -356,7 +361,7 @@ function extension(mime: string) {
 }
 
 /** The model as a .3mf for Bambu Studio and other slicers: upright, flat on the bed. */
-function SaveForPrinting({ token, media: m }: { token: string; media: Media }) {
+function SaveForPrinting({ token, media: m, fileBase }: { token: string; media: Media; fileBase: string }) {
   return (
     <>
       <SaveButton
@@ -364,7 +369,7 @@ function SaveForPrinting({ token, media: m }: { token: string; media: Media }) {
         variant="primary"
         label="Save for 3D printing (.3mf)"
         busyLabel="Getting it ready…"
-        name={`outpost-${m.id.slice(0, 8)}.3mf`}
+        name={`${fileBase}.3mf`}
         fetchFile={async () => {
           const { blob, headers } = await authedFile(token, `/api/media/${m.id}/print`);
           const filaments = (headers.get("x-outpost-filaments") ?? "").split(",").filter(Boolean);
@@ -389,6 +394,78 @@ function Filaments({ colours }: { colours: string[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** The file name an item saves under: its name, or outpost-<id>. */
+export function fileName(m: Media): string {
+  const n = (m.name ?? "")
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\.+|\.+$/g, "");
+  return n || `outpost-${m.id.slice(0, 8)}`;
+}
+
+/** The item's name, with a way to give or change it. */
+function NameRow({ token, media: m, onNamed }: { token: string; media: Media; onNamed?: (m: Media) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(m.name ?? "");
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setText(m.name ?? "");
+    setEditing(false);
+  }, [m.id, m.name]);
+  const save = async () => {
+    setError(null);
+    try {
+      const named = await createApi.nameMedia(token, m.id, text);
+      setEditing(false);
+      onNamed?.({ ...m, name: named.name ?? null });
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Couldn't name it.");
+    }
+  };
+  if (editing && onNamed) {
+    return (
+      <form
+        className="flex flex-col gap-1.5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save();
+        }}
+      >
+        <input
+          autoFocus
+          aria-label="Name"
+          value={text}
+          maxLength={80}
+          placeholder={m.kind === "model" ? "e.g. Sheep" : "A name"}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === "Escape" && setEditing(false)}
+          className="min-h-10 rounded-lg border border-ember bg-deep px-3 text-ink focus:outline-none"
+        />
+        <div className="flex gap-2">
+          <Button type="submit">Save</Button>
+          <Button variant="ghost" onClick={() => setEditing(false)}>
+            Cancel
+          </Button>
+        </div>
+        <ErrorNote>{error}</ErrorNote>
+      </form>
+    );
+  }
+  return (
+    <div className="flex items-start gap-2">
+      <p className={`min-w-0 flex-1 break-words ${m.name ? "text-base font-semibold" : "text-sm text-muted"}`}>
+        {m.name || (m.kind === "model" ? "3D model (no name yet)" : "No name")}
+      </p>
+      {onNamed && (
+        <button type="button" className="text-xs text-muted underline hover:text-ink" onClick={() => setEditing(true)}>
+          {m.name ? "Rename" : "Name it"}
+        </button>
+      )}
     </div>
   );
 }

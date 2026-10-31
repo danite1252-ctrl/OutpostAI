@@ -69,6 +69,14 @@
       "help": "One object, seen clearly. Its background is removed for you."
     },
     {
+      "key": "name",
+      "label": "Name (optional)",
+      "kind": "text",
+      "default": "",
+      "targets": [],
+      "help": "What to call it, e.g. Sheep. The gallery shows it, and saving uses it for the file (Sheep.3mf)."
+    },
+    {
       "key": "for_printing",
       "label": "Ready for 3D printing",
       "kind": "toggle",

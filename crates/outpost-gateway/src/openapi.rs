@@ -77,6 +77,7 @@ use crate::routes::{
         create::shared_gallery,
         create::share_media,
         create::get_media,
+        create::name_media,
         create::finished_jobs,
         create::get_media_print,
         create::delete_media,

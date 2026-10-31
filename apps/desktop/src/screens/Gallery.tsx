@@ -311,6 +311,16 @@ export default function Gallery({
           // Share your own; an owner can also take anyone's out of the shared gallery.
           onShare={mineItem(viewing) || (isOwner && viewing.shared_at) ? (shared) => void share(viewing, shared) : undefined}
           onDelete={mineItem(viewing) || isOwner ? () => void remove(viewing) : undefined}
+          onNamed={
+            mineItem(viewing) || isOwner
+              ? (m) => {
+                  const rename = <T extends Media>(x: T): T => (x.id === m.id ? { ...x, name: m.name } : x);
+                  setViewing((v) => (v ? rename(v) : v));
+                  setItems((list) => list.map(rename));
+                  setResults((r) => (r ? r.map(rename) : r));
+                }
+              : undefined
+          }
         />
       )}
     </section>

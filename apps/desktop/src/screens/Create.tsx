@@ -472,6 +472,10 @@ export default function Create({
           }}
           onShare={(shared) => void share(viewing, shared)}
           onDelete={() => void remove(viewing)}
+          onNamed={(m) => {
+            setViewing((v) => (v && v.id === m.id ? { ...v, name: m.name } : v));
+            setGallery((g) => g.map((x) => (x.id === m.id ? { ...x, name: m.name } : x)));
+          }}
         />
       )}
     </section>
@@ -721,6 +725,21 @@ function InputField({
 
   switch (i.kind) {
     case "text":
+      // A short name, not a prompt: one line.
+      if (i.key === "name")
+        return (
+          <div className="flex flex-col gap-1.5">
+            {label}
+            <input
+              id={id}
+              value={(value as string) ?? ""}
+              maxLength={80}
+              onChange={(e) => onChange(i.key, e.target.value)}
+              className={box}
+            />
+            {help}
+          </div>
+        );
       return (
         <div className="flex flex-col gap-1.5">
           {label}

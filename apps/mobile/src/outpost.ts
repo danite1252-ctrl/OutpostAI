@@ -363,6 +363,8 @@ export interface Media {
   pack_id: string | null;
   created_at: number;
   shared_at: number | null;
+  /** Its name ("Sheep"), if given. */
+  name?: string | null;
   by_name?: string;
   /** What Outpost sees in it (search results). */
   description?: string | null;

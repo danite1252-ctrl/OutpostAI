@@ -24,9 +24,12 @@ pub struct Media {
     pub created_at: i64,
     /// When it was put in the shared gallery; `None` while private.
     pub shared_at: Option<i64>,
+    /// Its name ("Sheep"), if given: shown in the gallery and used when it's saved.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
-const COLS: &str = "id, account_id, job_id, kind, mime, bytes, pack_id, prompt, seed, created_at, shared_at";
+const COLS: &str = "id, account_id, job_id, kind, mime, bytes, pack_id, prompt, seed, created_at, shared_at, name";
 
 /// An item in the shared gallery, with who shared it.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
@@ -90,6 +93,7 @@ pub async fn add(pool: &SqlitePool, files_dir: &Path, new: NewMedia<'_>) -> Core
         seed: new.seed.map(|s| s as i64),
         created_at: new.created_at.unwrap_or_else(now),
         shared_at: None,
+        name: None,
     };
     let saved = sqlx::query(
         "INSERT INTO media (id, account_id, job_id, kind, mime, bytes, path, pack_id, prompt, seed, created_at)
@@ -243,6 +247,24 @@ pub async fn all(pool: &SqlitePool, account_id: &str) -> CoreResult<Vec<Media>> 
     .await?)
 }
 
+/// A tidy name: one line, at most 80 characters; empty clears it.
+pub fn clean_name(name: &str) -> Option<String> {
+    let one_line: String = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let n: String = one_line.chars().filter(|c| !c.is_control()).take(80).collect();
+    let n = n.trim().to_string();
+    (!n.is_empty()).then_some(n)
+}
+
+/// Name an item (any account's: the caller checks who may), or clear its name with "".
+pub async fn set_name(pool: &SqlitePool, id: &str, name: &str) -> CoreResult<Option<String>> {
+    let name = clean_name(name);
+    let done = sqlx::query("UPDATE media SET name = ? WHERE id = ?").bind(&name).bind(id).execute(pool).await?;
+    if done.rows_affected() == 0 {
+        return Err(CoreError::NotFound);
+    }
+    Ok(name)
+}
+
 /// Delete one of my items and its file.
 pub async fn delete(pool: &SqlitePool, files_dir: &Path, account_id: &str, id: &str) -> CoreResult<()> {
     let (_, path) = get(pool, files_dir, account_id, id).await?;
@@ -266,6 +288,30 @@ mod tests {
     use super::*;
     use crate::accounts::{self, NewAccount, Role};
     use crate::db::open_in_memory;
+
+    #[tokio::test]
+    async fn items_can_be_named_and_the_name_is_kept_tidy() {
+        let pool = open_in_memory().await.unwrap();
+        let dir = std::env::temp_dir().join(format!("outpost-media-{}", uuid::Uuid::new_v4()));
+        let dan = accounts::create(&pool, NewAccount { name: "Dan".into(), role: Role::Member, secret: Some("4821".into()) })
+            .await
+            .unwrap()
+            .id;
+        let m = add(
+            &pool,
+            &dir,
+            NewMedia { account_id: &dan, job_id: None, pack_id: None, prompt: None, seed: None, source_name: "x.glb", data: b"glTF", created_at: None },
+        )
+        .await
+        .unwrap();
+        assert_eq!(m.name, None);
+        assert_eq!(set_name(&pool, &m.id, "  Sheep\n  for the shelf ").await.unwrap().as_deref(), Some("Sheep for the shelf"));
+        assert_eq!(get(&pool, &dir, &dan, &m.id).await.unwrap().0.name.as_deref(), Some("Sheep for the shelf"));
+        assert_eq!(set_name(&pool, &m.id, "   ").await.unwrap(), None);
+        assert_eq!(get(&pool, &dir, &dan, &m.id).await.unwrap().0.name, None);
+        assert!(set_name(&pool, "nope", "x").await.is_err());
+        assert_eq!(clean_name(&"a".repeat(200)).unwrap().len(), 80);
+    }
 
     #[tokio::test]
     async fn the_gallery_keeps_3d_models_and_their_search_text_goes_with_them() {

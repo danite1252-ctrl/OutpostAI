@@ -183,7 +183,9 @@ export default function Gallery({
               {m.kind === "model" ? (
                 <View style={{ width: size, height: size, borderRadius: 10, backgroundColor: C.raised, alignItems: "center", justifyContent: "center" }}>
                   <Text style={{ color: C.soft, fontSize: 26 }}>⬡</Text>
-                  <Text style={{ color: C.muted, fontSize: 12 }}>3D model</Text>
+                  <Text numberOfLines={1} style={{ color: C.muted, fontSize: 12, paddingHorizontal: 4 }}>
+                    {m.name || "3D model"}
+                  </Text>
                 </View>
               ) : m.kind === "video" ? (
                 <View style={{ width: size, height: size, borderRadius: 10, backgroundColor: C.raised, alignItems: "center", justifyContent: "center" }}>
@@ -212,6 +214,12 @@ export default function Gallery({
           onClose={() => setViewing(null)}
           onShare={(shared) => void share(viewing, shared)}
           onDelete={() => remove(viewing)}
+          onNamed={(named) => {
+            const rename = (x: Media) => (x.id === named.id ? { ...x, name: named.name } : x);
+            setViewing((v) => (v ? rename(v) : v));
+            setItems((list) => list.map(rename));
+            setResults((r) => (r ? r.map(rename) : r));
+          }}
           onUse={(uri, task) => {
             setViewing(null);
             onUse(uri, task);
@@ -232,6 +240,7 @@ function Viewer({
   onClose,
   onShare,
   onDelete,
+  onNamed,
   onUse,
 }: {
   api: Outpost;
@@ -243,6 +252,7 @@ function Viewer({
   by?: string;
   onClose: () => void;
   onShare: (shared: boolean) => void;
+  onNamed: (m: Media) => void;
   onDelete: () => void;
   onUse: (dataUri: string, task: "edit" | "animate" | "model") => void;
 }) {
@@ -276,6 +286,7 @@ function Viewer({
         ) : (
           <Video api={api} media={m} width={w - 32} />
         )}
+        <NameRow api={api} media={m} canName={canDelete} onNamed={onNamed} />
         {m.kind !== "model" && <P>{m.prompt || "No prompt"}</P>}
         <P muted>
           {by ? `By ${by} · ` : ""}
@@ -291,14 +302,14 @@ function Viewer({
         )}
         {m.kind === "model" ? (
           <>
-            <SaveButton api={api} path={`/api/media/${m.id}/print`} name={`outpost-${m.id.slice(0, 8)}.3mf`} mime="model/3mf" label="for 3D printing (.3mf)" primary />
-            <SaveButton api={api} path={`/api/media/${m.id}`} name={`outpost-${m.id.slice(0, 8)}.glb`} mime="model/gltf-binary" label="for games and 3D apps (.glb)" />
+            <SaveButton api={api} path={`/api/media/${m.id}/print`} name={`${fileName(m)}.3mf`} mime="model/3mf" label="for 3D printing (.3mf)" primary />
+            <SaveButton api={api} path={`/api/media/${m.id}`} name={`${fileName(m)}.glb`} mime="model/gltf-binary" label="for games and 3D apps (.glb)" />
           </>
         ) : (
           <SaveButton
             api={api}
             path={`/api/media/${m.id}`}
-            name={`outpost-${m.id.slice(0, 8)}.${m.mime === "image/jpeg" ? "jpg" : (m.mime.split("/")[1] ?? "png")}`}
+            name={`${fileName(m)}.${m.mime === "image/jpeg" ? "jpg" : (m.mime.split("/")[1] ?? "png")}`}
             mime={m.mime}
             label={m.kind === "video" ? "to the phone's videos" : "to the phone's pictures"}
           />
@@ -464,4 +475,73 @@ function Player({ uri, width }: { uri: string; width: number }) {
   }, [player]);
   const height = Math.min(width / aspect, Dimensions.get("window").height * 0.6);
   return <VideoView player={player} style={{ width, height, borderRadius: 12, backgroundColor: "#000" }} nativeControls allowsFullscreen contentFit="contain" />;
+}
+
+/** The file name an item saves under: its name, or outpost-<id>. */
+function fileName(m: Media): string {
+  const n = (m.name ?? "")
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\.+|\.+$/g, "");
+  return n || `outpost-${m.id.slice(0, 8)}`;
+}
+
+/** The item's name, with Rename (for mine, or anyone's for an owner). */
+function NameRow({ api, media: m, canName, onNamed }: { api: Outpost; media: Media; canName: boolean; onNamed: (m: Media) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(m.name ?? "");
+  const [error, setError] = useState<string | null>(null);
+  async function save() {
+    setError(null);
+    try {
+      const named = await api.json<Media>("PATCH", `/api/media/${m.id}`, { name: text });
+      setEditing(false);
+      onNamed({ ...m, name: named.name ?? null });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't name it.");
+    }
+  }
+  return (
+    <View style={{ gap: 6 }}>
+      <View style={[s.row, { alignItems: "center" }]}>
+        <Text style={{ color: m.name ? C.ink : C.muted, fontSize: m.name ? 18 : 15, fontWeight: m.name ? "600" : "400", flex: 1 }}>
+          {m.name || (m.kind === "model" ? "3D model (no name yet)" : "No name")}
+        </Text>
+        {canName && (
+          <Chip
+            label={m.name ? "Rename" : "Name it"}
+            onPress={() => {
+              setText(m.name ?? "");
+              setEditing(true);
+            }}
+          />
+        )}
+      </View>
+      <Modal visible={editing} transparent animationType="fade" onRequestClose={() => setEditing(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", padding: 24 }}>
+          <View style={[s.card, { gap: 12 }]}>
+            <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>{m.name ? "Rename" : "Name it"}</Text>
+            <TextInput
+              autoFocus
+              value={text}
+              onChangeText={setText}
+              maxLength={80}
+              placeholder={m.kind === "model" ? "e.g. Sheep" : "A name"}
+              placeholderTextColor={C.muted}
+              returnKeyType="done"
+              onSubmitEditing={() => void save()}
+              accessibilityLabel="Name"
+              style={{ color: C.ink, borderWidth: 1, borderColor: C.ember, borderRadius: 10, paddingHorizontal: 12, minHeight: 44, fontSize: 16 }}
+            />
+            {error && <ErrorText>{error}</ErrorText>}
+            <View style={[s.row, { justifyContent: "flex-end" }]}>
+              <Button kind="ghost" title="Cancel" onPress={() => setEditing(false)} />
+              <Button title="Save" onPress={() => void save()} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
 }

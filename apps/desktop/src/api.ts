@@ -867,6 +867,8 @@ export interface Media {
   created_at: number;
   /** In the shared gallery since; null while private. */
   shared_at: number | null;
+  /** Its name ("Sheep"), if given. */
+  name?: string | null;
   /** What Outpost sees in it (search results only). */
   description?: string | null;
 }
@@ -1014,6 +1016,9 @@ export const createApi = {
     request<Media>("POST", `/api/media/${encodeURIComponent(id)}/share`, { token, body: { shared } }),
   deleteMedia: (token: string, id: string) =>
     request<void>("DELETE", `/api/media/${encodeURIComponent(id)}`, { token }),
+  /** Name a gallery item ("" clears it). */
+  nameMedia: (token: string, id: string, name: string) =>
+    request<Media>("PATCH", `/api/media/${encodeURIComponent(id)}`, { token, body: { name } }),
 };
 
 /** Any authenticated file (attachment or gallery item) as a blob. */

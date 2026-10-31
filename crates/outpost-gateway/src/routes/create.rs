@@ -867,6 +867,24 @@ pub async fn get_media_print(State(state): State<AppState>, auth: Auth, Path(id)
         .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "Could not send the file."))
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct NameMedia {
+    /// The new name; empty clears it.
+    pub name: String,
+}
+
+/// Name one of my gallery items (the owner: anyone's). The name shows in the gallery, is
+/// found by search, and is used for the file when it's saved.
+#[utoipa::path(patch, path = "/api/media/{id}", tag = "create", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Media id")),
+    request_body = NameMedia,
+    responses((status = 200, description = "Named", body = Media), (status = 404, description = "Not found", body = ErrorBody)))]
+pub async fn name_media(State(state): State<AppState>, auth: Auth, Path(id): Path<String>, Json(req): Json<NameMedia>) -> ApiResult<Json<Media>> {
+    let (mut m, _) = find_media(&state, &auth, &id, false).await?;
+    m.name = media::set_name(&state.pool, &id, &req.name).await?;
+    Ok(Json(m))
+}
+
 /// Mine, for the owner anyone's; for viewing, also anything in the shared gallery.
 async fn find_media(state: &AppState, auth: &Auth, id: &str, viewing: bool) -> ApiResult<(Media, std::path::PathBuf)> {
     let dir = state.config.files_dir();

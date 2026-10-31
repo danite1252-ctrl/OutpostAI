@@ -5,13 +5,9 @@ Outpost 1.0 is everything planned: chat with personas, memory and documents; Cre
 (.3mf, up to 4 colours, flat bottom or back); Train (on the server or a lent PC); voice; the
 phone app (pairing by QR, share to Outpost, saving, a 3D viewer, notifications); the Linux
 server with helper PCs and automatic updates; gallery search; and other apps (API, MCP,
-webhooks).
-
-## Next
-
-1. **Name 3D models** (and other gallery items): give one a name in the gallery, and saving
-   uses it for the file (`Sheep.3mf`, `Sheep.glb`) on the PC and the phone, and as the model's
-   name inside the .3mf.
+webhooks). Since 1.0: renaming chats, naming gallery items (used when they're saved),
+phone notifications as soon as a job finishes, and warnings for personas whose model isn't
+downloaded.
 
 ## Ideas after 1.0
 
