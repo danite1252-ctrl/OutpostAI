@@ -23,7 +23,8 @@ pub const DEFAULT_HEIGHT_MM: f64 = 100.0;
 
 /// The slicer copy sits beside the model's own file.
 pub fn sidecar(model_file: &Path) -> PathBuf {
-    model_file.with_extension("3mf")
+    // "v2": copies made before colours were written as colour groups are made again.
+    model_file.with_extension("v2.3mf")
 }
 
 /// Its filament colours (`#rrggbb,...`), beside it too.
@@ -201,16 +202,6 @@ pub fn for_printing(mesh: &Mesh, o: &Options) -> Result<Printed, String> {
     Ok(printed)
 }
 
-/// Bambu Studio's (and Orca's) per-triangle filament: 1 = "4", 2 = "8", 3 = "0C", 4 = "1C".
-fn paint_color(filament: u8) -> &'static str {
-    match filament {
-        1 => "4",
-        2 => "8",
-        3 => "0C",
-        _ => "1C",
-    }
-}
-
 pub fn hex(c: [u8; 3]) -> String {
     format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])
 }
@@ -230,19 +221,25 @@ pub fn write_3mf(printed: &Printed, title: &str) -> Result<Vec<u8>, String> {
         })
         .collect();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    xml.push_str("<model unit=\"millimeter\" xml:lang=\"en-US\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n");
+    xml.push_str(
+        "<model unit=\"millimeter\" xml:lang=\"en-US\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\" \
+         xmlns:m=\"http://schemas.microsoft.com/3dmanufacturing/material/2015/02\">\n",
+    );
     let _ = writeln!(xml, " <metadata name=\"Title\">{title}</metadata>");
     xml.push_str(" <metadata name=\"Application\">Outpost</metadata>\n");
     xml.push_str(" <resources>\n");
-    // Colours: the standard 3MF materials, and Bambu Studio's own painting (filament per triangle).
+    // Colours: a 3MF colour group (the Materials extension), one colour per filament, most used
+    // first; each triangle names its colour. Bambu Studio reads these from other apps' files
+    // and maps them to filaments in this order (its own `paint_color` is only read from its
+    // own projects).
     let object = if coloured {
         let names: Vec<String> = printed.palette.iter().map(|c| hex(*c)).collect();
         let _ = writeln!(xml, " <!-- Filaments: {} -->", names.join(", "));
-        xml.push_str("  <basematerials id=\"1\">\n");
-        for (i, c) in printed.palette.iter().enumerate() {
-            let _ = writeln!(xml, "   <base name=\"Filament {}\" displaycolor=\"{}FF\"/>", i + 1, hex(*c));
+        xml.push_str("  <m:colorgroup id=\"1\">\n");
+        for c in &printed.palette {
+            let _ = writeln!(xml, "   <m:color color=\"{}FF\"/>", hex(*c));
         }
-        xml.push_str("  </basematerials>\n");
+        xml.push_str("  </m:colorgroup>\n");
         xml.push_str("  <object id=\"2\" type=\"model\" pid=\"1\" pindex=\"0\">\n");
         2
     } else {
@@ -260,18 +257,11 @@ pub fn write_3mf(printed: &Printed, title: &str) -> Result<Vec<u8>, String> {
     }
     xml.push_str("    </vertices>\n    <triangles>\n");
     for (ti, t) in mesh.triangles.iter().enumerate() {
-        let f = if coloured { printed.paint[ti] } else { 0 };
-        if f == 0 {
-            let _ = writeln!(xml, "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>", t[0], t[1], t[2]);
+        if coloured {
+            let f = printed.paint[ti];
+            let _ = writeln!(xml, "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\" pid=\"1\" p1=\"{f}\"/>", t[0], t[1], t[2]);
         } else {
-            let _ = writeln!(
-                xml,
-                "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\" p1=\"{f}\" paint_color=\"{}\"/>",
-                t[0],
-                t[1],
-                t[2],
-                paint_color(f + 1)
-            );
+            let _ = writeln!(xml, "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>", t[0], t[1], t[2]);
         }
     }
     let _ = write!(
@@ -330,7 +320,7 @@ pub async fn make(model_file: PathBuf, o: Options, title: String) -> Result<Vec<
         let glb = std::fs::read(&model_file).map_err(|e| e.to_string())?;
         let (out, palette) = convert(&glb, &o, &title)?;
         let dest = sidecar(&model_file);
-        let part = dest.with_extension("3mf.part");
+        let part = dest.with_extension("part");
         std::fs::write(&part, out).map_err(|e| e.to_string())?;
         std::fs::rename(&part, &dest).map_err(|e| e.to_string())?;
         let names: Vec<String> = palette.iter().map(|c| hex(*c)).collect();
@@ -475,14 +465,17 @@ mod more_tests {
         let printed = for_printing(&two_colour_box(), &o).unwrap();
         assert_eq!(printed.palette.len(), 2, "only two colours there: {:?}", printed.palette);
         let xml = model_xml(write_3mf(&printed, "box").unwrap());
-        assert!(xml.contains("<basematerials id=\"1\">"));
+        assert!(xml.contains("xmlns:m=\"http://schemas.microsoft.com/3dmanufacturing/material/2015/02\""));
+        assert!(xml.contains("<m:colorgroup id=\"1\">"));
+        assert_eq!(xml.matches("<m:color color=").count(), 2);
         assert!(xml.contains("pid=\"1\" pindex=\"0\""));
-        assert!(xml.contains("paint_color=\"8\""), "filament 2 painted");
-        assert!(!xml.contains("paint_color=\"4\""), "filament 1 is the object's own");
+        assert!(xml.contains("pid=\"1\" p1=\"1\""), "filament 2's triangles");
+        assert!(xml.contains("pid=\"1\" p1=\"0\""), "filament 1's triangles");
+        assert_eq!(xml.matches("<triangle ").count(), xml.matches(" p1=").count(), "every triangle says its colour");
         // One colour asked: a plain model.
         let plain = for_printing(&two_colour_box(), &Options::default()).unwrap();
         assert!(plain.palette.is_empty());
-        assert!(!model_xml(write_3mf(&plain, "box").unwrap()).contains("basematerials"));
+        assert!(!model_xml(write_3mf(&plain, "box").unwrap()).contains("colorgroup"));
     }
 
     #[test]
