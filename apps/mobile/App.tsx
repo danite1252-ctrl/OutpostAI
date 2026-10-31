@@ -1,4 +1,4 @@
-import { inFront, setUpNotifications } from "./src/notify";
+import { inFront, setUpNotifications, watchIfRunning } from "./src/notify";
 import * as LocalAuthentication from "expo-local-authentication";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -189,6 +189,21 @@ function Main({
   useEffect(() => {
     void setUpNotifications(saved, true);
   }, [saved]);
+  // While the app is open, start watching closely whenever jobs of mine are running (from
+  // any device), so "it's ready" comes straight away after the app is left.
+  useEffect(() => {
+    void watchIfRunning(api);
+    const t = setInterval(() => {
+      if (AppState.currentState === "active") void watchIfRunning(api);
+    }, 15000);
+    const sub = AppState.addEventListener("change", (st) => {
+      if (st === "active") void watchIfRunning(api);
+    });
+    return () => {
+      clearInterval(t);
+      sub.remove();
+    };
+  }, [api]);
 
   // Learn any new addresses (e.g. Tailscale for away from home) without pairing again.
   useEffect(() => {

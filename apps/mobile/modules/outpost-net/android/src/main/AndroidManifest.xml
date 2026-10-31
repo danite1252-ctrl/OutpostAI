@@ -9,6 +9,9 @@
   <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
   <!-- "It's ready" notifications for long jobs (asked for on Android 13+). -->
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <!-- Watching for finished jobs while they run (a quiet notification shows it). -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
   <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
   <!-- Android 11+ only shows apps the speech recognizer if they say they look for it. -->
   <queries>
@@ -16,4 +19,10 @@
       <action android:name="android.speech.RecognitionService" />
     </intent>
   </queries>
+  <application>
+    <service
+        android:name="expo.modules.outpostnet.JobWatchService"
+        android:exported="false"
+        android:foregroundServiceType="dataSync" />
+  </application>
 </manifest>

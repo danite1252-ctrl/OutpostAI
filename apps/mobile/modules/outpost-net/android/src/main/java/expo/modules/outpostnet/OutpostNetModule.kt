@@ -162,6 +162,27 @@ class OutpostNetModule : Module() {
       JobNotifier.configure(context, on, hosts, port, fingerprint, token)
     }
 
+    /** Jobs of mine are running: watch for them finishing (carries on after the app is left). */
+    Function("watchJobs") { JobNotifier.watch(context) }
+
+    /** The size of a file on the phone, in bytes. */
+    Function("fileSize") { path: String -> java.io.File(path.removePrefix("file://")).length().toDouble() }
+
+    /** Part of a file on the phone, as base64 (for handing big files to a WebView). */
+    AsyncFunction("readChunk") { path: String, offset: Double, length: Int ->
+      java.io.RandomAccessFile(path.removePrefix("file://"), "r").use { f ->
+        f.seek(offset.toLong())
+        val buf = ByteArray(length)
+        var got = 0
+        while (got < length) {
+          val n = f.read(buf, got, length - got)
+          if (n < 0) break
+          got += n
+        }
+        Base64.encodeToString(buf, 0, got, Base64.NO_WRAP)
+      }
+    }
+
     /** The app came to the front (true) or was left (false). */
     Function("notifyInFront") { inFront: Boolean -> JobNotifier.setInFront(context, inFront) }
 

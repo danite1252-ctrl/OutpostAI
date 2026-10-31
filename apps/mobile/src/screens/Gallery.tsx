@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AppState, Dimensions, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -313,11 +313,16 @@ function Viewer({
   );
 }
 
-/** A 3D model, turned with a finger (three.js in a WebView, reading the downloaded file). */
+/** A 3D model, turned with a finger (three.js in a WebView; the downloaded file is handed to
+ * it in pieces). */
 function ModelViewer({ api, media: m, width, onTouching }: { api: Outpost; media: Media; width: number; onTouching: (on: boolean) => void }) {
+  const web = useRef<WebView>(null);
   const [file, setFile] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [loaded, setLoaded] = useState(0);
+  // Each piece waits for the page to take the last one.
+  const nextPiece = useRef<(() => void) | null>(null);
   useEffect(() => {
     let live = true;
     api.download(`/api/media/${m.id}`, `${m.id}.glb`).then(
@@ -328,6 +333,21 @@ function ModelViewer({ api, media: m, width, onTouching }: { api: Outpost; media
       live = false;
     };
   }, [api, m.id]);
+
+  const send = async (path: string) => {
+    const CHUNK = 1536 * 1024;
+    const size = OutpostNet.fileSize(path);
+    for (let at = 0; at < size; at += CHUNK) {
+      const b64 = await OutpostNet.readChunk(path, at, Math.min(CHUNK, size - at));
+      await new Promise<void>((resolve) => {
+        nextPiece.current = resolve;
+        web.current?.injectJavaScript(`window.OUTPOST_PART(${JSON.stringify(b64)});true;`);
+      });
+      setLoaded(Math.min(1, (at + CHUNK) / size));
+    }
+    web.current?.injectJavaScript("window.OUTPOST_DONE();true;");
+  };
+
   const box = { width, height: width, borderRadius: 12, overflow: "hidden" as const, backgroundColor: C.raised };
   if (error) return <ErrorText>{error}</ErrorText>;
   return (
@@ -335,15 +355,15 @@ function ModelViewer({ api, media: m, width, onTouching }: { api: Outpost; media
     <View style={box} onTouchStart={() => onTouching(true)} onTouchEnd={() => onTouching(false)} onTouchCancel={() => onTouching(false)}>
       {file && (
         <WebView
-          source={{ html: VIEWER_HTML, baseUrl: "file:///" }}
+          ref={web}
+          source={{ html: VIEWER_HTML }}
           originWhitelist={["*"]}
-          allowFileAccess
-          allowFileAccessFromFileURLs
-          allowUniversalAccessFromFileURLs
-          injectedJavaScriptBeforeContentLoaded={`window.OUTPOST_MODEL=${JSON.stringify(file)};window.OUTPOST_BG="${C.raised}";true;`}
+          injectedJavaScriptBeforeContentLoaded={`window.OUTPOST_BG="${C.raised}";true;`}
           onMessage={(e) => {
             try {
               const msg = JSON.parse(e.nativeEvent.data) as { type: string; message?: string };
+              if (msg.type === "hello") void send(file).catch((err) => setError(err instanceof Error ? err.message : "Couldn't read the model."));
+              if (msg.type === "part") nextPiece.current?.();
               if (msg.type === "ready") setReady(true);
               if (msg.type === "error") setError(msg.message ?? "This model couldn't be shown.");
             } catch {
@@ -358,7 +378,9 @@ function ModelViewer({ api, media: m, width, onTouching }: { api: Outpost; media
       )}
       {!ready && (
         <View style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, alignItems: "center", justifyContent: "center" }} pointerEvents="none">
-          <Text style={{ color: C.muted }}>Loading the model…</Text>
+          <Text style={{ color: C.muted }}>
+            {loaded > 0 && loaded < 1 ? `Loading the model… ${Math.round(loaded * 100)}%` : "Loading the model…"}
+          </Text>
         </View>
       )}
     </View>

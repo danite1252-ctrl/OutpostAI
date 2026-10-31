@@ -90,13 +90,39 @@ object JobNotifier {
     WorkManager.getInstance(ctx).enqueueUniqueWork(SOON, ExistingWorkPolicy.REPLACE, once)
   }
 
-  /** One look: notify about long jobs that finished since the last. */
+  /** One look (the WorkManager check); keeps looking soon while jobs run. */
   fun check(ctx: Context) {
+    val left = look(ctx, 0) ?: return
+    // Something still waiting or running: watch closely if Android allows it, and look
+    // again soon either way.
+    if (left > 0) {
+      watch(ctx)
+      soon(ctx, 3)
+    }
+  }
+
+  /** Watch closely while jobs run (a foreground service holding the line open). Only works
+   * while the app is open; it carries on after the app is left, until the jobs are done. */
+  fun watch(ctx: Context) {
+    if (!prefs(ctx).contains("token")) return
+    try {
+      androidx.core.content.ContextCompat.startForegroundService(ctx, android.content.Intent(ctx, JobWatchService::class.java))
+    } catch (_: Exception) {
+      // Android wouldn't start it (the app isn't in front): the regular checks cover it.
+    }
+  }
+
+  /**
+   * Ask the Outpost which of my jobs finished (waiting up to `wait` seconds for one), notify
+   * about long ones, and return how many are still waiting or running; null if it can't be
+   * reached.
+   */
+  fun look(ctx: Context, wait: Int): Int? {
     val p = prefs(ctx)
-    val token = p.getString("token", null)?.let { open(it) } ?: return
+    val token = p.getString("token", null)?.let { open(it) } ?: return null
     val hosts = p.getString("hosts", "")!!.split(",").filter { it.isNotBlank() }
     val port = p.getInt("port", 0)
-    val fingerprint = p.getString("fingerprint", "") ?: return
+    val fingerprint = p.getString("fingerprint", "") ?: return null
     val since = p.getLong("since", System.currentTimeMillis() / 1000)
     val seen = p.getStringSet("seen", emptySet())!!.toMutableSet()
     val client = pinnedClient(fingerprint)
@@ -104,7 +130,7 @@ object JobNotifier {
     for (host in hosts) {
       try {
         val req = Request.Builder()
-          .url("https://$host:$port/api/jobs/finished?since=$since")
+          .url("https://$host:$port/api/jobs/finished?since=$since&wait=$wait")
           .header("Authorization", "Bearer $token")
           .header("Accept", "application/json")
           .build()
@@ -112,7 +138,7 @@ object JobNotifier {
           if (r.code == 401) {
             // Unpaired: stop.
             configure(ctx, false, emptyList(), 0, "", "")
-            return
+            return null
           }
           if (r.isSuccessful) reply = JSONObject(r.body?.string() ?: "{}")
         }
@@ -121,7 +147,7 @@ object JobNotifier {
         // Not at this address (away from home): try the next.
       }
     }
-    val r = reply ?: return
+    val r = reply ?: return null
     val front = p.getLong("front", 0L)
     val inFront = front > 0 && System.currentTimeMillis() - front < 30 * 60 * 1000
     val jobs = r.optJSONArray("jobs")
@@ -136,9 +162,11 @@ object JobNotifier {
       .putLong("since", maxOf(since, now - 5))
       .putStringSet("seen", if (seen.size > 100) seen.toList().takeLast(50).toSet() else seen)
       .apply()
-    // Something still waiting or running: look again soon.
-    if (r.optInt("unfinished", 0) > 0) soon(ctx, 3)
+    return r.optInt("unfinished", 0)
   }
+
+  /** The small icon in the status bar. */
+  internal val icon: Int get() = R.drawable.outpost_notify
 
   private fun notify(ctx: Context, id: String, title: String, body: String) {
     if (Build.VERSION.SDK_INT >= 33 &&
@@ -156,7 +184,7 @@ object JobNotifier {
       PendingIntent.getActivity(ctx, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
     val n = NotificationCompat.Builder(ctx, CHANNEL)
-      .setSmallIcon(ctx.applicationInfo.icon)
+      .setSmallIcon(icon)
       .setContentTitle(title)
       .setContentText(body)
       .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -170,7 +198,9 @@ object JobNotifier {
     }
   }
 
-  private fun pinnedClient(fingerprint: String): OkHttpClient {
+  private val clients = java.util.concurrent.ConcurrentHashMap<String, OkHttpClient>()
+
+  private fun pinnedClient(fingerprint: String): OkHttpClient = clients.getOrPut(fingerprint) {
     val trust = PinnedTrust(fingerprint)
     val tls = SSLContext.getInstance("TLS")
     tls.init(null, arrayOf(trust), SecureRandom())
@@ -178,7 +208,8 @@ object JobNotifier {
       .sslSocketFactory(tls.socketFactory, trust)
       .hostnameVerifier { _, _ -> true }
       .connectTimeout(5, TimeUnit.SECONDS)
-      .readTimeout(20, TimeUnit.SECONDS)
+      // Long enough for the Outpost to wait for a job to finish (it answers within 50 s).
+      .readTimeout(70, TimeUnit.SECONDS)
       .build()
   }
 

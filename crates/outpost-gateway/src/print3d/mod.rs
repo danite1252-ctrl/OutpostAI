@@ -496,3 +496,92 @@ mod more_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod textured_tests {
+    use super::*;
+
+    /// A glTF pyramid with a 2×1 PNG texture (left red, right blue), laid out the way
+    /// ComfyUI's SaveGLB writes one: the PNG in the binary chunk, a material whose
+    /// baseColorTexture points at it, and TEXCOORD_0. Two faces take the red half, two the blue.
+    fn textured_pyramid() -> Vec<u8> {
+        let corners: [[f32; 3]; 4] = [[-1., 0., -1.], [1., 0., -1.], [0., 0., 1.], [0., 2., 0.]];
+        let tris: [[usize; 3]; 4] = [[0, 1, 2], [0, 3, 1], [1, 3, 2], [2, 3, 0]];
+        let (mut pos, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new());
+        for (i, t) in tris.iter().enumerate() {
+            let u: f32 = if i < 2 { 0.25 } else { 0.75 };
+            for (j, &c) in t.iter().enumerate() {
+                for f in corners[c] {
+                    pos.extend_from_slice(&f.to_le_bytes());
+                }
+                uv.extend_from_slice(&u.to_le_bytes());
+                uv.extend_from_slice(&0.5f32.to_le_bytes());
+                idx.extend_from_slice(&((i * 3 + j) as u32).to_le_bytes());
+            }
+        }
+        let mut png_bytes = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png_bytes, 2, 1);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut w = enc.write_header().unwrap();
+            w.write_image_data(&[220, 20, 20, 255, 20, 20, 220, 255]).unwrap();
+        }
+        let mut bin = Vec::new();
+        let mut views = Vec::new();
+        for part in [&pos, &idx, &uv, &png_bytes] {
+            views.push(serde_json::json!({"buffer": 0, "byteOffset": bin.len(), "byteLength": part.len()}));
+            bin.extend_from_slice(part);
+            while bin.len() % 4 != 0 {
+                bin.push(0);
+            }
+        }
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scenes": [{"nodes": [0]}],
+            "nodes": [{"mesh": 0}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 2}, "indices": 1, "material": 0}]}],
+            "materials": [{"pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0], "baseColorTexture": {"index": 0, "texCoord": 0}}}],
+            "textures": [{"source": 0, "sampler": 0}],
+            "samplers": [{"magFilter": 9729, "minFilter": 9729}],
+            "images": [{"bufferView": 3, "mimeType": "image/png"}],
+            "buffers": [{"byteLength": bin.len()}],
+            "bufferViews": views,
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 12, "type": "VEC3"},
+                {"bufferView": 1, "componentType": 5125, "count": 12, "type": "SCALAR"},
+                {"bufferView": 2, "componentType": 5126, "count": 12, "type": "VEC2"}
+            ]
+        });
+        let mut j = serde_json::to_vec(&json).unwrap();
+        while j.len() % 4 != 0 {
+            j.push(b' ');
+        }
+        let mut out = Vec::new();
+        out.extend_from_slice(&0x4654_6C67u32.to_le_bytes());
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&((12 + 8 + j.len() + 8 + bin.len()) as u32).to_le_bytes());
+        out.extend_from_slice(&(j.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0x4E4F_534Au32.to_le_bytes());
+        out.extend_from_slice(&j);
+        out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0x004E_4942u32.to_le_bytes());
+        out.extend_from_slice(&bin);
+        out
+    }
+
+    #[test]
+    fn a_textured_glb_prints_in_its_colours() {
+        let mesh = read_glb(&textured_pyramid()).unwrap();
+        assert_eq!(mesh.colors.len(), 4, "a colour per triangle");
+        assert!(mesh.colors[0][0] > 200 && mesh.colors[0][2] < 40, "red: {:?}", mesh.colors[0]);
+        assert!(mesh.colors[3][2] > 200 && mesh.colors[3][0] < 40, "blue: {:?}", mesh.colors[3]);
+        let (out, palette) = convert(&textured_pyramid(), &Options { colours: 4, ..Default::default() }, "t").unwrap();
+        assert_eq!(palette.len(), 2, "{palette:?}");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(out)).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("3D/3dmodel.model").unwrap(), &mut xml).unwrap();
+        assert!(xml.contains("<m:colorgroup"));
+        assert!(xml.contains("p1=\"1\""));
+    }
+}

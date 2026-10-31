@@ -150,6 +150,13 @@ declare class OutpostNetModule extends NativeModule<Events> {
   /** Check the Outpost for finished jobs in the background (WorkManager) and notify about long
    * ones; `on` false stops it and forgets the connection. */
   notifyConfigure(on: boolean, hosts: string[], port: number, fingerprint: string, token: string): void;
+  /** Jobs of mine are running: watch for them finishing, straight away (a quiet ongoing
+   * notification while it does; carries on after the app is left). */
+  watchJobs(): void;
+  /** A file's size in bytes. */
+  fileSize(path: string): number;
+  /** Part of a file as base64. */
+  readChunk(path: string, offset: number, length: number): Promise<string>;
   /** The app came to the front, or was left (no notifications while it's in front). */
   notifyInFront(inFront: boolean): void;
   /** Android 13+: ask to show notifications; true when allowed. */

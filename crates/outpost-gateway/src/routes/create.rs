@@ -575,6 +575,9 @@ pub async fn list_jobs(
 pub struct FinishedQuery {
     /// Jobs that finished at or after this time (Unix seconds).
     pub since: i64,
+    /// Wait up to this many seconds (at most 50) for one to finish, rather than answering
+    /// "none" straight away: a phone holding this open hears about a job the moment it ends.
+    pub wait: Option<u64>,
 }
 
 /// A finished job, worded for a notification.
@@ -608,15 +611,25 @@ pub struct FinishedJobs {
     params(FinishedQuery),
     responses((status = 200, description = "Finished jobs", body = FinishedJobs)))]
 pub async fn finished_jobs(State(state): State<AppState>, auth: Auth, Query(q): Query<FinishedQuery>) -> ApiResult<Json<FinishedJobs>> {
-    let now = outpost_core::now();
-    let mut out = Vec::new();
-    for job in jobs::finished_since(&state.pool, &auth.account.id, q.since, 50).await? {
-        if job.status == JobStatus::Cancelled {
-            continue;
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(q.wait.unwrap_or(0).min(50));
+    loop {
+        let now = outpost_core::now();
+        let found: Vec<Job> = jobs::finished_since(&state.pool, &auth.account.id, q.since, 50)
+            .await?
+            .into_iter()
+            .filter(|j| j.status != JobStatus::Cancelled)
+            .collect();
+        let unfinished = jobs::unfinished(&state.pool, &auth.account.id).await?;
+        // Answer when something finished, nothing's left to wait for, or the wait is up.
+        if !found.is_empty() || unfinished == 0 || std::time::Instant::now() >= until {
+            let mut out = Vec::new();
+            for job in found {
+                out.push(finished_view(&state, job).await);
+            }
+            return Ok(Json(FinishedJobs { jobs: out, unfinished, now }));
         }
-        out.push(finished_view(&state, job).await);
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
-    Ok(Json(FinishedJobs { jobs: out, unfinished: jobs::unfinished(&state.pool, &auth.account.id).await?, now }))
 }
 
 async fn finished_view(state: &AppState, job: Job) -> FinishedJob {

@@ -1,5 +1,5 @@
 // The phone's 3D viewer, run inside a WebView (see src/screens/Gallery.tsx): three.js shows
-// the model the app downloaded (`window.OUTPOST_MODEL`, a file:// path), turning slowly until
+// the model the app downloaded (handed over in pieces, see receive), turning slowly until
 // it's touched. One finger turns it, two zoom. Bundled into src/viewer-html.ts by
 // scripts/build-viewer.mjs when the app's packages are installed.
 
@@ -11,20 +11,36 @@ function say(type, message) {
   if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ type, message }));
 }
 
-function load(path) {
-  // fetch() can't read file:// pages; XHR can (the WebView allows file access).
-  return new Promise((resolve, reject) => {
-    const x = new XMLHttpRequest();
-    x.open("GET", path);
-    x.responseType = "arraybuffer";
-    x.onload = () => (x.response ? resolve(x.response) : reject(new Error("The model file is empty.")));
-    x.onerror = () => reject(new Error("Couldn't read the model file."));
-    x.send();
+// The app hands the model over in base64 pieces (WebViews can't reliably read the phone's
+// files): OUTPOST_PART for each, then OUTPOST_DONE.
+function receive() {
+  const parts = [];
+  let total = 0;
+  return new Promise((resolve) => {
+    window.OUTPOST_PART = (b64) => {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      parts.push(bytes);
+      total += bytes.length;
+      say("part");
+    };
+    window.OUTPOST_DONE = () => {
+      const all = new Uint8Array(total);
+      let at = 0;
+      for (const p of parts) {
+        all.set(p, at);
+        at += p.length;
+      }
+      parts.length = 0;
+      resolve(all.buffer);
+    };
+    say("hello");
   });
 }
 
 async function main() {
-  const data = await load(window.OUTPOST_MODEL);
+  const data = await receive();
   const gltf = await new Promise((resolve, reject) => new GLTFLoader().parse(data, "", resolve, reject));
 
   const scene = new THREE.Scene();

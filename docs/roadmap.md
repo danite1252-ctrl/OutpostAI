@@ -7,9 +7,16 @@ phone app (pairing by QR, share to Outpost, saving, a 3D viewer, notifications);
 server with helper PCs and automatic updates; gallery search; and other apps (API, MCP,
 webhooks).
 
+## Next
+
+1. **Name 3D models** (and other gallery items): give one a name in the gallery, and saving
+   uses it for the file (`Sheep.3mf`, `Sheep.glb`) on the PC and the phone, and as the model's
+   name inside the .3mf.
+
 ## Ideas after 1.0
 
 - Training lower-memory settings for 12 GB cards.
 - Multi-colour prints with more than 4 filaments, or painted regions kept sharper.
-- Notifications on the phone straight away (today it checks every few minutes while
-  something's running, every 15 minutes otherwise).
+- Notifications on the phone straight away for jobs started elsewhere while the phone app
+  hasn't been opened (today those wait for the 15-minute check; jobs seen by the app are
+  watched and arrive at once).
