@@ -288,6 +288,8 @@ export interface Persona {
   name: string;
   avatar_color: string;
   model: string | null;
+  /** Shared by someone else (not mine to change). */
+  owner_name?: string | null;
   /** Speaking voice on the PC (Kokoro); null = Outpost's default. */
   voice?: string | null;
   /** Read replies aloud. */
@@ -298,6 +300,8 @@ export interface Chat {
   id: string;
   persona_id: string | null;
   title: string;
+  /** This chat's own model, over the persona's. */
+  model?: string | null;
   updated_at: number;
 }
 

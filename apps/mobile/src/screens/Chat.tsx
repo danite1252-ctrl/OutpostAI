@@ -240,6 +240,30 @@ function Conversation({
   const [handsFree, setHandsFree] = useState(false);
   const [saying, setSaying] = useState<string | null>(null);
   useEffect(() => onSaying(setSaying), []);
+  // The model this chat needs, if it isn't downloaded (a persona copied from another PC).
+  const [chatModels, setChatModels] = useState<string[] | null>(null);
+  const [chosen, setChosen] = useState<string | null>(null);
+  useEffect(() => {
+    api.get<{ installed: { model: string; badges: string[] }[] }>("/api/models").then(
+      (o) => setChatModels(o.installed.filter((m) => !m.badges.includes("embedding")).map((m) => m.model)),
+      () => undefined,
+    );
+  }, [api]);
+  const wanted = chosen ?? chat.model ?? persona?.model ?? null;
+  const missingModel =
+    wanted && chatModels && !chatModels.some((m) => m.toLowerCase() === wanted.toLowerCase()) ? wanted : null;
+  async function pickModel(m: string) {
+    try {
+      if (!chat.model && persona && !persona.owner_name) {
+        await api.json("PATCH", `/api/personas/${persona.id}`, { model: m });
+      } else {
+        await api.json("PATCH", `/api/chats/${chat.id}`, { model: m });
+      }
+      setChosen(m);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't change the model.");
+    }
+  }
   // Leaving the chat stops anything being read aloud or listened to.
   useEffect(
     () => () => {
@@ -428,6 +452,20 @@ function Conversation({
         {draft && <Bubble api={api} role="assistant" content={draft.content || "…"} thinking={draft.thinking || null} attachments={[]} />}
       </ScrollView>
       <View style={{ padding: 12, gap: 8, borderTopWidth: 1, borderTopColor: C.line }}>
+        {missingModel && (
+          <View accessibilityRole="alert" style={[s.card, { gap: 8, borderColor: C.amber }]}>
+            <Text style={{ color: C.ink }}>
+              {!chat.model && persona ? `${persona.name} uses ` : "This chat uses "}
+              {missingModel}, which isn't downloaded on your Outpost.{" "}
+              {chatModels?.length ? "Pick another:" : "Get a chat model in Models on the PC first."}
+            </Text>
+            <View style={[s.row, { flexWrap: "wrap" }]}>
+              {(chatModels ?? []).slice(0, 6).map((m) => (
+                <Chip key={m} label={m} onPress={() => void pickModel(m)} />
+              ))}
+            </View>
+          </View>
+        )}
         <ErrorText>{error}</ErrorText>
         {attach && (
           <View style={s.row}>

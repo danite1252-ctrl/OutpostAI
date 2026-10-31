@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   api,
+  SERVER,
   ApiError,
   docsApi,
   voiceApi,
@@ -77,7 +78,13 @@ export default function Personas({ token }: { token: string }) {
                     {p.shared ? <span className="ml-1 font-sans text-pick">· shared</span> : null}
                   </span>
                 )}
-                <span className="truncate text-xs text-muted">{p.model ?? "default model"}</span>
+                {p.model && models.length > 0 && !hasModel(models, p.model) ? (
+                  <span className="truncate text-xs text-danger" title="Pick another model for this persona">
+                    ⚠ {p.model} isn't downloaded{SERVER ? " on the server" : ""}
+                  </span>
+                ) : (
+                  <span className="truncate text-xs text-muted">{p.model ?? "default model"}</span>
+                )}
               </span>
             </button>
           ))}
@@ -279,12 +286,19 @@ function PersonaEditor({
             className="min-h-11 rounded-xl border border-line bg-surface px-3 text-ink"
           >
             <option value="">Default (first downloaded chat model)</option>
+            {model && !hasModel(models, model) && <option value={model}>{model} (not downloaded)</option>}
             {models.map((m) => (
               <option key={m.model} value={m.model}>
                 {m.model}
               </option>
             ))}
           </select>
+          {model && models.length > 0 && !hasModel(models, model) && (
+            <span className="text-xs text-danger">
+              {model} isn't downloaded{SERVER ? " on the server" : " here"}, so chats with this persona won't start. Pick
+              another model, or get it in Models.
+            </span>
+          )}
         </label>
         <div className="flex flex-col gap-1.5 text-sm text-muted">
           <label className="flex items-center gap-2">
@@ -699,4 +713,10 @@ function PersonaDocuments({ token, personaId, shared }: { token: string; persona
       )}
     </div>
   );
+}
+
+/** Is this model downloaded (Ollama tags can differ in case)? */
+export function hasModel(models: { model: string }[], name: string) {
+  const n = name.toLowerCase();
+  return models.some((m) => m.model.toLowerCase() === n);
 }

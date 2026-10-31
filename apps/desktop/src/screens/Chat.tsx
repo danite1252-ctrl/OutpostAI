@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type Dra
 import {
   api,
   ApiError,
+  SERVER,
   JOB_CARD,
   jobCards,
   MAX_IMAGES,
@@ -20,6 +21,7 @@ import { ContextPanel } from "../components/context";
 import { ChatDocuments, SourcesLine } from "../components/documents";
 import { GalleryPicker, mediaAsInput } from "../components/gallery";
 import { Avatar, Button, ErrorNote } from "../components/ui";
+import { hasModel } from "./Personas";
 
 const CONTEXT_KEY = "outpost.chat.context";
 
@@ -113,6 +115,25 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
     active?.model ?? persona?.model ?? installed.find((m) => !m.badges.includes("embedding"))?.model ?? null;
   const modelInfo = installed.find((m) => m.model === modelName);
   const blind = images.length > 0 && modelInfo !== undefined && !modelInfo.badges.includes("vision");
+  // The chat's (or its persona's) model isn't downloaded here, e.g. a persona copied over from
+  // another PC: say so before a message fails, and offer the models that are.
+  const wanted = active?.model ?? persona?.model ?? null;
+  const missingModel = wanted && installed.length > 0 && !hasModel(installed, wanted) ? wanted : null;
+  async function pickModel(m: string) {
+    if (!active) return;
+    try {
+      if (!active.model && persona && !persona.owner_name) {
+        // My persona: fix it for every chat with it.
+        const p = await api.updatePersona(token, persona.id, { model: m });
+        setPersonas((ps) => ps.map((x) => (x.id === p.id ? p : x)));
+      } else {
+        const chat = await api.updateChat(token, active.id, { model: m });
+        setChats((cs) => cs.map((c) => (c.id === chat.id ? chat : c)));
+      }
+    } catch (err) {
+      fail(err);
+    }
+  }
 
   async function addFiles(files: File[]) {
     const room = MAX_IMAGES - images.length;
@@ -481,6 +502,14 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
                 ))}
               </ul>
             )}
+            {missingModel && active && (
+              <MissingModel
+                model={missingModel}
+                personaName={active.model ? null : (persona?.name ?? null)}
+                choices={installed.filter((m) => !m.badges.includes("embedding")).map((m) => m.model)}
+                onPick={(m) => void pickModel(m)}
+              />
+            )}
             {blind && (
               <p className="text-sm text-amber" role="status">
                 {modelName} can't see images. Pick a model with vision for this persona, or remove the images.
@@ -683,6 +712,49 @@ function Bubble({
           {live && <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-ember align-middle" />}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The model a chat needs isn't downloaded: pick one that is. */
+function MissingModel({
+  model,
+  personaName,
+  choices,
+  onPick,
+}: {
+  model: string;
+  personaName: string | null;
+  choices: string[];
+  onPick: (m: string) => void;
+}) {
+  const [pick, setPick] = useState(choices[0] ?? "");
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-amber/60 bg-raised px-3 py-2 text-sm" role="alert">
+      <span>
+        {personaName ? `${personaName} uses ` : "This chat uses "}
+        <b>{model}</b>, which isn't downloaded{SERVER ? " on the server" : " here"}.{" "}
+        {choices.length ? `Pick another${personaName ? ` for ${personaName}` : ""}, or get it in Models.` : "Get a chat model in Models first."}
+      </span>
+      {choices.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={pick}
+            onChange={(e) => setPick(e.target.value)}
+            aria-label="Model to use"
+            className="min-h-9 rounded-lg border border-line bg-surface px-2 text-ink"
+          >
+            {choices.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+          <Button variant="ghost" onClick={() => pick && onPick(pick)}>
+            Use it
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -684,8 +684,37 @@ const mb = (b: number) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` :
 
 type Tally = { what: string; done: number; total: number; added: number; skipped: number; failed: number };
 
-/** Copy pictures, videos and personas from this PC's own Outpost to my account on the server. */
+type Copied = { pictures?: boolean; personas?: boolean };
+
+/** What's been copied from each of this PC's accounts to this server (kept on this PC). */
+function copiedKey(accountId: string) {
+  return `outpost.copied.v1.${SERVER?.fingerprint ?? "server"}.${accountId}`;
+}
+function loadCopied(accountId: string): Copied {
+  try {
+    return JSON.parse(localStorage.getItem(copiedKey(accountId)) ?? "{}") as Copied;
+  } catch {
+    return {};
+  }
+}
+function saveCopied(accountId: string, c: Copied) {
+  try {
+    localStorage.setItem(copiedKey(accountId), JSON.stringify(c));
+  } catch {
+    /* only this session remembers */
+  }
+}
+/** Everything this account has (pictures, personas) was copied. */
+function allCopied(g: LocalGallery): boolean {
+  const c = loadCopied(g.account_id);
+  return (g.items === 0 || !!c.pictures) && (g.personas === 0 || !!c.personas);
+}
+
+/** Copy pictures, videos and personas from this PC's own Outpost to my account on the server.
+ * Once everything's copied it folds away to one line (with "Copy again"). */
 export function CopyGallery({ token }: { token: string }) {
+  const [again, setAgain] = useState(false);
+  const [, setTick] = useState(0);
   const [galleries, setGalleries] = useState<LocalGallery[] | null>(null);
   const [picked, setPicked] = useState<LocalGallery | null>(null);
   const [pin, setPin] = useState("");
@@ -748,6 +777,10 @@ export function CopyGallery({ token }: { token: string }) {
       tally.done += 1;
       setRun({ ...tally });
     }
+    if (!stop.current && tally.failed === 0) {
+      saveCopied(picked.account_id, { ...loadCopied(picked.account_id), pictures: true });
+      setTick((t) => t + 1);
+    }
     setRunning(false);
   }
 
@@ -796,6 +829,10 @@ export function CopyGallery({ token }: { token: string }) {
         tally.done += 1;
         setRun({ ...tally });
       }
+      if (tally.failed === 0) {
+        saveCopied(picked.account_id, { ...loadCopied(picked.account_id), personas: true });
+        setTick((t) => t + 1);
+      }
       // Their hand-added memories (skipping any the server already has).
       const known = new Set((await api.memory(token)).map((m) => `${m.persona_id ?? ""}|${m.text.trim()}`));
       let memories = 0;
@@ -809,7 +846,7 @@ export function CopyGallery({ token }: { token: string }) {
         [
           memories ? `${memories} ${memories === 1 ? "memory" : "memories"} came with them.` : "",
           missingModels.size
-            ? `Not on the server yet: ${[...missingModels].join(", ")}. Download them in Models, or pick another model for those personas.`
+            ? `Not on the server yet: ${[...missingModels].join(", ")}. Download them in Models, or pick another model for those personas (Personas and Chat show which).`
             : "",
         ]
           .filter(Boolean)
@@ -822,6 +859,17 @@ export function CopyGallery({ token }: { token: string }) {
   }
 
   if (!galleries || galleries.length === 0) return null;
+  // All copied (and nothing showing from a copy just now): one line.
+  if (!again && !run && galleries.every(allCopied)) {
+    return (
+      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-surface px-5 py-3">
+        <span className="flex-1 text-sm text-muted">Your pictures and personas from this PC are copied to {SERVER?.name}.</span>
+        <button type="button" className="text-xs text-muted underline hover:text-ink" onClick={() => setAgain(true)}>
+          Copy again
+        </button>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5">
       <h3 className="font-semibold">Copy from this PC</h3>
@@ -850,6 +898,7 @@ export function CopyGallery({ token }: { token: string }) {
             <Avatar name={g.name} color={g.avatar_color} size={24} />
             {g.name} · {g.items} {g.items === 1 ? "item" : "items"}
             {g.items ? ` (${mb(g.bytes)})` : ""}, {g.personas} {g.personas === 1 ? "persona" : "personas"}
+            {allCopied(g) ? <span className="text-pick"> · copied ✓</span> : null}
           </button>
         ))}
       </div>
@@ -900,6 +949,22 @@ export function CopyGallery({ token }: { token: string }) {
       )}
       {note && <p className="text-sm text-muted">{note}</p>}
       <ErrorNote>{error}</ErrorNote>
+      {!running && (
+        <button
+          type="button"
+          className="self-start text-xs text-muted underline hover:text-ink"
+          onClick={() => {
+            // Copied before this was remembered (or not wanted): fold it away.
+            for (const g of galleries) saveCopied(g.account_id, { pictures: true, personas: true });
+            setAgain(false);
+            setRun(null);
+            setPicked(null);
+            setItems(null);
+          }}
+        >
+          I've copied what I need: hide this
+        </button>
+      )}
     </div>
   );
 }
