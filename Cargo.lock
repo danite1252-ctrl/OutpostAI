@@ -3266,7 +3266,7 @@ dependencies = [
 
 [[package]]
 name = "outpost-core"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -3284,7 +3284,7 @@ dependencies = [
 
 [[package]]
 name = "outpost-desktop"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "outpost-core",
  "outpost-engines",
@@ -3303,7 +3303,7 @@ dependencies = [
 
 [[package]]
 name = "outpost-engines"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "anyhow",
  "flate2",
@@ -3326,7 +3326,7 @@ dependencies = [
 
 [[package]]
 name = "outpost-gateway"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "anyhow",
  "axum",
