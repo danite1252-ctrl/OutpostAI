@@ -105,6 +105,19 @@ If the only owner forgets their PIN, run this on the server:
 It prints a reset code and the check words (valid 24 hours); use it in the desktop or phone app
 like an invite and pick a new PIN.
 
+### Memory
+
+Big jobs on a small graphics card (3D models, video) spill into the server's memory (RAM). Give
+the server some swap so it slows down rather than running out:
+
+```bash
+sudo fallocate -l 16G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+If memory still runs out, Linux stops the engine doing the work (ComfyUI, Ollama, the trainer),
+not Outpost: the job fails with "the server ran out of memory", and everything else carries on.
+
 ## Helper PCs: bigger pictures than the server's card can make
 
 A desktop PC using the server can lend its graphics card for Create jobs the server's own card

@@ -299,6 +299,9 @@ pub async fn run(
         Ok(c) => c,
         Err(e) => return Outcome::Failed(format!("Couldn't start ai-toolkit: {e}")),
     };
+    if let Some(pid) = child.id() {
+        crate::process::expendable(pid);
+    }
 
     // Both streams into one channel of lines. tqdm redraws its bar with \r, so split
     // on that as well as \n.
@@ -355,6 +358,9 @@ pub async fn run(
                     // Output closed: the program is ending.
                     break match child.wait().await {
                         Ok(s) if s.success() => Outcome::Done,
+                        Ok(s) if crate::process::killed_for_memory(&s) => Outcome::Failed(
+                            "Training was stopped because the computer ran out of memory (RAM). Close other things, or give it more memory (or swap), and try again.".into(),
+                        ),
                         _ => Outcome::Failed(explain_failure(&tail)),
                     };
                 };

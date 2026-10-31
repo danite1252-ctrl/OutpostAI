@@ -118,6 +118,9 @@ async fn main() -> anyhow::Result<()> {
     if let Some(bind) = args.bind {
         config.bind = bind;
     }
+    if args.server {
+        outpost_gateway::updates::tune_service();
+    }
     tracing::info!(data_dir = %config.data_dir.display(), "opening Outpost data");
     let mut state = AppState::open(config).await?;
     if args.bind.is_none() {

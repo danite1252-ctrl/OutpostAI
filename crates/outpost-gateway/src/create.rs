@@ -202,11 +202,22 @@ pub async fn worker(state: AppState) {
                 ))
             }
         };
-        let (status, error) = match &outcome {
+        let (status, mut error) = match &outcome {
             Ok(()) => (JobStatus::Done, None),
             Err(ComfyError::Interrupted) => (JobStatus::Cancelled, None),
             Err(e) => (JobStatus::Failed, Some(e.to_string())),
         };
+        // ComfyUI vanished mid-job: if the system stopped it for memory, say so plainly.
+        if error.is_some() && job.pack_id != crate::train::PACK_ID {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            if state.engines.ran_out_of_memory(outpost_engines::EngineId::Comfyui) {
+                error = Some(
+                    "The server ran out of memory (RAM) making this, so ComfyUI was stopped. Try again with a lighter \
+                     setting (Quick), with fewer other things running, or on a PC that lends its graphics card."
+                        .into(),
+                );
+            }
+        }
         if let Some(e) = &error {
             tracing::warn!(job = %job.id, pack = %job.pack_id, error = %e, "create job failed");
         }

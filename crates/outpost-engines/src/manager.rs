@@ -157,6 +157,10 @@ pub struct TrainerInstall {
     pub log_tail: Vec<String>,
 }
 
+/// How an engine stopped by the out-of-memory killer is described (after its name).
+pub const OUT_OF_MEMORY: &str =
+    " was stopped because the computer ran out of memory (RAM). It starts again for the next job.";
+
 impl EngineManager {
     /// Engines live in `<data_dir>/engines`, models in `<data_dir>/models`.
     /// Nothing starts until [`EngineManager::init`].
@@ -418,6 +422,17 @@ impl EngineManager {
         Ok(())
     }
 
+    /// The engine's last stop was the system running out of memory (see [`OUT_OF_MEMORY`]).
+    pub fn ran_out_of_memory(&self, id: EngineId) -> bool {
+        self.slots
+            .get(&id)
+            .map(|slot| {
+                let st = slot.lock();
+                st.state == EngineState::Error && st.error.as_deref().is_some_and(|e| e.contains(OUT_OF_MEMORY))
+            })
+            .unwrap_or(false)
+    }
+
     /// Follow a started engine: Starting -> Running, or Error if it exits.
     async fn watch(self: Arc<Self>, id: EngineId) {
         let slot = self.slots[&id].clone();
@@ -436,22 +451,24 @@ impl EngineManager {
                     return; // stopped or reinstalled
                 }
                 match st.child.as_mut().map(|c| c.try_wait()) {
-                    Some(Ok(Some(status))) => Some(status.to_string()),
-                    Some(Err(e)) => Some(e.to_string()),
+                    Some(Ok(Some(status))) => Some((status.to_string(), process::killed_for_memory(&status))),
+                    Some(Err(e)) => Some((e.to_string(), false)),
                     Some(Ok(None)) => None,
                     None => return,
                 }
             };
-            if let Some(status) = exited {
+            if let Some((status, memory)) = exited {
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 let tail = slot.log.tail(4).join("\n");
                 let mut st = slot.lock();
                 st.child = None;
                 st.state = EngineState::Error;
-                st.error = Some(format!(
-                    "{} stopped unexpectedly ({status}).\n{tail}",
-                    id.display_name()
-                ));
+                st.error = Some(if memory {
+                    slot.log.push(format!("{} was stopped: the computer ran out of memory", id.display_name()));
+                    format!("{}{OUT_OF_MEMORY}", id.display_name())
+                } else {
+                    format!("{} stopped unexpectedly ({status}).\n{tail}", id.display_name())
+                });
                 return;
             }
             let state = slot.lock().state;

@@ -261,6 +261,42 @@ async fn download_and_replace(state: &AppState, platform: &Platform, version: &s
     Ok(())
 }
 
+/// A server installed before a setting was added to its systemd service gets it now (the
+/// installer writes the service once; updates only swap the program). Today: if memory runs
+/// out, the kernel stops an engine and Outpost carries on (`OOMPolicy=continue`).
+pub fn tune_service() {
+    #[cfg(target_os = "linux")]
+    {
+        let Some(home) = std::env::var_os("HOME") else { return };
+        let unit = std::path::Path::new(&home).join(".config/systemd/user/outpost.service");
+        let Ok(text) = std::fs::read_to_string(&unit) else { return };
+        if let Some(tuned) = with_oom_policy(&text) {
+            if std::fs::write(&unit, tuned).is_ok() {
+                let _ = std::process::Command::new("systemctl").args(["--user", "daemon-reload"]).status();
+                tracing::info!("the Outpost service now keeps running if an engine runs out of memory");
+            }
+        }
+    }
+}
+
+/// The service file with `OOMPolicy=continue` added to its [Service] section, or `None` if
+/// it has an OOM policy already (or no [Service] section).
+pub fn with_oom_policy(text: &str) -> Option<String> {
+    if text.lines().any(|l| l.trim_start().starts_with("OOMPolicy=")) {
+        return None;
+    }
+    let at = text.find("[Service]")? + "[Service]".len();
+    let line_end = text[at..].find('\n').map(|i| at + i + 1).unwrap_or(text.len());
+    let mut out = String::with_capacity(text.len() + 64);
+    out.push_str(&text[..line_end]);
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str("OOMPolicy=continue\n");
+    out.push_str(&text[line_end..]);
+    Some(out)
+}
+
 /// Exit code that asks the service manager to start Outpost again (`Restart=on-failure`).
 pub const RESTART_EXIT_CODE: i32 = 75;
 
@@ -392,6 +428,16 @@ pub fn newer(a: &str, b: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_service_gets_its_out_of_memory_policy_once() {
+        let unit = "[Unit]\nDescription=Outpost\n\n[Service]\nExecStart=x --server\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n";
+        let tuned = super::with_oom_policy(unit).unwrap();
+        assert!(tuned.contains("[Service]\nOOMPolicy=continue\nExecStart=x --server"));
+        assert!(super::with_oom_policy(&tuned).is_none(), "only once");
+        assert!(super::with_oom_policy("[Unit]\nDescription=x\n").is_none());
+    }
+
     use super::newer;
 
     #[test]

@@ -53,6 +53,8 @@ Wants=network-online.target
 ExecStart=%h/.local/lib/outpost/outpost-gateway --server
 Restart=on-failure
 RestartSec=5
+# Out of memory: the kernel stops an engine (ComfyUI, Ollama...), not Outpost, which carries on.
+OOMPolicy=continue
 Environment=RUST_LOG=outpost_gateway=info,outpost_core=info,outpost_engines=info
 
 [Install]

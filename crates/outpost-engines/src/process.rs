@@ -114,7 +114,38 @@ pub fn spawn(mut cmd: Command, log: &Log) -> anyhow::Result<Child> {
         .kill_on_drop(true);
     let mut child = cmd.spawn()?;
     capture_output(&mut child, log);
+    if let Some(pid) = child.id() {
+        expendable(pid);
+    }
     Ok(child)
+}
+
+/// If the computer runs out of memory, Linux should stop this engine (ComfyUI, Ollama, the
+/// trainer...) rather than Outpost itself: Outpost survives, says what happened, and starts
+/// the engine again for the next job. (Raising a child's score needs no special rights; it's
+/// passed on to whatever the engine starts after this.)
+pub fn expendable(pid: u32) {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::fs::write(format!("/proc/{pid}/oom_score_adj"), "800");
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = pid;
+}
+
+/// The program was stopped by the system's out-of-memory killer (SIGKILL; on Linux that's
+/// almost always memory running out, since Outpost stops engines gently first).
+pub fn killed_for_memory(status: &std::process::ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal() == Some(9)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        false
+    }
 }
 
 /// Run an installer step to completion; fail with its last output lines if it fails.
