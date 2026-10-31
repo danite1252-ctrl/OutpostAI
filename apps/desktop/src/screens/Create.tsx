@@ -338,7 +338,21 @@ export default function Create({
   }
 
   const queue = jobs.filter((j) => j.status === "queued" || j.status === "running");
-  const recentFailures = jobs.filter((j) => j.status === "failed").slice(0, 3);
+  // Failures stay an hour (or until dismissed), so you see what went wrong.
+  const [dismissed, setDismissed] = useState<string[]>(loadDismissed);
+  const hourAgo = Date.now() / 1000 - 3600;
+  const recentFailures = jobs
+    .filter((j) => j.status === "failed" && (j.finished_at ?? 0) > hourAgo && !dismissed.includes(j.id))
+    .slice(0, 3);
+  const dismiss = (id: string) => {
+    const next = [id, ...dismissed].slice(0, 50);
+    setDismissed(next);
+    try {
+      localStorage.setItem(DISMISSED_KEY, JSON.stringify(next));
+    } catch {
+      /* this session only */
+    }
+  };
 
   return (
     <section className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -437,7 +451,7 @@ export default function Create({
                 <JobRow key={j.id} job={j} packs={packs} onCancel={() => void cancel(j)} />
               ))}
               {recentFailures.map((j) => (
-                <JobRow key={j.id} job={j} packs={packs} />
+                <JobRow key={j.id} job={j} packs={packs} onDismiss={() => dismiss(j.id)} />
               ))}
             </ul>
           </div>
@@ -992,7 +1006,17 @@ function sizeLabel(o: string) {
   return `${shape} ${w}×${h}`;
 }
 
-function JobRow({ job: j, packs, onCancel }: { job: Job; packs: Pack[]; onCancel?: () => void }) {
+const DISMISSED_KEY = "outpost.dismissed-jobs.v1";
+
+function loadDismissed(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]") as string[];
+  } catch {
+    return [];
+  }
+}
+
+function JobRow({ job: j, packs, onCancel, onDismiss }: { job: Job; packs: Pack[]; onCancel?: () => void; onDismiss?: () => void }) {
   const name = packs.find((p) => p.id === j.pack_id)?.name ?? (j.pack_id === "train" ? "Training a character" : j.pack_id);
   const prompt = useMemo(() => {
     try {
@@ -1025,6 +1049,11 @@ function JobRow({ job: j, packs, onCancel }: { job: Job; packs: Pack[]; onCancel
         {onCancel && (
           <Button variant="ghost" onClick={onCancel}>
             {j.status === "running" ? "Stop" : "Cancel"}
+          </Button>
+        )}
+        {onDismiss && (
+          <Button variant="ghost" onClick={onDismiss} aria-label="Dismiss this failed job">
+            Dismiss
           </Button>
         )}
       </div>

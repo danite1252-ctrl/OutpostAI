@@ -3,6 +3,9 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import { eta, fraction, type Job, type LineEntry, type Outpost } from "../outpost";
 import { Avatar, Bar, C, ErrorText, H1, P, s } from "../ui";
 
+/** Finished jobs dismissed from the list (while the app is open; they'd go after an hour anyway). */
+const dismissed = new Set<string>();
+
 /** The shared line for the GPU, polled quickly while anything is in it. */
 export function useLine(api: Outpost, focused: boolean) {
   const [line, setLine] = useState<LineEntry[]>([]);
@@ -57,7 +60,10 @@ export default function Queue({ api, line, onError }: { api: Outpost; line: Line
   }
 
   const now = Date.now() / 1000;
-  const recent = jobs.filter((j) => (j.status === "done" || j.status === "failed") && (j.finished_at ?? 0) > now - 3600).slice(0, 6);
+  const [, setHidden] = useState(0);
+  const recent = jobs
+    .filter((j) => (j.status === "done" || j.status === "failed") && (j.finished_at ?? 0) > now - 3600 && !dismissed.has(j.id))
+    .slice(0, 6);
   const runningAt = line.findIndex((e) => e.status === "running");
 
   return (
@@ -106,13 +112,26 @@ export default function Queue({ api, line, onError }: { api: Outpost; line: Line
       })}
       {recent.length > 0 && <Text style={[s.label, { marginTop: 8 }]}>Finished in the last hour</Text>}
       {recent.map((j) => (
-        <View key={j.id} style={s.card}>
-          <Text numberOfLines={2} style={{ color: C.ink }}>
-            {promptOf(j) || (j.pack_id === "train" ? "Training a character" : j.pack_id)}
-          </Text>
-          <Text style={{ color: j.status === "failed" ? C.danger : C.ok, fontSize: 13 }}>
-            {j.status === "failed" ? (j.error ?? "Failed") : "Done · in your gallery"}
-          </Text>
+        <View key={j.id} style={[s.card, s.row]}>
+          <View style={{ flex: 1 }}>
+            <Text numberOfLines={2} style={{ color: C.ink }}>
+              {promptOf(j) || (j.pack_id === "train" ? "Training a character" : j.pack_id)}
+            </Text>
+            <Text style={{ color: j.status === "failed" ? C.danger : C.ok, fontSize: 13 }}>
+              {j.status === "failed" ? (j.error ?? "Failed") : "Done · in your gallery"}
+            </Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss"
+            onPress={() => {
+              dismissed.add(j.id);
+              setHidden((n) => n + 1);
+            }}
+            style={[s.chip, { minHeight: 36 }]}
+          >
+            <Text style={{ color: C.muted }}>Dismiss</Text>
+          </Pressable>
         </View>
       ))}
     </ScrollView>
