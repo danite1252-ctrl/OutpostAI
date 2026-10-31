@@ -89,6 +89,22 @@ async fn wait_for_free_gpu(state: &AppState) {
     tokio::time::sleep(Duration::from_secs(3)).await;
 }
 
+/// What ai-toolkit trains for `t` (here, or on a helper PC with its own folders).
+pub fn spec(t: &training::Training, dataset_dir: PathBuf, run_dir: PathBuf) -> trainer::Spec {
+    trainer::Spec {
+        trigger: t.trigger_word.clone(),
+        dataset_dir,
+        run_dir,
+        steps: t.steps as u32,
+        rank: 32,
+        learning_rate: 1e-4,
+        sample_prompts: match t.prompts() {
+            p if !p.is_empty() => p,
+            _ => trainer::sample_prompts(&t.trigger_word),
+        },
+    }
+}
+
 /// Run one training job to the end.
 pub async fn run(state: AppState, job: Job) -> Result<(), ComfyError> {
     let state = &state;
@@ -124,18 +140,7 @@ pub async fn run(state: AppState, job: Job) -> Result<(), ComfyError> {
     tokio::fs::create_dir_all(&run_dir)
         .await
         .map_err(|e| failed(format!("Couldn't make the training folder: {e}")))?;
-    let spec = trainer::Spec {
-        trigger: t.trigger_word.clone(),
-        dataset_dir: training::dataset_dir(&root, &dataset.id),
-        run_dir: run_dir.clone(),
-        steps: t.steps as u32,
-        rank: 32,
-        learning_rate: 1e-4,
-        sample_prompts: match t.prompts() {
-            p if !p.is_empty() => p,
-            _ => trainer::sample_prompts(&t.trigger_word),
-        },
-    };
+    let spec = spec(&t, training::dataset_dir(&root, &dataset.id), run_dir.clone());
     let config_file = run_dir.join("config.json");
     let text = serde_json::to_string_pretty(&trainer::config(&spec)).unwrap_or_default();
     tokio::fs::write(&config_file, text)

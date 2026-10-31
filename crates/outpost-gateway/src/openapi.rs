@@ -120,6 +120,8 @@ use crate::routes::{
         helpers::input,
         helpers::lora,
         helpers::progress,
+        helpers::dataset,
+        helpers::training_file,
         helpers::result,
         helpers::finish,
         system::update_status,

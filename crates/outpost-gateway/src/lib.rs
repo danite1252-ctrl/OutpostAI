@@ -330,6 +330,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/helpers/jobs/{id}/input/{key}", get(helpers::input))
         .route("/api/helpers/jobs/{id}/lora", get(helpers::lora))
         .route("/api/helpers/jobs/{id}/progress", post(helpers::progress))
+        .route("/api/helpers/jobs/{id}/dataset", get(helpers::dataset))
+        .route(
+            "/api/helpers/jobs/{id}/training-file",
+            post(helpers::training_file).layer(DefaultBodyLimit::disable()),
+        )
         .route(
             "/api/helpers/jobs/{id}/result",
             post(helpers::result).layer(DefaultBodyLimit::max(create::MAX_IMPORT_BYTES)),

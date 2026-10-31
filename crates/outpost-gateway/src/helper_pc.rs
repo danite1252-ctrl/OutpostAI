@@ -7,7 +7,12 @@
 //! the results back to the server's gallery. Nothing is kept here but the LoRA (cached for
 //! next time) and the models.
 //!
-//! **Paused** (e.g. while gaming) it takes no jobs and stops ComfyUI, so the card is free.
+//! With ai-toolkit installed here and a 16 GB card it also takes **trainings** the server can't
+//! run: it fetches the pictures and captions, trains here, and sends each checkpoint and test
+//! picture back as it's saved (see [`crate::helpers`]).
+//!
+//! **Paused** (e.g. while gaming) it takes no jobs and stops ComfyUI, so the card is free. A
+//! training running then stops too; the checkpoints already sent are kept.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -19,6 +24,7 @@ use outpost_core::jobs;
 use outpost_engines::catalog::Fit;
 use outpost_engines::comfy::{ComfyError, JobProgress};
 use outpost_engines::packs;
+use outpost_engines::trainer;
 use outpost_engines::{EngineId, EngineState};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -54,6 +60,10 @@ pub struct HelperStatus {
     pub comfyui_installing: bool,
     /// Why the last ComfyUI install here failed.
     pub comfyui_error: Option<String>,
+    /// ai-toolkit is ready here (for trainings).
+    pub trainer_ready: bool,
+    /// Outpost's own install of ai-toolkit here.
+    pub trainer: Option<outpost_engines::TrainerInstall>,
 }
 
 /// A workflow as this PC sees it.
@@ -97,6 +107,19 @@ struct Job {
     images: Vec<String>,
     lora: Option<String>,
     lora_bytes: Option<u64>,
+    #[serde(default)]
+    training: Option<TrainingJob>,
+}
+
+/// A training from the server (see `HelperTraining` there).
+#[derive(Debug, Deserialize)]
+struct TrainingJob {
+    training_id: String,
+    trigger: String,
+    steps: u32,
+    rank: u32,
+    learning_rate: f64,
+    sample_prompts: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,6 +201,21 @@ impl HelperPc {
         Ok(())
     }
 
+    /// Install ai-toolkit here, for trainings (in the background).
+    pub fn install_trainer(&self) -> anyhow::Result<()> {
+        self.local.engines.install_trainer().map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    /// The ai-toolkit to train with here: Outpost's own, else one installed by hand in the
+    /// usual place.
+    fn toolkit(&self) -> Option<std::path::PathBuf> {
+        [self.local.engines.trainer_dir(), trainer::default_dir()]
+            .into_iter()
+            .find(|d| trainer::check_install(d).is_ok())
+    }
+
     /// ComfyUI here: installed, installing, and the last install's error.
     async fn comfyui_here(&self) -> (bool, bool, Option<String>) {
         let status = self.local.engines.status().await;
@@ -243,23 +281,27 @@ impl HelperPc {
             } else {
                 Vec::new()
             };
+            let can_train = self.toolkit().is_some();
+            let trainer_install = self.local.engines.trainer_install();
             self.edit(|s| {
                 s.vram_mb = hw.vram_mb;
                 s.ready_packs = ready.clone();
                 s.comfyui = comfyui;
                 s.comfyui_installing = installing;
                 s.comfyui_error = install_error.clone();
+                s.trainer_ready = can_train;
+                s.trainer = Some(trainer_install);
             });
-            let body = json!({"vram_mb": hw.vram_mb, "ram_mb": hw.ram_mb, "ready_packs": ready, "paused": paused});
+            let body = json!({"vram_mb": hw.vram_mb, "ram_mb": hw.ram_mb, "ready_packs": ready, "paused": paused, "can_train": can_train});
 
             match self.check_in(&client, &server, &mut token, &body).await {
                 Err(problem) => self.say("problem", Some(problem)),
                 Ok(None) => {
                     let waiting = if paused {
                         ("paused", Some("Paused: not taking jobs, and ComfyUI is stopped.".to_string()))
-                    } else if !comfyui {
+                    } else if !comfyui && !can_train {
                         ("ready", Some("ComfyUI isn't installed on this PC yet.".to_string()))
-                    } else if ready.is_empty() {
+                    } else if ready.is_empty() && !can_train {
                         ("ready", Some("No workflows are downloaded on this PC yet.".to_string()))
                     } else {
                         ("ready", None)
@@ -377,7 +419,10 @@ impl HelperPc {
             })
         };
 
-        let outcome = self.run_job(client, base, token, &job, &cancel, &progress, &prompt_id).await;
+        let outcome = match &job.training {
+            Some(t) => self.run_training(client, base, token, &job, t, &cancel, &progress).await,
+            None => self.run_job(client, base, token, &job, &cancel, &progress, &prompt_id).await,
+        };
         reporter.abort();
         let finish = match &outcome {
             Ok(()) => json!({"ok": true}),
@@ -394,7 +439,121 @@ impl HelperPc {
                 Err(_) => tokio::time::sleep(Duration::from_secs(5)).await,
             }
         }
-        crate::create::clear_comfy_copies(&self.local).await;
+        if job.training.is_none() {
+            crate::create::clear_comfy_copies(&self.local).await;
+        }
+    }
+
+    /// A training for the server: its pictures here, ai-toolkit, and every checkpoint and test
+    /// picture sent back as it's saved. Nothing is kept here afterwards but the base models.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_training(
+        &self,
+        client: &reqwest::Client,
+        base: &str,
+        token: &str,
+        job: &Job,
+        t: &TrainingJob,
+        cancel: &Arc<AtomicBool>,
+        progress: &Arc<Mutex<JobProgress>>,
+    ) -> Result<(), ComfyError> {
+        let fail = |m: String| ComfyError::Failed(m);
+        let set_phase = |phase: &str| {
+            let mut p = progress.lock().unwrap_or_else(|p| p.into_inner());
+            *p = JobProgress { phase: phase.into(), ..Default::default() };
+        };
+        let toolkit = self.toolkit().ok_or_else(|| fail("ai-toolkit isn't installed on this PC.".into()))?;
+        let job_url = format!("{base}/api/helpers/jobs/{}", job.job_id);
+
+        // The whole card for training.
+        set_phase("Freeing the GPU");
+        self.release_card().await;
+
+        let work = self.local.config.data_dir.join("helper-training").join(&job.job_id);
+        let _ = tokio::fs::remove_dir_all(&work).await;
+        let dataset_dir = work.join("dataset");
+        let run_dir = work.join("run");
+        for d in [&dataset_dir, &run_dir] {
+            tokio::fs::create_dir_all(d).await.map_err(|e| fail(format!("Couldn't make the training folder: {e}")))?;
+        }
+        set_phase("Fetching the pictures");
+        let zip = get_bytes(client, &format!("{job_url}/dataset"), token)
+            .await
+            .map_err(|e| fail(format!("Couldn't fetch the pictures from the server: {e}")))?;
+        {
+            let dest = dataset_dir.clone();
+            tokio::task::spawn_blocking(move || zip::ZipArchive::new(std::io::Cursor::new(zip))?.extract(dest))
+                .await
+                .map_err(|e| fail(e.to_string()))?
+                .map_err(|e| fail(format!("The pictures from the server were garbled: {e}")))?;
+        }
+        let spec = trainer::Spec {
+            trigger: t.trigger.clone(),
+            dataset_dir,
+            run_dir: run_dir.clone(),
+            steps: t.steps,
+            rank: t.rank,
+            learning_rate: t.learning_rate,
+            sample_prompts: t.sample_prompts.clone(),
+        };
+        let config_file = run_dir.join("config.json");
+        tokio::fs::write(&config_file, serde_json::to_string_pretty(&trainer::config(&spec)).unwrap_or_default())
+            .await
+            .map_err(|e| fail(format!("Couldn't write the training settings: {e}")))?;
+        tracing::info!(training = %t.training_id, steps = t.steps, "training for the server");
+
+        // Checkpoints and test pictures go back as they appear.
+        let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+        let sender = {
+            let mut files = TrainingFiles::new(client.clone(), format!("{job_url}/training-file"), token.to_string(), run_dir.clone(), t.steps);
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(15)) => files.send(false).await,
+                        _ = stop_rx.changed() => {
+                            files.send(true).await;
+                            return files.sent_checkpoints();
+                        }
+                    }
+                }
+            })
+        };
+
+        let log = outpost_engines::Log::new(run_dir.join("train.log"));
+        let status = &self.status;
+        let outcome = trainer::run(
+            &toolkit,
+            &config_file,
+            &log,
+            || cancel.load(Ordering::Relaxed) || self.paused.load(Ordering::Relaxed) || !self.enabled.load(Ordering::Relaxed),
+            |p| {
+                let jp = JobProgress { phase: p.phase.clone(), step: p.step, steps: p.steps, percent: None };
+                status.lock().unwrap_or_else(|e| e.into_inner()).progress = Some(jp.clone());
+                *progress.lock().unwrap_or_else(|e| e.into_inner()) = jp;
+            },
+        )
+        .await;
+        // Let the log's last lines reach the disk, then send what's left (and the log).
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        set_phase("Sending the last checkpoints");
+        let _ = stop_tx.send(true);
+        let sent = sender.await.unwrap_or(0);
+        if let Ok(data) = tokio::fs::read(run_dir.join("train.log")).await {
+            let _ = post_file(client, &format!("{job_url}/training-file?name=train.log"), token, data).await;
+        }
+        let _ = tokio::fs::remove_dir_all(&work).await;
+
+        let paused = self.paused.load(Ordering::Relaxed) || !self.enabled.load(Ordering::Relaxed);
+        match outcome {
+            trainer::Outcome::Done if sent == 0 => Err(fail("ai-toolkit finished but saved no LoRA. See train.log in the run folder.".into())),
+            trainer::Outcome::Done => Ok(()),
+            trainer::Outcome::Cancelled if paused && !cancel.load(Ordering::Relaxed) => Err(fail(format!(
+                "Stopped because lending was paused on this PC.{}",
+                if sent > 0 { " The checkpoints it saved are kept." } else { "" }
+            ))),
+            trainer::Outcome::Cancelled => Err(ComfyError::Interrupted),
+            trainer::Outcome::Failed(m) => Err(fail(m)),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -509,6 +668,79 @@ impl HelperPc {
             return Err(fail("ComfyUI finished but returned nothing.".into()));
         }
         Ok(())
+    }
+}
+
+/// A training's files on their way to the server: each is sent once, when it has stopped
+/// growing (or at the end), and tried again next time if sending failed.
+struct TrainingFiles {
+    client: reqwest::Client,
+    url: String,
+    token: String,
+    run_dir: std::path::PathBuf,
+    steps: u32,
+    /// Size at the last look, for files not sent yet.
+    seen: HashMap<String, u64>,
+    sent: std::collections::HashSet<String>,
+}
+
+impl TrainingFiles {
+    fn new(client: reqwest::Client, url: String, token: String, run_dir: std::path::PathBuf, steps: u32) -> Self {
+        Self { client, url, token, run_dir, steps, seen: HashMap::new(), sent: Default::default() }
+    }
+
+    /// Checkpoints sent so far.
+    fn sent_checkpoints(&self) -> usize {
+        self.sent.iter().filter(|n| n.ends_with(".safetensors")).count()
+    }
+
+    async fn send(&mut self, last: bool) {
+        let lora = self.run_dir.join(trainer::NAME);
+        let mut files = Vec::new();
+        for c in trainer::checkpoints(&self.run_dir, self.steps) {
+            // Test pictures first: they're what Train shows while it trains.
+            for s in c.samples {
+                files.push((lora.join("samples").join(&s), s));
+            }
+            if !c.file.is_empty() {
+                files.push((lora.join(&c.file), c.file));
+            }
+        }
+        for (path, name) in files {
+            if self.sent.contains(&name) {
+                continue;
+            }
+            let Ok(size) = std::fs::metadata(&path).map(|m| m.len()) else { continue };
+            let steady = self.seen.insert(name.clone(), size) == Some(size);
+            if !(steady || last) || size == 0 {
+                continue;
+            }
+            let Ok(data) = tokio::fs::read(&path).await else { continue };
+            let url = format!("{}?name={}", self.url, urlencode(&name));
+            match post_file(&self.client, &url, &self.token, data).await {
+                Ok(()) => {
+                    self.sent.insert(name);
+                }
+                Err(e) => tracing::warn!(file = %name, error = %e, "couldn't send a training file; trying again"),
+            }
+        }
+    }
+}
+
+async fn post_file(client: &reqwest::Client, url: &str, token: &str, data: Vec<u8>) -> Result<(), String> {
+    let resp = client
+        .post(url)
+        .bearer_auth(token)
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .timeout(Duration::from_secs(900))
+        .body(data)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if resp.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("the server said {}", resp.status()))
     }
 }
 

@@ -14,12 +14,12 @@ to the phone (Pictures, Movies or Download, then the share sheet).
 
 ## Next, in order
 
-Nothing queued: pick the next section.
-
-## Optional extras, later
-
-- **Training on a helper PC.** Training runs on the server only today, and needs about 16 GB
-  of video memory. A helper PC with a big enough card (and ai-toolkit installed there) could
-  take training jobs too: it fetches the dataset, trains, and sends the checkpoint samples and
-  the finished LoRA back to the server. Pausing mid-training would stop the training, so the
-  pause switch would warn first. Maybe lower-memory settings for cards under 16 GB.
+1. **Training on a helper PC** (built, being tested): a lent PC with a 16 GB card and
+   ai-toolkit takes trainings the server's card can't, sending each checkpoint and test picture
+   back as it's saved. Pausing lending stops a training and keeps the checkpoints so far.
+2. **Notifications** when a long job (3D, video, training) finishes or fails.
+3. **Multi-colour 3D prints**: TRELLIS.2's colours reduced to at most 4 flat colours, saved
+   for Bambu Studio's AMS.
+4. **3D viewer on the phone**: turn a model around with a finger before printing it.
+5. **Flatten a 3D model's back or base** (an option, off by default) for wall pieces and
+   miniatures.

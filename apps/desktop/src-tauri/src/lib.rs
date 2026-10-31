@@ -162,6 +162,12 @@ fn helper_install_comfyui() -> Result<(), String> {
     helper()?.install_comfyui().map_err(|e| format!("{e:#}"))
 }
 
+/// Install ai-toolkit on this PC, so it can take trainings too.
+#[tauri::command]
+fn helper_install_trainer() -> Result<(), String> {
+    helper()?.install_trainer().map_err(|e| format!("{e:#}"))
+}
+
 /// The tray's "Pause lending this PC" item, ticked while paused and shown while lending.
 static TRAY_PAUSE: OnceLock<CheckMenuItem<tauri::Wry>> = OnceLock::new();
 
@@ -735,7 +741,8 @@ pub fn run() {
             set_helper,
             helper_packs,
             helper_install_pack,
-            helper_install_comfyui
+            helper_install_comfyui,
+            helper_install_trainer
         ])
         .build(context)
         .expect("error while building Outpost");

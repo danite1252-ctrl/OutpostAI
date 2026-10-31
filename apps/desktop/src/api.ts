@@ -1045,6 +1045,9 @@ export interface TrainingStatus {
   character_pack_ready: boolean;
   vram_needed_gb: number;
   vram_gb: number;
+  /** The helper PC trainings run on, when the server can't train and one can. */
+  trains_on?: string | null;
+  trains_on_vram_gb?: number | null;
   /** Outpost's own install of ai-toolkit. */
   install?: {
     installed: boolean;

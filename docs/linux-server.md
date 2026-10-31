@@ -119,6 +119,11 @@ graphics card**:
   five idle minutes). Chat stays on the server.
 - **Pause** (in Settings, or **Pause lending this PC** in the tray icon's menu) while gaming:
   ComfyUI stops, and the queue shows "Waiting for <that PC>" until you carry on.
+- **Trainings** too: when the server's card is too small to train (under 16 GB), a lent PC with
+  a 16 GB card can train instead. Click **Install ai-toolkit here** in the same panel. A
+  training then runs on that PC (the first one downloads the base model there) and each
+  checkpoint and test picture comes back to the server as it's saved, so Train shows them as
+  usual. Pausing stops a training (it asks first); the checkpoints sent so far are kept.
 - Several PCs can lend at once; each job goes to one that has the workflow and fits it. If a
   helper is switched off mid-job, the job fails after two minutes with a note saying so.
 

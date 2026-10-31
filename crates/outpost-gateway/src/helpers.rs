@@ -1,5 +1,11 @@
 //! Helper PCs: a desktop app using this server can lend its PC's graphics card for Create
-//! jobs (ComfyUI only) that are too big for the server's own card.
+//! jobs (ComfyUI only) that are too big for the server's own card, and for LoRA trainings
+//! (with ai-toolkit installed there) when the server's card is too small to train.
+//!
+//! A training on a helper fetches the dataset (pictures and captions) as one zip, trains, and
+//! sends each checkpoint and test picture back as it's saved, into the same run folder a
+//! training here would use: Train shows them the same way, and a training stopped part way
+//! (the helper paused for gaming) keeps the checkpoints it got to.
 //!
 //! - The helper checks in every few seconds (`POST /api/helpers/poll`) with its card's memory,
 //!   the workflows it has downloaded, and whether it's paused (gaming). That's the registry.
@@ -25,6 +31,7 @@ use outpost_core::accounts::Role;
 use outpost_core::attachments;
 use outpost_core::jobs::{self, JobStatus};
 use outpost_core::media::{self, NewMedia};
+use outpost_core::training;
 use outpost_engines::catalog::Fit;
 use outpost_engines::comfy::JobProgress;
 use outpost_engines::packs::{self, InputKind};
@@ -53,6 +60,8 @@ pub struct Helper {
     /// Workflows downloaded there (and runnable by its ComfyUI).
     pub ready: Vec<String>,
     pub paused: bool,
+    /// ai-toolkit is installed there and its card is big enough to train.
+    pub trainer: bool,
     pub last_seen: Instant,
 }
 
@@ -83,6 +92,13 @@ impl Helpers {
         self.inner.lock().unwrap_or_else(|p| p.into_inner()).insert(h.session_id.clone(), h);
     }
 
+    /// The helper that would run a training (an online, unpaused one first), if any can.
+    pub fn for_training(&self) -> Option<Helper> {
+        let mut able: Vec<Helper> = self.all().into_iter().filter(|h| h.trainer).collect();
+        able.sort_by_key(|h| (!(h.online() && !h.paused), std::cmp::Reverse(h.vram_mb)));
+        able.into_iter().next()
+    }
+
     /// The helper that would run `pack` (an online, unpaused one first), if any can.
     pub fn for_pack(&self, pack: &packs::Pack) -> Option<Helper> {
         let mut able: Vec<Helper> = self.all().into_iter().filter(|h| h.can_run(pack)).collect();
@@ -96,7 +112,11 @@ impl Helpers {
 /// tried here as before (slowly, spilling into system memory).
 pub async fn local_packs(state: &AppState) -> Vec<String> {
     let hw = crate::routes::models::measure_cached(state).await;
-    let mut out = vec![crate::train::PACK_ID.to_string()];
+    let mut out = Vec::new();
+    // Training: here when this server can (or no helper can, as before).
+    if server_can_train(state, hw.vram_mb).await || state.helpers.for_training().is_none() {
+        out.push(crate::train::PACK_ID.to_string());
+    }
     for p in packs::built_in() {
         let ready_here = state.assets.status(&p).ready;
         let fits_here = crate::routes::create::pack_fit(p.vram_gb, &hw) == Fit::Fits;
@@ -107,11 +127,32 @@ pub async fn local_packs(state: &AppState) -> Vec<String> {
     out
 }
 
+/// A card this big (MiB) trains: ai-toolkit's 16 GB settings, on a card that reports a
+/// little under 16 GB.
+pub const TRAIN_MIN_MB: u64 = 15 * 1024;
+
+/// This server has ai-toolkit and a card big enough to train.
+pub async fn server_can_train(state: &AppState, vram_mb: u64) -> bool {
+    vram_mb >= TRAIN_MIN_MB && outpost_engines::trainer::check_install(&crate::train::toolkit_dir(state).await).is_ok()
+}
+
+/// The helper trainings go to, when this server can't train and a helper can.
+pub async fn trains_on(state: &AppState) -> Option<Helper> {
+    let hw = crate::routes::models::measure_cached(state).await;
+    if server_can_train(state, hw.vram_mb).await {
+        return None;
+    }
+    state.helpers.for_training()
+}
+
 /// The helper a queued job waits for, when only a helper can run it and that one is off or
 /// paused (`here` is [`local_packs`]).
 pub fn waiting_for(state: &AppState, here: &[String], pack_id: &str) -> Option<String> {
     if here.iter().any(|p| p == pack_id) {
         return None;
+    }
+    if pack_id == crate::train::PACK_ID {
+        return state.helpers.for_training().filter(|h| !h.online() || h.paused).map(|h| h.name);
     }
     let pack = packs::find(pack_id)?;
     state.helpers.for_pack(&pack).filter(|h| !h.online() || h.paused).map(|h| h.name)
@@ -139,6 +180,9 @@ pub struct PollRequest {
     /// Busy with a job already: don't hand it another.
     #[serde(default)]
     pub busy: bool,
+    /// ai-toolkit is installed on the helper (it trains if its card is big enough).
+    #[serde(default)]
+    pub can_train: bool,
 }
 
 /// A job for a helper to run.
@@ -155,6 +199,19 @@ pub struct HelperJob {
     /// it with `lora`.
     pub lora: Option<String>,
     pub lora_bytes: Option<u64>,
+    /// For a training (pack `train`): what to train. Fetch the pictures with `dataset`.
+    pub training: Option<HelperTraining>,
+}
+
+/// A LoRA training for a helper: ai-toolkit's settings, as the server would use them.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HelperTraining {
+    pub training_id: String,
+    pub trigger: String,
+    pub steps: u32,
+    pub rank: u32,
+    pub learning_rate: f64,
+    pub sample_prompts: Vec<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -176,6 +233,7 @@ pub async fn poll(State(state): State<AppState>, auth: Auth, Json(req): Json<Pol
         ram_mb: req.ram_mb,
         ready: req.ready_packs.into_iter().filter(|p| packs::find(p).is_some()).collect(),
         paused: req.paused,
+        trainer: req.can_train && req.vram_mb >= TRAIN_MIN_MB,
         last_seen: Instant::now(),
     };
     state.helpers.put(helper.clone());
@@ -184,14 +242,54 @@ pub async fn poll(State(state): State<AppState>, auth: Auth, Json(req): Json<Pol
     }
     // What only a helper should run, and this one can.
     let here = local_packs(&state).await;
-    let mine: Vec<String> = packs::built_in()
+    let mut mine: Vec<String> = packs::built_in()
         .into_iter()
         .filter(|p| !here.contains(&p.id) && helper.can_run(p))
         .map(|p| p.id)
         .collect();
+    if helper.trainer && !here.iter().any(|p| p == crate::train::PACK_ID) {
+        mine.push(crate::train::PACK_ID.to_string());
+    }
     let Some(job) = jobs::take_next_of(&state.pool, &mine).await? else {
         return Ok(Json(PollResponse { job: None }));
     };
+    let start = |phase: String| {
+        state.queue.remote_start(RemoteRun {
+            run: Running {
+                job_id: job.id.clone(),
+                pack_id: job.pack_id.clone(),
+                prompt_id: None,
+                progress: JobProgress { phase, ..Default::default() },
+                cancelled: false,
+                sampling: None,
+            },
+            helper: helper.name.clone(),
+            session_id: helper.session_id.clone(),
+            last_heard: Instant::now(),
+        })
+    };
+    if job.pack_id == crate::train::PACK_ID {
+        let training = match training_for_helper(&state, &job).await {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = jobs::finish(&state.pool, &job.id, JobStatus::Failed, Some(&e)).await;
+                return Ok(Json(PollResponse { job: None }));
+            }
+        };
+        start(format!("Starting on {}", helper.name));
+        tracing::info!(job = %job.id, helper = %helper.name, "a helper PC took a training");
+        return Ok(Json(PollResponse {
+            job: Some(HelperJob {
+                job_id: job.id,
+                pack_id: job.pack_id,
+                inputs: Value::Object(Default::default()),
+                images: Vec::new(),
+                lora: None,
+                lora_bytes: None,
+                training: Some(training),
+            }),
+        }));
+    }
     let pack = packs::find(&job.pack_id).ok_or_else(|| ApiError::conflict("Unknown pack."))?;
     let inputs: Value = serde_json::from_str(&job.inputs).unwrap_or(Value::Object(Default::default()));
     let images: Vec<String> = pack
@@ -210,24 +308,153 @@ pub async fn poll(State(state): State<AppState>, auth: Auth, Json(req): Json<Pol
         .and_then(|l| state.assets.lora_path(l))
         .and_then(|p| std::fs::metadata(p).ok())
         .map(|m| m.len());
-    state.queue.remote_start(RemoteRun {
-        run: Running {
-            job_id: job.id.clone(),
-            pack_id: job.pack_id.clone(),
-            prompt_id: None,
-            progress: JobProgress { phase: format!("Starting on {}", helper.name), ..Default::default() },
-            cancelled: false,
-            sampling: None,
-        },
-        helper: helper.name.clone(),
-        session_id: helper.session_id.clone(),
-        last_heard: Instant::now(),
-    });
+    start(format!("Starting on {}", helper.name));
     tracing::info!(job = %job.id, pack = %job.pack_id, helper = %helper.name, "a helper PC took a job");
     Ok(Json(PollResponse {
-        job: Some(HelperJob { job_id: job.id, pack_id: job.pack_id, inputs, images, lora, lora_bytes }),
+        job: Some(HelperJob { job_id: job.id, pack_id: job.pack_id, inputs, images, lora, lora_bytes, training: None }),
     }))
 }
+
+/// A training's settings for a helper, with its captions written beside the pictures (the
+/// helper fetches them with the dataset).
+async fn training_for_helper(state: &AppState, job: &jobs::Job) -> Result<HelperTraining, String> {
+    let t = training::training_for_job(&state.pool, &job.id)
+        .await
+        .map_err(|_| "This training's record is missing.".to_string())?;
+    let root = crate::train::root(state);
+    let n = training::write_captions(&state.pool, &root, &t.account_id, &t.dataset_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err("The dataset has no pictures.".into());
+    }
+    let spec = crate::train::spec(&t, std::path::PathBuf::new(), std::path::PathBuf::new());
+    Ok(HelperTraining {
+        training_id: t.id,
+        trigger: spec.trigger,
+        steps: spec.steps,
+        rank: spec.rank,
+        learning_rate: spec.learning_rate,
+        sample_prompts: spec.sample_prompts,
+    })
+}
+
+/// The training this helper is running: its record and run folder.
+async fn my_training(state: &AppState, auth: &Auth, job_id: &str) -> ApiResult<(training::Training, std::path::PathBuf)> {
+    require_helper(auth)?;
+    let run = my_run(state, auth, job_id)?;
+    if run.run.pack_id != crate::train::PACK_ID {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "not_found", "That job isn't a training."));
+    }
+    let t = training::training_for_job(&state.pool, job_id).await?;
+    let dir = training::run_dir(&crate::train::root(state), &t.id);
+    Ok((t, dir))
+}
+
+/// The training's pictures and their captions (`.txt` beside each), as one zip.
+#[utoipa::path(get, path = "/api/helpers/jobs/{id}/dataset", tag = "helpers", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Job id")),
+    responses((status = 200, description = "A zip of the pictures and captions"), (status = 404, description = "Not this helper's training", body = ErrorBody)))]
+pub async fn dataset(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Response> {
+    let (t, _) = my_training(&state, &auth, &id).await?;
+    let dir = training::dataset_dir(&crate::train::root(&state), &t.dataset_id);
+    let data = tokio::task::spawn_blocking(move || zip_folder(&dir))
+        .await
+        .map_err(|_| ApiError::conflict("Couldn't pack the pictures."))?
+        .map_err(|e| ApiError::conflict(format!("Couldn't pack the pictures: {e}")))?;
+    bytes(data, "application/zip")
+}
+
+/// The files directly in `dir` (pictures are already compressed: stored as they are).
+fn zip_folder(dir: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Write;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .large_file(false);
+    let mut entries: Vec<_> = std::fs::read_dir(dir)?.flatten().filter(|e| e.path().is_file()).collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        let name = e.file_name().to_string_lossy().to_string();
+        zip.start_file(name, opts).map_err(std::io::Error::other)?;
+        zip.write_all(&std::fs::read(e.path())?)?;
+    }
+    Ok(zip.finish().map_err(std::io::Error::other)?.into_inner())
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct TrainingFileQuery {
+    /// A checkpoint (`lora_000000250.safetensors`, `lora.safetensors`), a test picture
+    /// (`<time>__000000250_0.jpg`) or `train.log`.
+    pub name: String,
+}
+
+/// Where a file a helper sends from its training goes in the run folder, or `None` if it
+/// isn't one of a training's files.
+pub fn training_file_path(run_dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    if name.is_empty() || name.len() > 120 || name.contains(['/', '\\']) || name.contains("..") || name.starts_with('.') {
+        return None;
+    }
+    let lora = run_dir.join(outpost_engines::trainer::NAME);
+    if name == "train.log" {
+        Some(run_dir.join(name))
+    } else if name.ends_with(".safetensors") && name.starts_with(outpost_engines::trainer::NAME) {
+        Some(lora.join(name))
+    } else if (name.ends_with(".jpg") || name.ends_with(".png")) && name.contains("__") {
+        Some(lora.join("samples").join(name))
+    } else {
+        None
+    }
+}
+
+/// A checkpoint, test picture or the log, from the helper's training into its run folder.
+#[utoipa::path(post, path = "/api/helpers/jobs/{id}/training-file", tag = "helpers", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Job id"), TrainingFileQuery),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
+    responses((status = 201, description = "Saved"), (status = 400, description = "Not a training file", body = ErrorBody),
+        (status = 404, description = "Not this helper's training", body = ErrorBody)))]
+pub async fn training_file(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(id): Path<String>,
+    Query(q): Query<TrainingFileQuery>,
+    body: Body,
+) -> ApiResult<StatusCode> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    let (_, run_dir) = my_training(&state, &auth, &id).await?;
+    let dest = training_file_path(&run_dir, &q.name).ok_or_else(|| ApiError::bad_request("That isn't one of a training's files."))?;
+    if let Some(dir) = dest.parent() {
+        tokio::fs::create_dir_all(dir).await.map_err(|e| ApiError::conflict(e.to_string()))?;
+    }
+    // Under another name until it's all here, so Train never shows half a checkpoint.
+    let part = dest.with_file_name(format!("{}.part", q.name));
+    let mut out = tokio::fs::File::create(&part).await.map_err(|e| ApiError::conflict(e.to_string()))?;
+    let mut stream = body.into_data_stream();
+    let mut total: u64 = 0;
+    let written: Result<(), String> = async {
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| "The upload was cut off.".to_string())?;
+            total += chunk.len() as u64;
+            if total > TRAINING_FILE_MAX {
+                return Err("That file is too big.".into());
+            }
+            out.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        }
+        out.flush().await.map_err(|e| e.to_string())
+    }
+    .await;
+    drop(out);
+    if let Err(e) = written {
+        let _ = tokio::fs::remove_file(&part).await;
+        return Err(ApiError::bad_request(e));
+    }
+    tokio::fs::rename(&part, &dest).await.map_err(|e| ApiError::conflict(e.to_string()))?;
+    Ok(StatusCode::CREATED)
+}
+
+/// The biggest file a training sends (a rank-64 checkpoint is a few hundred MB).
+const TRAINING_FILE_MAX: u64 = 4 * 1024 * 1024 * 1024;
 
 /// The helper's own running job, or not found (so nobody else can see others' jobs).
 fn my_run(state: &AppState, auth: &Auth, job_id: &str) -> Result<RemoteRun, ApiError> {
@@ -456,4 +683,25 @@ pub async fn list(State(state): State<AppState>, _auth: Auth) -> Json<Vec<Helper
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Json(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::training_file_path;
+    use std::path::Path;
+
+    #[test]
+    fn a_helper_can_only_send_a_trainings_own_files() {
+        let run = Path::new("/data/training/runs/t1");
+        assert_eq!(training_file_path(run, "lora_000000250.safetensors").unwrap(), run.join("lora").join("lora_000000250.safetensors"));
+        assert_eq!(training_file_path(run, "lora.safetensors").unwrap(), run.join("lora").join("lora.safetensors"));
+        assert_eq!(
+            training_file_path(run, "1730000000__000000250_0.jpg").unwrap(),
+            run.join("lora").join("samples").join("1730000000__000000250_0.jpg")
+        );
+        assert_eq!(training_file_path(run, "train.log").unwrap(), run.join("train.log"));
+        for bad in ["../x.safetensors", "lora/../../a.safetensors", "a\\b.jpg", "config.json", "evil.safetensors", "x.jpg", ".hidden__1_0.jpg", ""] {
+            assert!(training_file_path(run, bad).is_none(), "{bad}");
+        }
+    }
 }

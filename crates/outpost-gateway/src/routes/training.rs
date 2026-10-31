@@ -77,6 +77,10 @@ pub struct TrainingStatus {
     pub vram_gb: f32,
     /// Outpost's own install of ai-toolkit (the Install button).
     pub install: outpost_engines::TrainerInstall,
+    /// The helper PC trainings run on, when this server can't train and one can.
+    pub trains_on: Option<String>,
+    /// Its card's memory, in GB.
+    pub trains_on_vram_gb: Option<f32>,
 }
 
 /// Is this PC ready to train, and which models can write captions?
@@ -89,7 +93,10 @@ pub async fn status(State(state): State<AppState>, _auth: Auth) -> Json<Training
     let character_pack_ready = outpost_engines::packs::built_in()
         .iter()
         .any(|p| p.task() == outpost_engines::packs::Task::Character && state.assets.status(p).ready);
+    let helper = crate::helpers::trains_on(&state).await;
     Json(TrainingStatus {
+        trains_on_vram_gb: helper.as_ref().map(|h| h.vram_mb as f32 / 1024.0),
+        trains_on: helper.map(|h| h.name),
         toolkit_problem: trainer::check_install(&dir).err(),
         toolkit_dir: dir.to_string_lossy().to_string(),
         caption_models,
@@ -713,7 +720,10 @@ pub async fn queue_training(
         return Err(ApiError::conflict("Add at least 5 pictures first (15 to 30 is best)."));
     }
     let toolkit = train_job::toolkit_dir(state).await;
-    trainer::check_install(&toolkit).map_err(|m| ApiError::new(StatusCode::CONFLICT, "toolkit_missing", m))?;
+    // A helper PC with ai-toolkit trains when this server can't.
+    if state.helpers.for_training().is_none() {
+        trainer::check_install(&toolkit).map_err(|m| ApiError::new(StatusCode::CONFLICT, "toolkit_missing", m))?;
+    }
     if captions_of(state, &dataset.id).is_some_and(|c| c.running) {
         return Err(ApiError::conflict("Captions are still being written. Train once they're done."));
     }

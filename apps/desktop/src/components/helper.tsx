@@ -1,8 +1,10 @@
 // Lending this PC's graphics card to the server (Settings › Server, while using one).
 //
 // The server runs Create jobs it can't fit on its own card here instead: this PC checks in,
-// runs them in its own ComfyUI (never Ollama) and sends the pictures back. Pause it while
-// gaming (here or from the tray icon) and ComfyUI stops, so the card is all yours.
+// runs them in its own ComfyUI (never Ollama) and sends the pictures back. With ai-toolkit
+// installed and a 16 GB card it takes trainings too, sending each checkpoint back as it's
+// saved. Pause it while gaming (here or from the tray icon) and ComfyUI stops, so the card is
+// all yours (a training stops too, keeping the checkpoints it sent).
 
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, createApi, type Fit, type Pack, type PackSetup } from "../api";
@@ -21,7 +23,17 @@ interface HelperStatus {
   comfyui: boolean;
   comfyui_installing: boolean;
   comfyui_error: string | null;
+  trainer_ready: boolean;
+  trainer: {
+    installing: boolean;
+    error: string | null;
+    pinned_version: string;
+    progress: { step: string; step_index: number; step_count: number; percent: number | null } | null;
+  } | null;
 }
+
+/** ai-toolkit's settings need about 16 GB; cards report a little under. */
+const TRAIN_MIN_MB = 15 * 1024;
 
 interface LocalPack {
   id: string;
@@ -49,6 +61,7 @@ export function HelperPanel({ token, isOwner }: { token: string; isOwner: boolea
   const [local, setLocal] = useState<LocalPack[]>([]);
   const [server, setServer] = useState<Pack[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [confirmPause, setConfirmPause] = useState(false);
 
   const refresh = useCallback(async () => {
     const s = await invoke<HelperStatus | null>("helper_status").catch(() => null);
@@ -94,8 +107,11 @@ export function HelperPanel({ token, isOwner }: { token: string; isOwner: boolea
   const serverCant = new Set(server.filter((p) => p.fit !== "fits" || (!p.models.ready && !p.runs_on)).map((p) => p.id));
   const offer = local.filter((p) => p.fit === "fits" && serverCant.has(p.id));
 
+  const training = status.state === "working" && status.pack_id === "train";
   const line =
-    status.state === "working"
+    training
+      ? `Training a character for the server${status.progress?.steps ? `: step ${status.progress.step} of ${status.progress.steps}` : status.progress ? `: ${status.progress.phase}` : ""}. Each checkpoint goes to the server as it's saved.`
+      : status.state === "working"
       ? `Making something for the server${status.progress ? `: ${status.progress.phase}${status.progress.steps ? `, step ${status.progress.step} of ${status.progress.steps}` : ""}` : ""}.`
       : status.state === "paused"
         ? "Paused: no jobs are taken, and ComfyUI is stopped so the card is free."
@@ -127,8 +143,27 @@ export function HelperPanel({ token, isOwner }: { token: string; isOwner: boolea
               title="Pause (e.g. while gaming)"
               hint="ComfyUI stops so the card is free; jobs for this PC wait on the server. Also in the tray icon's menu."
               checked={status.paused}
-              onChange={(on) => set(true, on)}
+              onChange={(on) => (on && training ? setConfirmPause(true) : set(true, on))}
             />
+          )}
+          {confirmPause && training && (
+            <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line bg-raised px-3 py-2" role="alert">
+              <span className="flex-1 text-sm">
+                A training is running here. Pausing stops it; the checkpoints already sent to the server are kept.
+              </span>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  setConfirmPause(false);
+                  set(true, true);
+                }}
+              >
+                Stop it and pause
+              </Button>
+              <Button variant="ghost" onClick={() => setConfirmPause(false)}>
+                Keep training
+              </Button>
+            </div>
           )}
           {status.enabled && line && (
             <p
@@ -181,9 +216,58 @@ export function HelperPanel({ token, isOwner }: { token: string; isOwner: boolea
               )}
             </div>
           )}
+          {status.enabled && <TrainingHere status={status} onError={setError} onStarted={refresh} />}
         </>
       )}
       <ErrorNote>{error}</ErrorNote>
+    </div>
+  );
+}
+
+/** Trainings on this PC: ai-toolkit installed here, and a card big enough. */
+function TrainingHere({ status, onError, onStarted }: { status: HelperStatus; onError: (e: string) => void; onStarted: () => void }) {
+  const t = status.trainer;
+  const installing = t?.installing ?? false;
+  if (status.vram_mb > 0 && status.vram_mb < TRAIN_MIN_MB && !status.trainer_ready) {
+    return <p className="text-sm text-muted">Training needs a 16 GB card; this PC has {gb(status.vram_mb)}, so it lends for Create only.</p>;
+  }
+  if (status.trainer_ready && !installing) {
+    return (
+      <p className="text-sm text-muted">
+        Trainings: ready. When the server's card is too small to train, trainings run here. The first one downloads Z-Image
+        Turbo for training (about 20 GB) into this PC's Hugging Face cache.
+      </p>
+    );
+  }
+  const p = t?.progress;
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="flex-1 text-sm">
+          {installing
+            ? "Installing ai-toolkit on this PC…"
+            : "Train characters here too: this PC's card is big enough. It needs ai-toolkit (about 8 GB, with PyTorch)."}
+        </span>
+        {!installing && (
+          <Button
+            variant="ghost"
+            onClick={() =>
+              void invoke("helper_install_trainer")
+                .then(onStarted)
+                .catch((e) => onError(message(e)))
+            }
+          >
+            {t?.error ? "Try installing again" : "Install ai-toolkit here"}
+          </Button>
+        )}
+      </div>
+      {installing && p && (
+        <span className="text-xs text-muted" aria-live="polite">
+          Step {p.step_index} of {p.step_count}: {p.step}
+          {p.percent != null ? ` · ${Math.round(p.percent)}%` : ""}
+        </span>
+      )}
+      {t?.error && !installing && <ErrorNote>The last install failed: {t.error}</ErrorNote>}
     </div>
   );
 }

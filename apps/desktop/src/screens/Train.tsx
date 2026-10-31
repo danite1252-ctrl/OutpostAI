@@ -200,14 +200,25 @@ function SetupNote({
   const notes: string[] = [];
   if (status.caption_models.length === 0) notes.push("No model that can see pictures is installed, so captions must be written by hand. Get one with the eye badge in Models.");
   if (!status.character_pack_ready) notes.push("Z-Image Turbo isn't downloaded yet: get it in Create › Characters to use a trained character.");
-  if (status.vram_gb > 0 && status.vram_gb < status.vram_needed_gb)
-    notes.push(`Training needs about ${status.vram_needed_gb} GB of video memory; ${SERVER ? SERVER.name : "this PC"} has ${status.vram_gb.toFixed(0)} GB, so it may run out.`);
-  if (!status.toolkit_problem && !installing && notes.length === 0) return null;
+  const helper = status.trains_on;
+  if (helper)
+    notes.push(
+      `Trainings run on ${helper}${status.trains_on_vram_gb ? ` (${status.trains_on_vram_gb.toFixed(0)} GB card)` : ""}, which lends its graphics card. Each checkpoint comes back here as it's saved; pausing lending there stops a training, keeping the checkpoints so far.`,
+    );
+  else if (status.vram_gb > 0 && status.vram_gb < status.vram_needed_gb)
+    notes.push(
+      `Training needs about ${status.vram_needed_gb} GB of video memory; ${SERVER ? SERVER.name : "this PC"} has ${status.vram_gb.toFixed(0)} GB, so it may run out.${
+        SERVER ? " A PC with a 16 GB card can train instead: in its desktop app, Settings › Server › Lend this PC, then Install ai-toolkit there." : ""
+      }`,
+    );
+  // With a helper training, ai-toolkit isn't needed here.
+  const toolkitProblem = helper ? null : status.toolkit_problem;
+  if (!toolkitProblem && !installing && notes.length === 0) return null;
   const install = status.install;
   const p = install?.progress;
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5" role="status">
-      {(status.toolkit_problem || installing) && (
+      {(toolkitProblem || installing) && (
         <>
           <p className="text-sm">
             <b>{installing ? "Installing ai-toolkit…" : "Training isn't set up yet."}</b>{" "}
@@ -729,7 +740,7 @@ function TrainBox({
   if (locked) return null;
   const hours = (steps * SECS_PER_STEP) / 3600;
   const blockers = [
-    status?.toolkit_problem ? "ai-toolkit isn't set up" : null,
+    status?.toolkit_problem && !status.trains_on ? "ai-toolkit isn't set up" : null,
     view.image_count < 5 ? "add at least 5 pictures" : null,
     view.captioning?.running ? "captions are being written" : null,
   ].filter(Boolean);
