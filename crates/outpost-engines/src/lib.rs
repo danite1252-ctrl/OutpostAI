@@ -25,6 +25,7 @@ pub mod trainer;
 pub mod types;
 pub mod versions;
 
-pub use manager::{EngineError, EngineManager, TrainerInstall};
+pub use manager::{EngineError, EngineManager, ListeningFetch, TrainerInstall};
+pub use voice::{ListeningModel, DEFAULT_LISTENING};
 pub use process::Log;
 pub use types::{EngineId, EngineInfo, EngineState, EnginesStatus, Progress};

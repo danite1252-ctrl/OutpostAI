@@ -14,6 +14,9 @@ pub const TAILSCALE_ACCESS: &str = "network.tailscale";
 /// Where ai-toolkit (the LoRA trainer) is installed. Unset: `C:\dev\ai-toolkit`.
 pub const AI_TOOLKIT_DIR: &str = "training.ai_toolkit_dir";
 
+/// The listening (speech-to-text) model voice uses, e.g. `large-v3-turbo`. Unset: `small`.
+pub const VOICE_LISTENING: &str = "voice.listening";
+
 /// "off" to stop describing gallery pictures for search (on until turned off).
 pub const GALLERY_DESCRIBE: &str = "gallery.describe";
 

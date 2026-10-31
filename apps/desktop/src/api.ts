@@ -1352,10 +1352,26 @@ export interface VoiceStatus {
   ready: boolean;
   voices: VoiceInfo[];
   default_voice: string;
+  /** The listening (speech-to-text) model chosen. */
+  listening?: string;
+  /** The one used now: the chosen one once downloaded, else "small". */
+  listening_in_use?: string;
+  listening_models?: ListeningModel[];
+  /** A listening model downloading now (progress 0-1), or the last failed download. */
+  listening_fetch?: { model: string | null; progress: number | null; failed: string | null; error: string | null };
+}
+
+export interface ListeningModel {
+  id: string;
+  label: string;
+  description: string;
+  size_mb: number;
+  downloaded: boolean;
 }
 
 export const voiceApi = {
   status: (token: string) => request<VoiceStatus>("GET", "/api/voice", { token }),
+  setListening: (token: string, model: string) => request<VoiceStatus>("PUT", "/api/voice/listening", { token, body: { model } }),
   transcribe: (token: string, audio: string, language?: string) =>
     request<{ text: string; language: string; duration: number }>("POST", "/api/voice/transcribe", {
       token,

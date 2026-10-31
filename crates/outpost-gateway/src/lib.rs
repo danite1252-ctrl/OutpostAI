@@ -294,6 +294,7 @@ pub fn router(state: AppState) -> Router {
             patch(training::rename_character).delete(training::delete_character),
         )
         .route("/api/voice", get(voice::status))
+        .route("/api/voice/listening", put(voice::set_listening))
         .route(
             "/api/voice/transcribe",
             post(voice::transcribe).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),

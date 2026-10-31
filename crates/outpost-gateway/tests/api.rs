@@ -358,6 +358,7 @@ async fn openapi_lists_every_route() {
         "/api/connection",
         "/mcp",
         "/api/voice",
+        "/api/voice/listening",
         "/api/voice/transcribe",
         "/api/voice/speak",
         "/v1/audio/speech",
@@ -1459,6 +1460,18 @@ async fn voice_explains_when_it_isnt_running() {
     let (status, v) = call(&app, "GET", "/api/voice", t, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(v["default_voice"], "af_heart");
+    // Listening models: small until another is chosen; one that isn't downloaded needs Voice.
+    assert_eq!(v["listening"], "small", "{v}");
+    assert_eq!(v["listening_in_use"], "small");
+    let ids: Vec<&str> = v["listening_models"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["base", "small", "large-v3-turbo"]);
+    let (status, _) = call(&app, "PUT", "/api/voice/listening", t, Some(json!({"model": "huge"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, e) = call(&app, "PUT", "/api/voice/listening", t, Some(json!({"model": "large-v3-turbo"}))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{e}");
+    assert!(e["error"]["message"].as_str().unwrap().contains("Install Voice"));
+    let (_, v) = call(&app, "GET", "/api/voice", t, None).await;
+    assert_eq!(v["listening"], "small", "not chosen when it couldn't be got");
     let (status, _) = call(&app, "POST", "/api/voice/transcribe", t, Some(json!({"audio": "not base64!"}))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let (status, _) = call(&app, "POST", "/api/voice/speak", t, Some(json!({"text": "```\ncode\n```"}))).await;

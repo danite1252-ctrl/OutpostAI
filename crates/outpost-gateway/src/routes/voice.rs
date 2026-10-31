@@ -101,6 +101,34 @@ pub struct VoiceStatus {
     /// Voices to speak with, English first.
     pub voices: Vec<VoiceInfo>,
     pub default_voice: String,
+    /// The listening model chosen (speech to text).
+    pub listening: String,
+    /// The one used now: the chosen one once it's downloaded, else `small`.
+    pub listening_in_use: String,
+    /// The listening models to choose from.
+    pub listening_models: Vec<outpost_engines::ListeningModel>,
+    /// A listening model downloading now, or the last failed download.
+    pub listening_fetch: outpost_engines::ListeningFetch,
+}
+
+/// The listening model chosen (valid, else the default).
+async fn chosen_listening(state: &AppState) -> String {
+    outpost_core::settings::get(&state.pool, outpost_core::settings::VOICE_LISTENING)
+        .await
+        .ok()
+        .flatten()
+        .filter(|m| state.engines.listening_models().iter().any(|l| &l.id == m))
+        .unwrap_or_else(|| outpost_engines::DEFAULT_LISTENING.to_string())
+}
+
+/// The listening model to use now: the chosen one once it's downloaded.
+pub async fn listening_in_use(state: &AppState) -> String {
+    let chosen = chosen_listening(state).await;
+    if state.engines.listening_downloaded(&chosen) {
+        chosen
+    } else {
+        outpost_engines::DEFAULT_LISTENING.to_string()
+    }
 }
 
 /// Whether voice is ready, and its voices.
@@ -138,7 +166,48 @@ pub async fn status(State(state): State<AppState>, _auth: Auth) -> Json<VoiceSta
         state: st,
         voices,
         default_voice: DEFAULT_VOICE.into(),
+        listening: chosen_listening(&state).await,
+        listening_in_use: listening_in_use(&state).await,
+        listening_models: state.engines.listening_models(),
+        listening_fetch: state.engines.listening_fetch(),
     })
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ListeningRequest {
+    /// `base`, `small` or `large-v3-turbo`.
+    pub model: String,
+}
+
+/// Choose the listening model (owner). One that isn't downloaded yet is downloaded first
+/// (follow it with `GET /api/voice`); until then the current one carries on.
+#[utoipa::path(put, path = "/api/voice/listening", tag = "voice", security(("bearer" = [])),
+    request_body = ListeningRequest,
+    responses((status = 200, description = "Chosen", body = VoiceStatus), (status = 400, description = "Unknown model", body = ErrorBody),
+        (status = 409, description = "Voice isn't installed, or another is downloading", body = ErrorBody)))]
+pub async fn set_listening(State(state): State<AppState>, auth: Auth, Json(req): Json<ListeningRequest>) -> ApiResult<Json<VoiceStatus>> {
+    auth.require_owner()?;
+    if !state.engines.listening_models().iter().any(|l| l.id == req.model) {
+        return Err(ApiError::bad_request(format!("There's no listening model called {}.", req.model)));
+    }
+    if !state.engines.listening_downloaded(&req.model) {
+        let installed = state
+            .engines
+            .status()
+            .await
+            .engines
+            .iter()
+            // Outpost's own install (not another copy answering on its port): models go in its folder.
+            .any(|e| e.id == EngineId::Voice && e.managed && !matches!(e.state, EngineState::NotInstalled | EngineState::Installing));
+        if !installed {
+            return Err(ApiError::conflict("Install Voice in Settings › Engines first."));
+        }
+        state.engines.fetch_listening(&req.model, || {}).map_err(|_| {
+            ApiError::conflict("Another listening model is downloading; try again when it's done.")
+        })?;
+    }
+    outpost_core::settings::set(&state.pool, outpost_core::settings::VOICE_LISTENING, &req.model).await?;
+    Ok(status(State(state), auth).await)
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -184,7 +253,7 @@ pub async fn transcribe_bytes(state: &AppState, audio: Vec<u8>, language: Option
     if audio.is_empty() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid", "The recording is empty."));
     }
-    let mut query: Vec<(&str, String)> = Vec::new();
+    let mut query: Vec<(&str, String)> = vec![("model", listening_in_use(state).await)];
     if let Some(l) = language {
         query.push(("language", l));
     }

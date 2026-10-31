@@ -123,7 +123,21 @@ pub struct EngineManager {
     slots: HashMap<EngineId, Arc<Slot>>,
     /// ai-toolkit, for LoRA training: installed like an engine, but never left running.
     trainer: Arc<Slot>,
+    /// A listening model being downloaded (its id), or why the last download failed.
+    listening: Arc<Mutex<ListeningFetch>>,
     gpus: OnceCell<Vec<Gpu>>,
+}
+
+/// A listening (speech-to-text) model download.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ListeningFetch {
+    /// The model downloading now.
+    pub model: Option<String>,
+    /// How far, 0-1, roughly.
+    pub progress: Option<f32>,
+    /// The model the last failed download was for, and why.
+    pub failed: Option<String>,
+    pub error: Option<String>,
 }
 
 /// Outpost's own ai-toolkit install, as the apps see it.
@@ -187,6 +201,7 @@ impl EngineManager {
         });
         Arc::new(EngineManager {
             trainer,
+            listening: Default::default(),
             models_root: data_dir.join("models"),
             engines_root,
             download_client: reqwest::Client::builder()
@@ -481,6 +496,66 @@ impl EngineManager {
         } else {
             EngineState::NotInstalled
         };
+        Ok(())
+    }
+
+    /// The listening models, with which are downloaded.
+    pub fn listening_models(&self) -> Vec<voice::ListeningModel> {
+        voice::listening_models(&self.models_root)
+    }
+
+    pub fn listening_downloaded(&self, id: &str) -> bool {
+        voice::listening_downloaded(&self.models_root, id)
+    }
+
+    /// The listening model download in progress (with how far it's got), or the last failure.
+    pub fn listening_fetch(&self) -> ListeningFetch {
+        let mut f = self.listening.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(m) = &f.model {
+            f.progress = voice::listening_progress(&self.models_root, m);
+        }
+        f
+    }
+
+    /// Download a listening model in the background; `then` runs once it's there.
+    pub fn fetch_listening(
+        self: &Arc<Self>,
+        id: &str,
+        then: impl FnOnce() + Send + 'static,
+    ) -> Result<(), EngineError> {
+        if !voice::is_listening_model(id) {
+            return Err(EngineError::NotInstalled);
+        }
+        {
+            let mut f = self.listening.lock().unwrap_or_else(|p| p.into_inner());
+            if f.model.is_some() {
+                return Err(EngineError::Busy);
+            }
+            *f = ListeningFetch { model: Some(id.to_string()), ..Default::default() };
+        }
+        let me = self.clone();
+        let id = id.to_string();
+        tokio::spawn(async move {
+            let slot = me.slots[&EngineId::Voice].clone();
+            slot.log.push(format!("Downloading the listening model {id}"));
+            let result = voice::fetch_listening(&slot.dir, &me.models_root, &id, &slot.log).await;
+            let mut f = me.listening.lock().unwrap_or_else(|p| p.into_inner());
+            f.model = None;
+            f.progress = None;
+            match result {
+                Ok(()) if voice::listening_downloaded(&me.models_root, &id) => {
+                    slot.log.push(format!("Listening model {id} ready"));
+                    drop(f);
+                    then();
+                }
+                other => {
+                    let e = other.err().map(|e| format!("{e:#}")).unwrap_or_else(|| "The download didn't finish.".into());
+                    slot.log.push(format!("ERROR: {e}"));
+                    f.failed = Some(id);
+                    f.error = Some(e);
+                }
+            }
+        });
         Ok(())
     }
 

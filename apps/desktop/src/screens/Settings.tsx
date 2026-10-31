@@ -5,6 +5,7 @@ import { DiagnosticsPanel, UpdatesPanel, WindowPanel } from "../components/syste
 import { Avatar, Button, ErrorNote, Field, Section, ToggleRow } from "../components/ui";
 import { CopyGallery, ServerPanel } from "../components/server";
 import { HelperPanel } from "../components/helper";
+import { ListeningPanel } from "../components/listening";
 import { PairDialog } from "./Connections";
 
 const ROLES: { value: Role; label: string; hint: string }[] = [
@@ -80,6 +81,10 @@ export default function Settings({
         }
       >
         <EnginesPanel token={auth.token} canManage={isOwner} status={engines} onChanged={onEnginesChanged} />
+      </Section>
+
+      <Section id="voice" title="Voice" summary="How Outpost listens">
+        <ListeningPanel token={auth.token} canManage={isOwner} />
       </Section>
 
       <Section id="app" title="Updates and this window" summary={`Outpost ${version}`}>

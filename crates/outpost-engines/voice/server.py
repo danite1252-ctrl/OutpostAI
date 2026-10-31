@@ -6,10 +6,11 @@ chat or pictures for the graphics card.
 
   GET  /health            {"ok": true, ...}
   GET  /voices            {"voices": ["af_heart", ...]}
-  POST /stt?language=xx&hotwords=Kat,zk4t   body: audio in any common format -> {"text", "language", "duration"}
+  POST /stt?language=xx&hotwords=Kat,zk4t&model=small   body: audio in any common format -> {"text", "language", "duration"}
   POST /tts               {"text", "voice", "speed"} -> audio/wav
 
-`python server.py --prefetch` downloads the speech-recognition model and exits.
+`python server.py --prefetch` downloads the speech-recognition model and exits;
+`python server.py --prefetch-stt large-v3-turbo` downloads just that listening model.
 """
 
 import io
@@ -24,11 +25,14 @@ from urllib.parse import parse_qs, urlparse
 PORT = int(os.environ.get("OUTPOST_VOICE_PORT", "8190"))
 MODELS = os.environ.get("OUTPOST_VOICE_MODELS", os.path.join(os.path.dirname(__file__), "models"))
 STT_MODEL = os.environ.get("OUTPOST_STT_MODEL", "small")
+# The listening models Outpost offers (faster-whisper names); one is loaded at a time.
+STT_MODELS = ("base", "small", "large-v3-turbo")
 KOKORO_DIR = os.path.join(MODELS, "kokoro")
 WHISPER_DIR = os.path.join(MODELS, "whisper")
 MAX_BODY = 30 * 1024 * 1024
 
 _stt = None
+_stt_name = None
 _tts = None
 _stt_lock = threading.Lock()
 _tts_lock = threading.Lock()
@@ -65,16 +69,20 @@ def to_samples(body):
     return np.concatenate(chunks).astype(np.float32) / 32768.0
 
 
-def stt_model():
-    global _stt
+def stt_model(name=None):
+    """The listening model `name` (default: STT_MODEL), loaded once; switching unloads the other."""
+    global _stt, _stt_name
+    name = name or STT_MODEL
+    if name not in STT_MODELS:
+        raise ValueError(f"Unknown listening model {name}.")
     with _stt_lock:
-        if _stt is None:
+        if _stt is None or _stt_name != name:
             from faster_whisper import WhisperModel
 
+            _stt = None  # let the old one go before loading the next
             threads = max(1, (os.cpu_count() or 4) - 2)
-            _stt = WhisperModel(
-                STT_MODEL, device="cpu", compute_type="int8", cpu_threads=threads, download_root=WHISPER_DIR
-            )
+            _stt = WhisperModel(name, device="cpu", compute_type="int8", cpu_threads=threads, download_root=WHISPER_DIR)
+            _stt_name = name
         return _stt
 
 
@@ -138,7 +146,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/health":
-            self.send_json(200, {"ok": True, "stt_model": STT_MODEL, "stt_loaded": _stt is not None, "tts_loaded": _tts is not None})
+            self.send_json(200, {"ok": True, "stt_model": _stt_name or STT_MODEL, "stt_loaded": _stt is not None, "tts_loaded": _tts is not None})
         elif path == "/voices":
             try:
                 self.send_json(200, {"voices": tts_model().get_voices()})
@@ -163,7 +171,8 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 # Names Whisper wouldn't guess (characters, personas), so "Kat" isn't written "Cat".
                 hotwords = ((query.get("hotwords") or [None])[0] or "").strip()[:400] or None
-                segments, info = stt_model().transcribe(
+                model = (query.get("model") or [None])[0] or None
+                segments, info = stt_model(model).transcribe(
                     samples, language=language, vad_filter=True, beam_size=1, hotwords=hotwords
                 )
                 text = " ".join(s.text.strip() for s in segments).strip()
@@ -193,6 +202,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    if "--prefetch-stt" in sys.argv:
+        name = sys.argv[sys.argv.index("--prefetch-stt") + 1]
+        if name not in STT_MODELS:
+            sys.exit(f"Unknown listening model {name}.")
+        from faster_whisper import download_model
+
+        download_model(name, cache_dir=WHISPER_DIR)
+        print(f"Listening model {name} ready.")
+        return
     if "--prefetch" in sys.argv:
         stt_model()
         tts_model()

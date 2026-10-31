@@ -91,6 +91,7 @@ use crate::routes::{
         network::set_network,
         crate::mcp::handle,
         voice::status,
+        voice::set_listening,
         voice::transcribe,
         voice::speak,
         voice::openai_speech,
