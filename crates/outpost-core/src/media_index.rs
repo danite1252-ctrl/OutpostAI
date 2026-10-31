@@ -73,7 +73,7 @@ pub async fn needing_embedding(pool: &SqlitePool, model: &str, limit: i64) -> Co
         "SELECT m.id, m.prompt, i.description FROM media m LEFT JOIN media_index i ON i.media_id = m.id
          WHERE (i.embedding_model IS NULL OR i.embedding_model != ?)
            AND (m.prompt IS NOT NULL OR i.description IS NOT NULL)
-           AND (m.kind = 'video' OR i.description IS NOT NULL OR COALESCE(i.tries, 0) >= ?)
+           AND (m.kind != 'image' OR i.description IS NOT NULL OR COALESCE(i.tries, 0) >= ?)
          ORDER BY m.created_at DESC LIMIT ?",
     )
     .bind(model)

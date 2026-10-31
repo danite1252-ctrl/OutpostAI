@@ -107,7 +107,9 @@ export default function Models({
     return () => window.clearInterval(t);
   }, [refresh, downloading, ollamaState]);
 
-  const installedNames = useMemo(() => new Set(data?.installed.map((m) => m.model)), [data]);
+  // Ollama may report a tag in other capitals (e.g. E4b-qat): compare names ignoring case.
+  const installedSet = useMemo(() => new Set(data?.installed.map((m) => m.model.toLowerCase())), [data]);
+  const installedNames = useMemo(() => ({ has: (m: string) => installedSet.has(m.toLowerCase()) }), [installedSet]);
   const pullFor = (model: string) => data?.pulls.find((p) => p.model === model);
 
   async function act(kind: "pull" | "remove", model: string) {
@@ -137,8 +139,8 @@ export default function Models({
     }
   };
 
-  const catalogNames = new Set(data?.catalog.map((e) => e.model));
-  const extraInstalled = data?.installed.filter((m) => !catalogNames.has(m.model)) ?? [];
+  const catalogNames = new Set(data?.catalog.map((e) => e.model.toLowerCase()));
+  const extraInstalled = data?.installed.filter((m) => !catalogNames.has(m.model.toLowerCase())) ?? [];
   const ollamaUp = data?.ollama_running ?? false;
 
   return (
@@ -200,6 +202,7 @@ export default function Models({
                       installed={installedNames.has(e.model)}
                       pull={pullFor(e.model)}
                       canManage={canManage && ollamaUp}
+                      vramGb={(data?.hardware.vram_mb ?? 0) / 1024}
                       onPull={() => void act("pull", e.model)}
                       onRemove={() => void act("remove", e.model)}
                     />
@@ -263,6 +266,7 @@ function CatalogRow({
   installed,
   pull,
   canManage,
+  vramGb,
   onPull,
   onRemove,
 }: {
@@ -270,10 +274,17 @@ function CatalogRow({
   installed: boolean;
   pull: PullState | undefined;
   canManage: boolean;
+  /** This machine's graphics card memory. */
+  vramGb: number;
   onPull: () => void;
   onRemove: () => void;
 }) {
   const pulling = pull && !pull.done;
+  // How much of it won't fit on the card: a little spills and is a bit slower; a lot is far slower.
+  const justOver = vramGb > 0 && e.size_gb * 1.15 + 0.75 <= vramGb * 1.15;
+  const slower = justOver
+    ? "a little of it runs in system memory, so replies are somewhat slower"
+    : "a good part of it runs in system memory, so replies are several times slower";
   return (
     <li
       className={`flex flex-col gap-3 rounded-2xl border bg-surface p-4 ${
@@ -304,7 +315,7 @@ function CatalogRow({
           )}
           {e.fit === "partial" && !installed && (
             <p className="text-sm text-warn" role="note">
-              Bigger than your graphics card: it will run partly in system memory, several times slower.
+              {justOver ? "Just bigger than your graphics card" : "Bigger than your graphics card"}: {slower}.
             </p>
           )}
         </div>
@@ -328,8 +339,7 @@ function CatalogRow({
                   if (
                     e.fit === "partial" &&
                     !window.confirm(
-                      `${e.name} is bigger than your graphics card, so it won't run well on this machine: ` +
-                        `part of it runs in system memory and replies will be several times slower.\n\n` +
+                      `${e.name} is ${justOver ? "just " : ""}bigger than your graphics card: ${slower}.\n\n` +
                         `Download ${e.size_gb} GB anyway?`,
                     )
                   )

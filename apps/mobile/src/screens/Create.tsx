@@ -12,6 +12,7 @@ const TASKS: { id: Task; label: string }[] = [
   { id: "edit", label: "Edit" },
   { id: "video", label: "Video" },
   { id: "animate", label: "Animate" },
+  { id: "model", label: "3D" },
 ];
 
 type Values = Record<string, unknown>;
@@ -41,7 +42,7 @@ export default function Create({
   api: Outpost;
   onError: (e: unknown) => void;
   /** A gallery picture to edit or animate. */
-  incoming: { dataUri: string; task: "edit" | "animate" } | null;
+  incoming: { dataUri: string; task: "edit" | "animate" | "model" } | null;
   onIncomingUsed: () => void;
   onQueued: () => void;
 }) {

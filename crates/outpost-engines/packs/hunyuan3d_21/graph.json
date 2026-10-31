@@ -1,0 +1,181 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  }
+ },
+ "2": {
+  "class_type": "LoadBackgroundRemovalModel",
+  "inputs": {
+   "bg_removal_name": "birefnet.safetensors"
+  }
+ },
+ "3": {
+  "class_type": "RemoveBackground",
+  "inputs": {
+   "bg_removal_model": [
+    "2",
+    0
+   ],
+   "image": [
+    "1",
+    0
+   ]
+  }
+ },
+ "4": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "1",
+    0
+   ]
+  }
+ },
+ "5": {
+  "class_type": "EmptyImage",
+  "inputs": {
+   "width": [
+    "4",
+    0
+   ],
+   "height": [
+    "4",
+    1
+   ],
+   "batch_size": 1,
+   "color": 16777215
+  }
+ },
+ "6": {
+  "class_type": "ImageCompositeMasked",
+  "inputs": {
+   "destination": [
+    "5",
+    0
+   ],
+   "source": [
+    "1",
+    0
+   ],
+   "x": 0,
+   "y": 0,
+   "resize_source": false,
+   "mask": [
+    "3",
+    0
+   ]
+  }
+ },
+ "7": {
+  "class_type": "ImageOnlyCheckpointLoader",
+  "inputs": {
+   "ckpt_name": "hunyuan_3d_v2.1.safetensors"
+  }
+ },
+ "8": {
+  "class_type": "ModelSamplingAuraFlow",
+  "inputs": {
+   "model": [
+    "7",
+    0
+   ],
+   "shift": 1.0,
+   "sampling": "flow"
+  }
+ },
+ "9": {
+  "class_type": "CLIPVisionEncode",
+  "inputs": {
+   "clip_vision": [
+    "7",
+    1
+   ],
+   "image": [
+    "6",
+    0
+   ],
+   "crop": "center"
+  }
+ },
+ "10": {
+  "class_type": "Hunyuan3Dv2Conditioning",
+  "inputs": {
+   "clip_vision_output": [
+    "9",
+    0
+   ]
+  }
+ },
+ "11": {
+  "class_type": "EmptyLatentHunyuan3Dv2",
+  "inputs": {
+   "resolution": 4096,
+   "batch_size": 1
+  }
+ },
+ "12": {
+  "class_type": "KSampler",
+  "inputs": {
+   "model": [
+    "8",
+    0
+   ],
+   "positive": [
+    "10",
+    0
+   ],
+   "negative": [
+    "10",
+    1
+   ],
+   "latent_image": [
+    "11",
+    0
+   ],
+   "seed": 0,
+   "steps": 30,
+   "cfg": 5.0,
+   "sampler_name": "euler",
+   "scheduler": "normal",
+   "denoise": 1.0
+  }
+ },
+ "13": {
+  "class_type": "VAEDecodeHunyuan3D",
+  "inputs": {
+   "samples": [
+    "12",
+    0
+   ],
+   "vae": [
+    "7",
+    2
+   ],
+   "num_chunks": 8000,
+   "octree_resolution": 256
+  }
+ },
+ "14": {
+  "class_type": "VoxelToMesh",
+  "inputs": {
+   "voxel": [
+    "13",
+    0
+   ],
+   "algorithm": "surface net",
+   "threshold": 0.6
+  }
+ },
+ "15": {
+  "class_type": "SaveGLB",
+  "inputs": {
+   "mesh": [
+    "14",
+    0
+   ],
+   "filename_prefix": "outpost/3d_hunyuan"
+  }
+ }
+}

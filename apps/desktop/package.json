@@ -18,9 +18,11 @@
     "@tauri-apps/plugin-process": "^2.0.0",
     "@tauri-apps/plugin-updater": "^2.0.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "three": "^0.171.0"
   },
   "devDependencies": {
+    "@types/three": "^0.171.0",
     "@tailwindcss/vite": "^4.1.0",
     "@tauri-apps/cli": "^2.5.0",
     "@types/react": "^19.1.0",

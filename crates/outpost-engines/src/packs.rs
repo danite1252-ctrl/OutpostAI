@@ -22,6 +22,8 @@ pub enum Lane {
     ImageToVideo,
     /// Does something to one picture (upscale, remove the background): run from the gallery.
     Tool,
+    /// A picture into a 3D model.
+    ImageToModel,
 }
 
 /// The jobs Create offers, one tab each. A task can have several packs; Outpost
@@ -43,11 +45,21 @@ pub enum Task {
     Upscale,
     /// Remove a picture's background (a picture tool, from the gallery).
     Cutout,
+    /// A 3D model from a picture.
+    Model,
 }
 
 impl Task {
-    pub const ALL: [Task; 7] =
-        [Task::Picture, Task::Character, Task::Edit, Task::Video, Task::Animate, Task::Upscale, Task::Cutout];
+    pub const ALL: [Task; 8] = [
+        Task::Picture,
+        Task::Character,
+        Task::Edit,
+        Task::Video,
+        Task::Animate,
+        Task::Model,
+        Task::Upscale,
+        Task::Cutout,
+    ];
 
     fn of_lane(lane: Lane) -> Task {
         match lane {
@@ -56,6 +68,7 @@ impl Task {
             Lane::TextToVideo => Task::Video,
             Lane::ImageToVideo => Task::Animate,
             Lane::Tool => Task::Upscale,
+            Lane::ImageToModel => Task::Model,
         }
     }
 }
@@ -65,6 +78,8 @@ impl Task {
 pub enum OutputKind {
     Image,
     Video,
+    /// A 3D model (.glb).
+    Model,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -220,6 +235,8 @@ const BUILT_IN: &[(&str, &str)] = &[
     pack!("flux2_klein_edit"),
     pack!("wan22_t2v"),
     pack!("wan22_i2v"),
+    pack!("trellis2"),
+    pack!("hunyuan3d_21"),
     pack!("upscale_esrgan"),
     pack!("remove_background"),
 ];
@@ -744,8 +761,8 @@ mod tests {
     #[test]
     fn every_pack_has_a_prompt_and_a_seed() {
         for p in built_in() {
-            if p.lane == Lane::Tool {
-                // A picture tool works on a picture, not a prompt.
+            if p.lane == Lane::Tool || p.lane == Lane::ImageToModel {
+                // A picture tool (or picture-to-3D) works on a picture, not a prompt.
                 assert!(p.inputs.iter().any(|i| i.kind == InputKind::Image && i.required), "{}", p.id);
             } else {
                 assert!(p.inputs.iter().any(|i| i.key == "prompt" && i.required), "{}", p.id);
@@ -853,6 +870,48 @@ mod tests {
         assert_eq!(g[LORA_NODE]["inputs"]["strength_model"], 1.1);
         // It shares Z-Image Turbo's graph and files.
         assert_eq!(p.graph, find("z_image_turbo").unwrap().graph);
+    }
+
+    #[test]
+    fn picture_to_3d_packs_build() {
+        for id in ["hunyuan3d_21", "trellis2"] {
+            let p = find(id).unwrap();
+            assert_eq!(p.task(), Task::Model, "{id}");
+            assert_eq!(p.output.kind, OutputKind::Model);
+            assert_eq!(p.graph[&p.output.node]["class_type"], "SaveGLB");
+            let mut v = serde_json::Map::new();
+            v.insert("image".into(), json!({"$file": "a/inputs/x.png"}));
+            let up = HashMap::from([("image".to_string(), "outpost/x.png".to_string())]);
+            let b = p.build(&v, || 7, &up, &[]).unwrap();
+            assert_eq!(b.graph["1"]["inputs"]["image"], "outpost/x.png");
+            // The background is taken off first, with the same BiRefNet file as the picture tool.
+            assert!(p.models.iter().any(|m| m.file == "birefnet.safetensors"));
+        }
+        let t = find("trellis2").unwrap();
+        let mut v = serde_json::Map::new();
+        v.insert("image".into(), json!({"$file": "a/inputs/x.png"}));
+        v.insert("texture".into(), json!("High (4K)"));
+        let up = HashMap::from([("image".to_string(), "outpost/x.png".to_string())]);
+        let g = t.build(&v, || 7, &up, &[]).unwrap().graph;
+        assert_eq!(g["29"]["inputs"]["resolution"], 4096);
+        assert_eq!(g["30"]["inputs"]["texture_size"], 4096);
+        // Only ComfyUI's own nodes.
+        assert!(t.node_types().contains(&"Trellis2TextureStage".to_string()));
+    }
+
+    #[test]
+    fn every_link_points_at_a_node() {
+        for p in built_in() {
+            let nodes = p.graph.as_object().unwrap();
+            for (id, node) in nodes {
+                for (name, value) in node["inputs"].as_object().unwrap() {
+                    if let Some(link) = value.as_array().filter(|a| a.len() == 2 && a[0].is_string()) {
+                        let to = link[0].as_str().unwrap();
+                        assert!(nodes.contains_key(to), "{}: node {id} input {name} points at missing node {to}", p.id);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

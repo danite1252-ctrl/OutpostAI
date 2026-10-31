@@ -46,7 +46,13 @@ pub async fn enabled(state: &AppState) -> bool {
 }
 
 /// Small vision models that describe pictures well, preferred in this order when installed.
-pub const DESCRIBERS: [&str; 4] = ["qwen3.5:4b", "huihui_ai/qwen3.5-abliterated:4b", "qwen3.5:2b", "huihui_ai/qwen3.5-abliterated:2b"];
+pub const DESCRIBERS: [&str; 5] = [
+    "huihui_ai/qwen3-vl-abliterated:8b-instruct",
+    "qwen3.5:4b",
+    "huihui_ai/qwen3.5-abliterated:4b",
+    "qwen3.5:2b",
+    "huihui_ai/qwen3.5-abliterated:2b",
+];
 /// The ones suggested for download when there's no vision model (the first that fits).
 pub const SUGGESTED_DESCRIBERS: [&str; 2] = ["qwen3.5:4b", "qwen3.5:2b"];
 /// The embedding model suggested for search (and memory).
@@ -68,8 +74,11 @@ pub async fn describer(state: &AppState) -> Option<String> {
         })
         .map(|m| (m.model, m.size_bytes))
         .collect();
-    if let Some(pick) = DESCRIBERS.iter().find(|d| seeing.iter().any(|(m, _)| m == *d)) {
-        return Some(pick.to_string());
+    if let Some((pick, _)) = DESCRIBERS
+        .iter()
+        .find_map(|d| seeing.iter().find(|(m, _)| m.eq_ignore_ascii_case(d)))
+    {
+        return Some(pick.clone());
     }
     seeing.sort_by_key(|(_, size)| (*size < 2_000_000_000, *size));
     seeing.into_iter().next().map(|(m, _)| m)

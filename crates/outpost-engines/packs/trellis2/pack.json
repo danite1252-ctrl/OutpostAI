@@ -1,0 +1,125 @@
+{
+  "id": "trellis2",
+  "name": "TRELLIS.2 (textured)",
+  "lane": "image_to_model",
+  "task": "model",
+  "rank": 20,
+  "description": "Turn a picture of one thing into a full-colour 3D model, textures and all. Needs a graphics card with about 14 GB: lend one (Settings \u203a Lend this PC's graphics card) if the server's is smaller.",
+  "license": "MIT (TRELLIS.2); DINOv3 License (its picture encoder)",
+  "vram_gb": 14.0,
+  "output": {
+    "node": "36",
+    "kind": "model"
+  },
+  "models": [
+    {
+      "file": "trellis_2_int8_convrot.safetensors",
+      "folder": "diffusion_models",
+      "size_gb": 5.25,
+      "url": "https://huggingface.co/Comfy-Org/TRELLIS.2/resolve/main/diffusion_models/trellis_2_int8_convrot.safetensors",
+      "sha256": "d01952ad137213f6a868f86b6b877026276f84af5eec23069217475a0bad3a31",
+      "bytes": 5253048192
+    },
+    {
+      "file": "trellis_2_shape_vae_bf16.safetensors",
+      "folder": "vae",
+      "size_gb": 1.1,
+      "url": "https://huggingface.co/Comfy-Org/Pixal3D/resolve/main/vae/trellis_2_shape_vae_bf16.safetensors",
+      "sha256": "de0cb4949a76c59ee5c091a995a69bcc8c51d5aeda939f0c641a50d2a72341f4",
+      "bytes": 1095844024
+    },
+    {
+      "file": "trellis_2_texture_vae_bf16.safetensors",
+      "folder": "vae",
+      "size_gb": 0.95,
+      "url": "https://huggingface.co/Comfy-Org/Pixal3D/resolve/main/vae/trellis_2_texture_vae_bf16.safetensors",
+      "sha256": "714e5ebf094a610e12a8e3b5175c18a62f37f6ea4218acb6073644456b73ab0e",
+      "bytes": 948461364
+    },
+    {
+      "file": "dino_v3_L_naf_fp32.safetensors",
+      "folder": "clip_vision",
+      "size_gb": 1.22,
+      "url": "https://huggingface.co/Comfy-Org/Pixal3D/resolve/main/clip_vision/dino_v3_L_naf_fp32.safetensors",
+      "sha256": "4ad2ec4e0879a5b5b04cd97325cc37da954a7b6edca5170b86510f17f2b2290f",
+      "bytes": 1215214176
+    },
+    {
+      "file": "birefnet.safetensors",
+      "folder": "background_removal",
+      "size_gb": 0.44,
+      "url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors",
+      "sha256": "9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154",
+      "bytes": 444473596
+    }
+  ],
+  "inputs": [
+    {
+      "key": "image",
+      "label": "Picture of the thing to model",
+      "kind": "image",
+      "required": true,
+      "default": null,
+      "targets": [
+        [
+          "1",
+          "image"
+        ]
+      ],
+      "help": "One object, seen clearly. Its background is removed for you."
+    },
+    {
+      "key": "texture",
+      "label": "Texture detail",
+      "kind": "choice",
+      "default": "Standard (2K)",
+      "options": [
+        "Standard (2K)",
+        "High (4K)"
+      ],
+      "advanced": true,
+      "targets": [],
+      "help": "High is sharper close up, a bigger file, and slower.",
+      "presets": {
+        "Standard (2K)": [
+          [
+            "29",
+            "resolution",
+            2048
+          ],
+          [
+            "30",
+            "texture_size",
+            2048
+          ]
+        ],
+        "High (4K)": [
+          [
+            "29",
+            "resolution",
+            4096
+          ],
+          [
+            "30",
+            "texture_size",
+            4096
+          ]
+        ]
+      }
+    },
+    {
+      "key": "seed",
+      "label": "Seed",
+      "kind": "seed",
+      "default": null,
+      "advanced": true,
+      "help": "Leave empty for a new result each time.",
+      "targets": [
+        [
+          "14",
+          "seed"
+        ]
+      ]
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createApi, type Job } from "../api";
 import { Lightbox, useAuthedUrl } from "./images";
+import { ModelView } from "./model3d";
 import { progressFraction } from "./queue";
 
 /** A picture started from chat ("/draw ..."): its place in the queue, progress, then the result. */
@@ -56,10 +57,11 @@ export function JobCard({ token, jobId }: { token: string; jobId: string }) {
   );
 }
 
-function Result({ token, id, kind, alt }: { token: string; id: string; kind: "image" | "video"; alt: string }) {
+function Result({ token, id, kind, alt }: { token: string; id: string; kind: "image" | "video" | "model"; alt: string }) {
   const { src } = useAuthedUrl(token, `/api/media/${id}`);
   const [open, setOpen] = useState(false);
   if (!src) return <span className="block size-64 animate-pulse rounded-2xl bg-raised" />;
+  if (kind === "model") return <ModelView src={src} className="h-72 w-72 max-w-full rounded-2xl border border-line" />;
   if (kind === "video") return <video src={src} controls className="max-h-96 max-w-full rounded-2xl" />;
   return (
     <>

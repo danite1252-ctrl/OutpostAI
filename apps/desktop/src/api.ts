@@ -773,7 +773,7 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 // ---------------------------------------------------------------- Create
 
-export type Lane = "text_to_image" | "edit_image" | "text_to_video" | "image_to_video" | "tool";
+export type Lane = "text_to_image" | "edit_image" | "text_to_video" | "image_to_video" | "tool" | "image_to_model";
 export type InputKind = "text" | "size" | "integer" | "number" | "seed" | "choice" | "image" | "lora";
 
 export interface PackInput {
@@ -806,7 +806,7 @@ export interface PackSetup {
 
 /** The Create tabs. */
 /** The Create tabs, plus the picture tools (upscale, cutout) run from the gallery. */
-export type Task = "picture" | "character" | "edit" | "video" | "animate" | "upscale" | "cutout";
+export type Task = "picture" | "character" | "edit" | "video" | "animate" | "model" | "upscale" | "cutout";
 
 export interface Pack {
   id: string;
@@ -815,7 +815,7 @@ export interface Pack {
   description: string;
   license: string | null;
   vram_gb: number;
-  output: { node: string; kind: "image" | "video" };
+  output: { node: string; kind: "image" | "video" | "model" };
   inputs: PackInput[];
   models: {
     ready: boolean;
@@ -858,7 +858,7 @@ export interface Media {
   id: string;
   account_id: string;
   job_id: string | null;
-  kind: "image" | "video";
+  kind: "image" | "video" | "model";
   mime: string;
   bytes: number;
   pack_id: string | null;

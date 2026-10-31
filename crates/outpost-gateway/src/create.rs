@@ -258,6 +258,8 @@ fn time_limit(pack: &packs::Pack) -> Duration {
     match pack.output.kind {
         packs::OutputKind::Video => Duration::from_secs(90 * 60),
         packs::OutputKind::Image => Duration::from_secs(30 * 60),
+        // Shaping, texturing and baking a model takes a while on a smaller card.
+        packs::OutputKind::Model => Duration::from_secs(45 * 60),
     }
 }
 

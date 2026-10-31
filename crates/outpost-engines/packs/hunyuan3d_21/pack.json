@@ -1,0 +1,114 @@
+{
+  "id": "hunyuan3d_21",
+  "name": "Hunyuan3D 2.1 (shape)",
+  "lane": "image_to_model",
+  "task": "model",
+  "rank": 10,
+  "description": "Turn a picture of one thing into a 3D model you can turn around. Shape only: the model comes out plain grey. Works on 8 GB graphics cards.",
+  "license": "Tencent Hunyuan 3D 2.1 Community License",
+  "vram_gb": 7.5,
+  "output": {
+    "node": "15",
+    "kind": "model"
+  },
+  "models": [
+    {
+      "file": "hunyuan_3d_v2.1.safetensors",
+      "folder": "checkpoints",
+      "size_gb": 7.37,
+      "url": "https://huggingface.co/Comfy-Org/hunyuan3D_2.1_repackaged/resolve/main/hunyuan_3d_v2.1.safetensors",
+      "sha256": "5f21e98a6cb99b13b5e224abaee33929570fff7af2b6a0060001559a04ba9d72",
+      "bytes": 7365943290
+    },
+    {
+      "file": "birefnet.safetensors",
+      "folder": "background_removal",
+      "size_gb": 0.44,
+      "url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors",
+      "sha256": "9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154",
+      "bytes": 444473596
+    }
+  ],
+  "inputs": [
+    {
+      "key": "image",
+      "label": "Picture of the thing to model",
+      "kind": "image",
+      "required": true,
+      "default": null,
+      "targets": [
+        [
+          "1",
+          "image"
+        ]
+      ],
+      "help": "One object, seen clearly. Its background is removed for you."
+    },
+    {
+      "key": "detail",
+      "label": "Detail",
+      "kind": "choice",
+      "default": "Standard",
+      "options": [
+        "Quick",
+        "Standard",
+        "Fine"
+      ],
+      "advanced": true,
+      "targets": [],
+      "help": "Fine makes smoother surfaces and takes longer.",
+      "presets": {
+        "Quick": [
+          [
+            "12",
+            "steps",
+            20
+          ],
+          [
+            "13",
+            "octree_resolution",
+            192
+          ]
+        ],
+        "Standard": [
+          [
+            "12",
+            "steps",
+            30
+          ],
+          [
+            "13",
+            "octree_resolution",
+            256
+          ]
+        ],
+        "Fine": [
+          [
+            "12",
+            "steps",
+            40
+          ],
+          [
+            "13",
+            "octree_resolution",
+            384
+          ]
+        ]
+      }
+    },
+    {
+      "key": "seed",
+      "label": "Seed",
+      "kind": "seed",
+      "default": null,
+      "advanced": true,
+      "help": "Leave empty for a new result each time.",
+      "targets": [
+        [
+          "12",
+          "seed"
+        ]
+      ]
+    }
+  ]
+}

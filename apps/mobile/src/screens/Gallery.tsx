@@ -18,7 +18,7 @@ export default function Gallery({
   api: Outpost;
   me: Account;
   onError: (e: unknown) => void;
-  onUse: (dataUri: string, task: "edit" | "animate") => void;
+  onUse: (dataUri: string, task: "edit" | "animate" | "model") => void;
 }) {
   const [tab, setTab] = useState<Tab>("mine");
   const isOwner = me.role === "owner";
@@ -160,7 +160,12 @@ export default function Gallery({
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
           {shown.map((m) => (
             <Pressable key={m.id} accessibilityRole="button" accessibilityLabel={m.prompt ?? "Picture"} onPress={() => setViewing(m)}>
-              {m.kind === "video" ? (
+              {m.kind === "model" ? (
+                <View style={{ width: size, height: size, borderRadius: 10, backgroundColor: C.raised, alignItems: "center", justifyContent: "center" }}>
+                  <Text style={{ color: C.soft, fontSize: 26 }}>⬡</Text>
+                  <Text style={{ color: C.muted, fontSize: 12 }}>3D model</Text>
+                </View>
+              ) : m.kind === "video" ? (
                 <View style={{ width: size, height: size, borderRadius: 10, backgroundColor: C.raised, alignItems: "center", justifyContent: "center" }}>
                   <Text style={{ color: C.muted }}>▶ Video</Text>
                 </View>
@@ -219,7 +224,7 @@ function Viewer({
   onClose: () => void;
   onShare: (shared: boolean) => void;
   onDelete: () => void;
-  onUse: (dataUri: string, task: "edit" | "animate") => void;
+  onUse: (dataUri: string, task: "edit" | "animate" | "model") => void;
 }) {
   const { uri } = useAuthedImage(api, m.kind === "image" ? `/api/media/${m.id}` : null);
   const w = Dimensions.get("window").width;
@@ -236,9 +241,17 @@ function Viewer({
           <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose} style={[s.chip, { minHeight: 40 }]}>
             <Text style={{ color: C.ink }}>‹ Back</Text>
           </Pressable>
-          <Text style={{ color: C.muted, flex: 1 }}>{m.kind === "video" ? "Video" : "Picture"}</Text>
+          <Text style={{ color: C.muted, flex: 1 }}>{m.kind === "video" ? "Video" : m.kind === "model" ? "3D model" : "Picture"}</Text>
         </View>
-        {m.kind === "image" ? (
+        {m.kind === "model" ? (
+          <View style={[s.card, { alignItems: "center", gap: 6, paddingVertical: 28 }]}>
+            <Text style={{ color: C.soft, fontSize: 40 }}>⬡</Text>
+            <Text style={{ color: C.ink, textAlign: "center" }}>A 3D model</Text>
+            <Text style={{ color: C.muted, textAlign: "center" }}>
+              Open it in the Outpost desktop app to turn it around, or save it from there for Blender, games or 3D printing.
+            </Text>
+          </View>
+        ) : m.kind === "image" ? (
           uri ? (
             <Image source={{ uri }} style={{ width: w - 32, height: w - 32, borderRadius: 12 }} resizeMode="contain" />
           ) : (
@@ -247,7 +260,7 @@ function Viewer({
         ) : (
           <Video api={api} media={m} width={w - 32} />
         )}
-        <P>{m.prompt || "No prompt"}</P>
+        {m.kind !== "model" && <P>{m.prompt || "No prompt"}</P>}
         <P muted>
           {by ? `By ${by} · ` : ""}
           seed {m.seed ?? "—"} · {new Date(m.created_at * 1000).toLocaleString()}
@@ -257,6 +270,7 @@ function Viewer({
           <>
             <Button kind="ghost" title="Edit this picture" onPress={() => onUse(uri, "edit")} />
             <Button kind="ghost" title="Animate this picture" onPress={() => onUse(uri, "animate")} />
+            <Button kind="ghost" title="Make a 3D model" onPress={() => onUse(uri, "model")} />
           </>
         )}
         {(mine || (canUnshare && m.shared_at)) && (

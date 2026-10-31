@@ -40,7 +40,7 @@ export default function Share({
   api: Outpost;
   shared: Shared;
   onChat: (start: ChatStart) => void;
-  onCreate: (image: string, task: "edit" | "animate") => void;
+  onCreate: (image: string, task: "edit" | "animate" | "model") => void;
   onDone: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -174,6 +174,7 @@ export default function Share({
             <>
               <Button title="Edit it in Create" kind="ghost" disabled={!!busy} onPress={() => onCreate(images[0].dataUri!, "edit")} />
               <Button title="Animate it" kind="ghost" disabled={!!busy} onPress={() => onCreate(images[0].dataUri!, "animate")} />
+              <Button title="Make a 3D model" kind="ghost" disabled={!!busy} onPress={() => onCreate(images[0].dataUri!, "model")} />
             </>
           )}
           {docs.length === 0 && images.length + videos.length > 0 && (

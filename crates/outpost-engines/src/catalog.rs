@@ -207,7 +207,7 @@ pub const CATALOG: &[Entry] = &[
         badges: &[Vision, Tools, Thinking, LongContext],
         license: None,
         rank: 60,
-        description: "Efficient small Gemma 4 for laptops and 8 GB cards.",
+        description: "Efficient small Gemma 4 for laptops and 10 GB cards and up; on 8 GB, part of it runs in system memory.",
         page: "https://ollama.com/library/gemma4",
     },
     Entry {
@@ -321,6 +321,32 @@ pub const CATALOG: &[Entry] = &[
         page: "https://ollama.com/huihui_ai/gemma-4-abliterated",
     },
     Entry {
+        model: "huihui_ai/qwen3-vl-abliterated:8b-instruct",
+        name: "Qwen3-VL 8B Abliterated",
+        category: Category::Uncensored,
+        size_gb: 6.1,
+        context_k: 256,
+        badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
+        license: None,
+        rank: 66,
+        description: "Uncensored vision specialist: reads pictures and the text in them best at this size. \
+                      Outpost's first choice for describing gallery pictures. Community build by huihui_ai.",
+        page: "https://ollama.com/huihui_ai/qwen3-vl-abliterated",
+    },
+    Entry {
+        model: "huihui_ai/gemma-4-abliterated:E4b-qat",
+        name: "Gemma 4 E4B Abliterated (QAT)",
+        category: Category::Uncensored,
+        size_gb: 6.3,
+        context_k: 128,
+        badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
+        license: None,
+        rank: 44,
+        description: "The smaller, quantization-trained build of Gemma 4 E4B: natural writing, reads images. \
+                      Thinks like a 4B model. Community build by huihui_ai.",
+        page: "https://ollama.com/huihui_ai/gemma-4-abliterated",
+    },
+    Entry {
         model: "huihui_ai/gemma-4-abliterated:e4b",
         name: "Gemma 4 E4B Abliterated",
         category: Category::Uncensored,
@@ -329,7 +355,8 @@ pub const CATALOG: &[Entry] = &[
         badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
         license: None,
         rank: 40,
-        description: "Small, efficient Gemma 4 for laptops and 8 GB cards. Reads images.",
+        description: "The full-size build of Gemma 4 E4B (9.6 GB): for 12 GB cards and up. Reads images. \
+                      On an 8 GB card, get the QAT build instead (6.3 GB).",
         page: "https://ollama.com/huihui_ai/gemma-4-abliterated",
     },
     Entry {

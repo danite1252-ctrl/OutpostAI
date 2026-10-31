@@ -14,7 +14,7 @@ pub struct Media {
     pub id: String,
     pub account_id: String,
     pub job_id: Option<String>,
-    /// `image` or `video`.
+    /// `image`, `video` or `model` (a 3D model, .glb).
     pub kind: String,
     pub mime: String,
     pub bytes: i64,
@@ -62,6 +62,8 @@ pub fn kind_of(name: &str) -> Option<(&'static str, &'static str, &'static str)>
         "gif" => ("image", "image/gif", "gif"),
         "mp4" => ("video", "video/mp4", "mp4"),
         "webm" => ("video", "video/webm", "webm"),
+        // A 3D model (Create › 3D): one binary glTF file, textures inside.
+        "glb" => ("model", "model/gltf-binary", "glb"),
         _ => return None,
     })
 }
@@ -260,6 +262,35 @@ mod tests {
     use crate::db::open_in_memory;
 
     #[tokio::test]
+    async fn the_gallery_keeps_3d_models_and_their_search_text_goes_with_them() {
+        let pool = open_in_memory().await.unwrap();
+        let dir = std::env::temp_dir().join(format!("outpost-media-{}", uuid::Uuid::new_v4()));
+        let dan = accounts::create(&pool, NewAccount { name: "Dan".into(), role: Role::Member, secret: Some("4821".into()) })
+            .await
+            .unwrap()
+            .id;
+        let new = |name: &'static str| NewMedia {
+            account_id: &dan,
+            job_id: None,
+            pack_id: Some("trellis2"),
+            prompt: None,
+            seed: None,
+            source_name: name,
+            data: b"glTF fake",
+            created_at: None,
+        };
+        let model = add(&pool, &dir, new("3d_trellis_00001_.glb")).await.unwrap();
+        assert_eq!((model.kind.as_str(), model.mime.as_str()), ("model", "model/gltf-binary"));
+        let pic = add(&pool, &dir, NewMedia { source_name: "x.png", ..new("x.png") }).await.unwrap();
+        // The search index (rebuilt with the gallery table) still follows deletes.
+        crate::media_index::set_description(&pool, &pic.id, "m", "a picture").await.unwrap();
+        delete(&pool, &dir, &dan, &pic.id).await.unwrap();
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_index").fetch_one(&pool).await.unwrap();
+        assert_eq!(left, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
     async fn gallery_saves_lists_and_deletes_privately() {
         let pool = open_in_memory().await.unwrap();
         let dir = std::env::temp_dir().join(format!("outpost-media-{}", uuid::Uuid::new_v4()));
@@ -343,6 +374,7 @@ mod tests {
     fn kinds_by_extension() {
         assert_eq!(kind_of("a.PNG").unwrap().0, "image");
         assert_eq!(kind_of("clip.mp4").unwrap().1, "video/mp4");
+        assert_eq!(kind_of("axe_00001_.glb").unwrap(), ("model", "model/gltf-binary", "glb"));
         assert!(kind_of("x.exe").is_none());
         assert!(kind_of("noext").is_none());
     }

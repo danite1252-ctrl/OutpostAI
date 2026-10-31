@@ -6,11 +6,13 @@ from the gallery's picture viewer), the Install ai-toolkit button in Train, and 
 documents (PDF, Word, text: attached to a chat or a persona, with sources under each reply),
 share to Outpost from any Android app, pairing QR codes that open a download page on a
 phone without the app, gallery search by what's in the pictures, automatic server updates, and
-a choice of listening model for voice (up to Whisper large-v3-turbo).
+a choice of listening model for voice (up to Whisper large-v3-turbo), and 3D models from a
+picture (Hunyuan3D 2.1 for a quick shape, TRELLIS.2 for a textured model on a 16 GB card),
+shown and turned around in the desktop gallery and saved as .glb.
 
 ## Next, in order
 
-1. **3D models**: make a 3D model from a picture (Hunyuan3D or TRELLIS).
+Nothing queued: pick the next section.
 
 ## Optional extras, later
 

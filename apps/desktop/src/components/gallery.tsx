@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { ApiError, authedBlob, createApi, type Media, type Pack, type Task } from "../api";
 import { Lightbox, prepareImage, useAuthedUrl } from "./images";
+import { ModelTile, ModelView } from "./model3d";
 import { jobsChanged } from "./queue";
 import { Button, ErrorNote, Icon, icons } from "./ui";
 
 /** What the gallery asks Create to do with a picture. */
 export type CreateRequest =
   | { kind: "reuse"; media: Media }
-  | { kind: "use_image"; media: Media; task: Extract<Task, "edit" | "animate"> };
+  | { kind: "use_image"; media: Media; task: Extract<Task, "edit" | "animate" | "model"> };
 
 /** A gallery picture as a data URL, ready to be an input for another job. */
 export async function mediaAsInput(token: string, m: Media): Promise<string> {
@@ -17,7 +18,36 @@ export async function mediaAsInput(token: string, m: Media): Promise<string> {
   return (await prepareImage(file)).dataUrl;
 }
 
-export function Thumb({
+/** A gallery item in the grid: its picture (or video's first frame), or a cube for a 3D model. */
+export function Thumb(props: Parameters<typeof MediaThumb>[0]) {
+  const { media: m, onOpen, label, caption } = props;
+  if (m.kind !== "model") return <MediaThumb {...props} />;
+  // A 3D model has no picture of its own; it isn't downloaded until it's opened.
+  const tile = (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="relative flex aspect-square w-full flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-line bg-raised text-soft hover:border-ember"
+      title={m.prompt ?? undefined}
+      aria-label={label ?? "Open 3D model"}
+    >
+      <ModelTile size={44} />
+      <span className="text-xs text-muted">3D model</span>
+      {m.shared_at && !caption && (
+        <span className="absolute top-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[11px] text-ink">Shared</span>
+      )}
+    </button>
+  );
+  if (!caption) return tile;
+  return (
+    <div className="flex flex-col gap-1">
+      {tile}
+      <span className="truncate text-xs text-muted">{caption}</span>
+    </div>
+  );
+}
+
+function MediaThumb({
   token,
   media: m,
   onOpen,
@@ -117,11 +147,13 @@ export function Viewer({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, big]);
   return (
-    <div role="dialog" aria-modal="true" aria-label={m.kind === "video" ? "Video" : "Picture"} className="fixed inset-0 z-40 flex bg-black/80 p-6" onClick={onClose}>
+    <div role="dialog" aria-modal="true" aria-label={m.kind === "video" ? "Video" : m.kind === "model" ? "3D model" : "Picture"} className="fixed inset-0 z-40 flex bg-black/80 p-6" onClick={onClose}>
       <div className="mx-auto flex max-h-full w-full max-w-5xl flex-col gap-4 lg:flex-row" onClick={(e) => e.stopPropagation()}>
         <div className="flex min-h-0 flex-1 items-center justify-center">
           {src &&
-            (m.kind === "video" ? (
+            (m.kind === "model" ? (
+              <ModelView src={src} className="h-[70vh] w-full" />
+            ) : m.kind === "video" ? (
               <video src={src} controls autoPlay loop className="max-h-full max-w-full rounded-xl" />
             ) : (
               <button type="button" onClick={() => setBig(true)} className="max-h-full" aria-label="Show full size">
@@ -130,7 +162,8 @@ export function Viewer({
             ))}
         </div>
         <aside className="flex w-full flex-col gap-3 overflow-auto rounded-2xl border border-line bg-surface p-4 lg:w-72">
-          <p className="text-sm whitespace-pre-wrap">{m.prompt || "No prompt"}</p>
+          <p className="text-sm whitespace-pre-wrap">{m.prompt || (m.kind === "model" ? "3D model" : "No prompt")}</p>
+          {m.kind === "model" && <p className="text-xs text-muted">Drag to turn it, scroll to zoom. Save a copy for Blender, games or 3D printing (.glb).</p>}
           {m.description && <p className="text-xs text-soft">Outpost sees: {m.description}</p>}
           <p className="font-mono text-xs text-muted">
             {packName ?? m.pack_id} · seed {m.seed ?? "—"} · {new Date(m.created_at * 1000).toLocaleString()}
@@ -142,7 +175,7 @@ export function Viewer({
               {m.shared_at ? "In the shared gallery" : ""}
             </p>
           )}
-          <Button onClick={() => onRequest({ kind: "reuse", media: m })}>Use these settings</Button>
+          {m.kind !== "model" && <Button onClick={() => onRequest({ kind: "reuse", media: m })}>Use these settings</Button>}
           {m.kind === "image" && !by && <PictureTools token={token} media={m} />}
           {m.kind === "image" && (
             <>
@@ -151,6 +184,9 @@ export function Viewer({
               </Button>
               <Button variant="ghost" onClick={() => onRequest({ kind: "use_image", media: m, task: "animate" })}>
                 Animate this picture
+              </Button>
+              <Button variant="ghost" onClick={() => onRequest({ kind: "use_image", media: m, task: "model" })}>
+                Make a 3D model
               </Button>
             </>
           )}

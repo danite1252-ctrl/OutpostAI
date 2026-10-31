@@ -4,7 +4,7 @@ import { GalleryGrid, Viewer, type CreateRequest } from "../components/gallery";
 import { dropCached } from "../components/images";
 import { Avatar, Button, ErrorNote } from "../components/ui";
 
-type Filter = "all" | "image" | "video";
+type Filter = "all" | "image" | "video" | "model";
 /** My gallery, the shared one, or (owner only) another account's. */
 type Tab = { kind: "mine" } | { kind: "shared" } | { kind: "account"; account: Account };
 
@@ -198,6 +198,7 @@ export default function Gallery({
               ["all", "All"],
               ["image", "Pictures"],
               ["video", "Videos"],
+              ["model", "3D"],
             ] as const
           ).map(([id, label]) => (
             <button

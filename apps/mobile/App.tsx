@@ -169,7 +169,7 @@ function Main({
   const update = usePhoneUpdate(api);
   const [revoked, setRevoked] = useState(false);
   const line = useLine(api, tab === "queue");
-  const [editImage, setEditImage] = useState<{ dataUri: string; task: "edit" | "animate" } | null>(null);
+  const [editImage, setEditImage] = useState<{ dataUri: string; task: "edit" | "animate" | "model" } | null>(null);
   // The tab bar steps aside while typing, leaving the room to the text box.
   const [typing, setTyping] = useState(false);
   useEffect(() => {

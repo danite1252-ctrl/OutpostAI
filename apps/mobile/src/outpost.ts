@@ -316,7 +316,7 @@ export interface Message {
   sources?: { n: number; document_id: string; name: string; page: number | null }[];
 }
 
-export type Task = "picture" | "character" | "edit" | "video" | "animate" | "upscale" | "cutout";
+export type Task = "picture" | "character" | "edit" | "video" | "animate" | "model" | "upscale" | "cutout";
 export type InputKind = "text" | "size" | "integer" | "number" | "seed" | "choice" | "image" | "lora";
 
 export interface PackInput {
@@ -352,7 +352,7 @@ export interface Pack {
 export interface Media {
   id: string;
   account_id: string;
-  kind: "image" | "video";
+  kind: "image" | "video" | "model";
   mime: string;
   prompt: string | null;
   seed: number | null;
