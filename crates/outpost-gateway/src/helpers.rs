@@ -92,6 +92,11 @@ impl Helpers {
         self.inner.lock().unwrap_or_else(|p| p.into_inner()).insert(h.session_id.clone(), h);
     }
 
+    /// Forget a helper (it stopped lending).
+    pub fn remove(&self, session_id: &str) -> Option<Helper> {
+        self.inner.lock().unwrap_or_else(|p| p.into_inner()).remove(session_id)
+    }
+
     /// The helper that would run a training (an online, unpaused one first), if any can.
     pub fn for_training(&self) -> Option<Helper> {
         let mut able: Vec<Helper> = self.all().into_iter().filter(|h| h.trainer).collect();
@@ -455,6 +460,20 @@ pub async fn training_file(
 
 /// The biggest file a training sends (a rank-64 checkpoint is a few hundred MB).
 const TRAINING_FILE_MAX: u64 = 4 * 1024 * 1024 * 1024;
+
+/// The helper stopped lending (switched off in its Settings): it's forgotten, so its
+/// workflows go back to running here (or waiting for another helper) straight away. A PC
+/// that's only asleep, off or paused stays known and its jobs wait for it.
+#[utoipa::path(post, path = "/api/helpers/leave", tag = "helpers", security(("bearer" = [])),
+    responses((status = 204, description = "Forgotten"), (status = 403, description = "Not an owner", body = ErrorBody)))]
+pub async fn leave(State(state): State<AppState>, auth: Auth) -> ApiResult<StatusCode> {
+    require_helper(&auth)?;
+    if let Some(h) = state.helpers.remove(&auth.session.id) {
+        tracing::info!(helper = %h.name, "a helper PC stopped lending");
+        state.queue.wake.notify_one();
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
 
 /// The helper's own running job, or not found (so nobody else can see others' jobs).
 fn my_run(state: &AppState, auth: &Auth, job_id: &str) -> Result<RemoteRun, ApiError> {

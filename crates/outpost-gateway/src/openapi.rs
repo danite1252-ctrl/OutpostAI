@@ -119,6 +119,7 @@ use crate::routes::{
         documents::set_for_persona,
         helpers::list,
         helpers::poll,
+        helpers::leave,
         helpers::input,
         helpers::lora,
         helpers::progress,

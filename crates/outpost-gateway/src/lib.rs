@@ -328,6 +328,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/gallery/search/settings", put(create::search_settings))
         .route("/api/helpers", get(helpers::list))
         .route("/api/helpers/poll", post(helpers::poll))
+        .route("/api/helpers/leave", post(helpers::leave))
         .route("/api/helpers/jobs/{id}/input/{key}", get(helpers::input))
         .route("/api/helpers/jobs/{id}/lora", get(helpers::lora))
         .route("/api/helpers/jobs/{id}/progress", post(helpers::progress))

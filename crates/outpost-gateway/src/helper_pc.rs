@@ -248,6 +248,9 @@ impl HelperPc {
         let mut token: Option<String> = None;
         let mut was_working = false;
         let mut last_job: Option<Instant> = None;
+        // The server may know this PC as a helper (it checked in since lending was switched on,
+        // or lent before the app started): switched off, it's told once.
+        let mut lent = true;
         loop {
             let enabled = self.enabled.load(Ordering::Relaxed);
             let paused = self.paused.load(Ordering::Relaxed);
@@ -256,6 +259,10 @@ impl HelperPc {
                 if was_working {
                     self.release_card().await;
                     was_working = false;
+                }
+                // Lending was switched off: tell the server, so it stops offering this PC.
+                if lent {
+                    lent = !self.leave(&client, &server, token.as_deref()).await;
                 }
                 let _ = tokio::time::timeout(Duration::from_secs(60), self.wake.notified()).await;
                 continue;
@@ -294,7 +301,11 @@ impl HelperPc {
             });
             let body = json!({"vram_mb": hw.vram_mb, "ram_mb": hw.ram_mb, "ready_packs": ready, "paused": paused, "can_train": can_train});
 
-            match self.check_in(&client, &server, &mut token, &body).await {
+            let answer = self.check_in(&client, &server, &mut token, &body).await;
+            if answer.is_ok() {
+                lent = true;
+            }
+            match answer {
                 Err(problem) => self.say("problem", Some(problem)),
                 Ok(None) => {
                     let waiting = if paused {
@@ -330,6 +341,27 @@ impl HelperPc {
             }
             let _ = tokio::time::timeout(EVERY, self.wake.notified()).await;
         }
+    }
+
+    /// Tell the server this PC stopped lending. True when it heard (or there's nobody to tell).
+    async fn leave(&self, client: &reqwest::Client, server: &impl Server, token: Option<&str>) -> bool {
+        let tokens: Vec<String> = match token {
+            Some(t) => vec![t.to_string()],
+            None => server.tokens(),
+        };
+        if tokens.is_empty() {
+            return true;
+        }
+        let url = format!("{}/api/helpers/leave", server.url());
+        for t in tokens {
+            match client.post(&url).bearer_auth(&t).timeout(Duration::from_secs(10)).send().await {
+                Ok(r) if r.status().is_success() || r.status().as_u16() == 404 => return true,
+                Ok(_) => continue,
+                // Can't reach it now: try again on the next round.
+                Err(_) => return false,
+            }
+        }
+        true
     }
 
     /// One check-in; tries each sign-in until one is an owner's.
