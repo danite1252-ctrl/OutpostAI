@@ -147,6 +147,13 @@ declare class OutpostNetModule extends NativeModule<Events> {
   saveToPhone(path: string, name: string, mime: string): Promise<string>;
   /** Android's share sheet for a file saved with saveToPhone. */
   shareSaved(uri: string, mime: string, title: string): Promise<void>;
+  /** Check the Outpost for finished jobs in the background (WorkManager) and notify about long
+   * ones; `on` false stops it and forgets the connection. */
+  notifyConfigure(on: boolean, hosts: string[], port: number, fingerprint: string, token: string): void;
+  /** The app came to the front, or was left (no notifications while it's in front). */
+  notifyInFront(inFront: boolean): void;
+  /** Android 13+: ask to show notifications; true when allowed. */
+  askNotifications(): Promise<boolean>;
   /** POST a file from the phone as the body. */
   upload(options: RequestOptions, path: string, contentType: string): Promise<NativeResponse>;
 }

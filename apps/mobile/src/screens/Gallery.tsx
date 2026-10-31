@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Dimensions, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, AppState, Dimensions, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { WebView } from "react-native-webview";
 import OutpostNet from "../../modules/outpost-net";
+import { VIEWER_HTML } from "../viewer-html";
 import { AuthedImage, dropImage, useAuthedImage } from "../images";
 import type { Account, Media, Outpost } from "../outpost";
 import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
@@ -56,21 +58,38 @@ export default function Gallery({
   }, [api, query, tab, onError]);
   const shown = results ?? items;
 
+  const path =
+    tab === "mine"
+      ? "/api/gallery?limit=60"
+      : tab === "shared"
+        ? "/api/gallery/shared?limit=60"
+        : `/api/gallery?limit=60&account_id=${encodeURIComponent(tab.id)}`;
   const load = useCallback(() => {
     setError(null);
-    const path =
-      tab === "mine"
-        ? "/api/gallery?limit=60"
-        : tab === "shared"
-          ? "/api/gallery/shared?limit=60"
-          : `/api/gallery?limit=60&account_id=${encodeURIComponent(tab.id)}`;
     setItems([]);
     api.get<Media[]>(path).then(setItems, (e) => {
       onError(e);
       setError(e instanceof Error ? e.message : "Couldn't load the gallery.");
     });
-  }, [api, tab, onError]);
+  }, [api, path, onError]);
   useEffect(load, [load]);
+
+  // New pictures, videos and models appear by themselves while the gallery is open.
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (AppState.currentState !== "active") return;
+      api.get<Media[]>(path).then(
+        (page) =>
+          setItems((have) => {
+            const seen = new Set(have.map((m) => m.id));
+            const fresh = page.filter((m) => !seen.has(m.id));
+            return fresh.length ? [...fresh, ...have] : have;
+          }),
+        () => undefined,
+      );
+    }, 8000);
+    return () => clearInterval(t);
+  }, [api, path]);
 
   const size = Math.floor((Dimensions.get("window").width - 16 * 2 - 8 * 2) / 3);
 
@@ -228,12 +247,14 @@ function Viewer({
   onUse: (dataUri: string, task: "edit" | "animate" | "model") => void;
 }) {
   const { uri } = useAuthedImage(api, m.kind === "image" ? `/api/media/${m.id}` : null);
+  const [touching, setTouching] = useState(false);
   const w = Dimensions.get("window").width;
   // The viewer covers the whole screen, status bar included: keep clear of it.
   const insets = useSafeAreaInsets();
   return (
     <Modal visible animationType="slide" onRequestClose={onClose} transparent={false}>
       <ScrollView
+        scrollEnabled={!touching}
         style={{ backgroundColor: C.deep }}
         contentContainerStyle={[s.pad, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 16 }]}
       >
@@ -245,14 +266,7 @@ function Viewer({
           <Text style={{ color: C.muted, flex: 1 }}>{m.kind === "video" ? "Video" : m.kind === "model" ? "3D model" : "Picture"}</Text>
         </View>
         {m.kind === "model" ? (
-          <View style={[s.card, { alignItems: "center", gap: 6, paddingVertical: 28 }]}>
-            <Text style={{ color: C.soft, fontSize: 40 }}>⬡</Text>
-            <Text style={{ color: C.ink, textAlign: "center" }}>A 3D model</Text>
-            <Text style={{ color: C.muted, textAlign: "center" }}>
-              Turn it around in the Outpost desktop app. Save it here for 3D printing (Bambu Handy, cloud printing) or for
-              games and 3D apps.
-            </Text>
-          </View>
+          <ModelViewer api={api} media={m} width={w - 32} onTouching={setTouching} />
         ) : m.kind === "image" ? (
           uri ? (
             <Image source={{ uri }} style={{ width: w - 32, height: w - 32, borderRadius: 12 }} resizeMode="contain" />
@@ -296,6 +310,58 @@ function Viewer({
         <Button title="Close" onPress={onClose} />
       </ScrollView>
     </Modal>
+  );
+}
+
+/** A 3D model, turned with a finger (three.js in a WebView, reading the downloaded file). */
+function ModelViewer({ api, media: m, width, onTouching }: { api: Outpost; media: Media; width: number; onTouching: (on: boolean) => void }) {
+  const [file, setFile] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let live = true;
+    api.download(`/api/media/${m.id}`, `${m.id}.glb`).then(
+      (u) => live && setFile(u),
+      (e) => live && setError(e instanceof Error ? e.message : "Couldn't load the model."),
+    );
+    return () => {
+      live = false;
+    };
+  }, [api, m.id]);
+  const box = { width, height: width, borderRadius: 12, overflow: "hidden" as const, backgroundColor: C.raised };
+  if (error) return <ErrorText>{error}</ErrorText>;
+  return (
+    // While a finger is on the model, the page doesn't scroll (the drag turns the model).
+    <View style={box} onTouchStart={() => onTouching(true)} onTouchEnd={() => onTouching(false)} onTouchCancel={() => onTouching(false)}>
+      {file && (
+        <WebView
+          source={{ html: VIEWER_HTML, baseUrl: "file:///" }}
+          originWhitelist={["*"]}
+          allowFileAccess
+          allowFileAccessFromFileURLs
+          allowUniversalAccessFromFileURLs
+          injectedJavaScriptBeforeContentLoaded={`window.OUTPOST_MODEL=${JSON.stringify(file)};window.OUTPOST_BG="${C.raised}";true;`}
+          onMessage={(e) => {
+            try {
+              const msg = JSON.parse(e.nativeEvent.data) as { type: string; message?: string };
+              if (msg.type === "ready") setReady(true);
+              if (msg.type === "error") setError(msg.message ?? "This model couldn't be shown.");
+            } catch {
+              /* not ours */
+            }
+          }}
+          style={{ flex: 1, backgroundColor: C.raised }}
+          scrollEnabled={false}
+          overScrollMode="never"
+          accessibilityLabel="3D model: drag to turn it, pinch to zoom"
+        />
+      )}
+      {!ready && (
+        <View style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, alignItems: "center", justifyContent: "center" }} pointerEvents="none">
+          <Text style={{ color: C.muted }}>Loading the model…</Text>
+        </View>
+      )}
+    </View>
   );
 }
 

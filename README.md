@@ -16,17 +16,21 @@ Download the latest **`Outpost_<version>_x64-setup.exe`** (and the phone app,
 
 | | |
 | --- | --- |
-| **Chat** | Personas with memory, pictures in chat, `/draw` |
-| **Create** | Pictures, edits, characters, video and animation, picked to suit your graphics card |
+| **Chat** | Personas with memory, pictures in chat, `/draw`, chat with your documents |
+| **Create** | Pictures, edits, characters, video, animation and 3D models, picked to suit your graphics card |
+| **3D printing** | Models saved as print-ready .3mf for Bambu Studio and other slicers, up to 4 colours |
+| **Gallery** | Search by what's in the pictures, upscale, remove backgrounds, save to PC or phone |
 | **Train** | Characters (LoRAs) from your own photos, then use them by name |
+| **Server** | Run it headless on Linux; other PCs lend their graphics card for big jobs and training |
 | **Voice** | Talk to chat, replies read aloud, hands-free conversations you can talk over |
 | **Phone** | Android app, paired with a QR code, encrypted to your PC only; Tailscale for away |
 | **Other apps** | OpenAI-compatible API, MCP server, signed webhooks |
-| **Updates** | A daily check of GitHub Releases (can be switched off); installs only when you say |
+| **Notifications** | On the PC and the phone when a long job (3D, video, training) is ready |
+| **Updates** | Checked on GitHub Releases; a server installs them by itself when it's quiet |
 | **Diagnostics** | Logs and crash reports kept on your PC, never sent |
 
-> Status: **phase 5c, release (in testing).** Phases 1–5b are complete. Making a release:
-> [docs/releasing.md](docs/releasing.md).
+> Status: **1.0.** Everything on the roadmap is built. Running it on a Linux server:
+> [docs/linux-server.md](docs/linux-server.md). Making a release: [docs/releasing.md](docs/releasing.md).
 
 # Building from source
 
@@ -153,6 +157,16 @@ fits, orange runs slowly (asks before downloading), red too big.
 | Edit | Qwen-Image-Edit 2509: Fast (Lightning) or Quality | about 31 GB | ~20 GB |
 | Video | Wan 2.2 (5B): 2 to 5 second 720p clips | about 18 GB | ~12 GB |
 | Animate | Wan 2.2 (5B), starting from your picture | (same files) | ~12 GB |
+| 3D | Hunyuan3D 2.1: a plain shape from a picture | about 8 GB | ~8 GB |
+| 3D | TRELLIS.2: a coloured model from a picture (up to 4K texture) | about 9 GB | ~14 GB |
+| Picture tools | Upscale (Real-ESRGAN) and Remove background (BiRefNet), from the gallery | under 1 GB | small |
+
+**3D models** come out as `.glb` (games, Blender, 3D apps). With **Ready for 3D printing**
+on (the default) Outpost also writes a `.3mf` for slicers: upright, standing on the bed, at a
+chosen height (100 mm unless changed), its surface joined into one closed solid. Options: up
+to **4 colours** as filaments (TRELLIS.2; most used first, for an AMS), and a **flat bottom**
+or **flat back** (a thin slice cut off and closed). The desktop gallery turns models around;
+so does the phone's.
 
 Outpost reads ComfyUI's version and node list (`/system_stats`, `/object_info`) and greys out
 any workflow that needs nodes your ComfyUI lacks ("Needs a newer ComfyUI"), offering **Update

@@ -1,3 +1,4 @@
+import { inFront, setUpNotifications } from "./src/notify";
 import * as LocalAuthentication from "expo-local-authentication";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -61,8 +62,10 @@ export default function App() {
   // Lock only after the app has been away for a while; a quick look elsewhere
   // comes straight back to where you were.
   useEffect(() => {
+    inFront(true);
     const sub = AppState.addEventListener("change", (st) => {
       if (st === "background") void markAway();
+      if (st === "background" || st === "active") inFront(st === "active");
       if (st === "active") {
         void awayFor().then((ms) => {
           if (ms > LOCK_AFTER_MS) setUnlocked(false);
@@ -79,6 +82,7 @@ export default function App() {
   }, []);
 
   const signOut = useCallback(async () => {
+    await setUpNotifications(null, false);
     await forget();
     setSaved(null);
     setUnlocked(false);
@@ -180,6 +184,11 @@ function Main({
       hide.remove();
     };
   }, []);
+
+  // Background checks for finished jobs, with this pairing (asks to notify, once, on Android 13+).
+  useEffect(() => {
+    void setUpNotifications(saved, true);
+  }, [saved]);
 
   // Learn any new addresses (e.g. Tailscale for away from home) without pairing again.
   useEffect(() => {

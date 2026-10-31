@@ -571,6 +571,107 @@ pub async fn list_jobs(
     Ok(Json(out))
 }
 
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct FinishedQuery {
+    /// Jobs that finished at or after this time (Unix seconds).
+    pub since: i64,
+}
+
+/// A finished job, worded for a notification.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FinishedJob {
+    pub id: String,
+    pub pack_id: String,
+    /// `picture`, `video`, `model` or `training`.
+    pub kind: String,
+    pub status: JobStatus,
+    /// "Your 3D model is ready", "Training didn't finish"...
+    pub title: String,
+    /// The prompt, the character's name, or what went wrong.
+    pub body: String,
+    /// It took a while (a minute or more) or is a kind that always does: worth a notification.
+    pub long: bool,
+    pub finished_at: i64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FinishedJobs {
+    pub jobs: Vec<FinishedJob>,
+    /// My jobs still waiting or running (so a phone knows to look again soon).
+    pub unfinished: i64,
+    /// The server's clock now (Unix seconds), for the next `since`.
+    pub now: i64,
+}
+
+/// My jobs that finished since a time, for "it's ready" notifications. Stopped jobs are left out.
+#[utoipa::path(get, path = "/api/jobs/finished", tag = "create", security(("bearer" = [])),
+    params(FinishedQuery),
+    responses((status = 200, description = "Finished jobs", body = FinishedJobs)))]
+pub async fn finished_jobs(State(state): State<AppState>, auth: Auth, Query(q): Query<FinishedQuery>) -> ApiResult<Json<FinishedJobs>> {
+    let now = outpost_core::now();
+    let mut out = Vec::new();
+    for job in jobs::finished_since(&state.pool, &auth.account.id, q.since, 50).await? {
+        if job.status == JobStatus::Cancelled {
+            continue;
+        }
+        out.push(finished_view(&state, job).await);
+    }
+    Ok(Json(FinishedJobs { jobs: out, unfinished: jobs::unfinished(&state.pool, &auth.account.id).await?, now }))
+}
+
+async fn finished_view(state: &AppState, job: Job) -> FinishedJob {
+    let kind = if job.pack_id == crate::train::PACK_ID {
+        "training"
+    } else {
+        match packs::find(&job.pack_id).map(|p| p.output.kind) {
+            Some(packs::OutputKind::Model) => "model",
+            Some(packs::OutputKind::Video) => "video",
+            _ => "picture",
+        }
+    };
+    let thing = match kind {
+        "training" => "Training",
+        "model" => "Your 3D model",
+        "video" => "Your video",
+        _ => "Your picture",
+    };
+    let ok = job.status == JobStatus::Done;
+    let title = match (kind, ok) {
+        ("training", true) => "Training finished".to_string(),
+        (_, true) => format!("{thing} is ready"),
+        (_, false) => format!("{thing} didn't finish"),
+    };
+    let what = if kind == "training" {
+        match outpost_core::training::training_for_job(&state.pool, &job.id).await {
+            Ok(t) => outpost_core::training::get_dataset(&state.pool, &t.account_id, &t.dataset_id)
+                .await
+                .map(|d| if ok { format!("{} is ready to try in Train.", d.name) } else { d.name })
+                .unwrap_or_default(),
+            Err(_) => String::new(),
+        }
+    } else {
+        let values: Value = serde_json::from_str(&job.inputs).unwrap_or_default();
+        values.get("prompt").and_then(Value::as_str).unwrap_or_default().to_string()
+    };
+    let body = if ok {
+        what
+    } else {
+        let why = job.error.clone().unwrap_or_else(|| "It failed.".into());
+        if what.is_empty() { why } else { format!("{what}: {why}") }
+    };
+    let took = job.finished_at.unwrap_or(0) - job.started_at.unwrap_or(job.created_at);
+    FinishedJob {
+        long: took >= 60 || kind != "picture",
+        body: body.chars().take(160).collect(),
+        id: job.id,
+        pack_id: job.pack_id,
+        kind: kind.into(),
+        status: job.status,
+        title,
+        finished_at: job.finished_at.unwrap_or(0),
+    }
+}
+
 /// One of my jobs.
 #[utoipa::path(get, path = "/api/jobs/{id}", tag = "create", security(("bearer" = [])),
     params(("id" = String, Path, description = "Job id")),
@@ -731,16 +832,21 @@ pub async fn get_media_print(State(state): State<AppState>, auth: Auth, Path(id)
     let print = crate::print3d::sidecar(&path);
     if !tokio::fs::try_exists(&print).await.unwrap_or(false) {
         let title = m.prompt.clone().unwrap_or_else(|| "Outpost 3D model".into());
-        crate::print3d::make(path, crate::print3d::DEFAULT_HEIGHT_MM, title)
+        let pack = m.pack_id.as_deref().and_then(packs::find);
+        crate::print3d::make(path.clone(), crate::print3d::Options::defaults(pack.as_ref()), title)
             .await
             .map_err(|e| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "not_printable", e))?;
     }
+    let filaments = tokio::fs::read_to_string(crate::print3d::filaments_file(&path)).await.unwrap_or_default();
     let data = tokio::fs::read(&print)
         .await
         .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, "not_found", "That file is missing."))?;
     let short: String = m.id.chars().take(8).collect();
     Response::builder()
         .header(header::CONTENT_TYPE, "model/3mf")
+        // Its filament colours, most used first (`#RRGGBB,...`; empty for one colour).
+        .header("x-outpost-filaments", filaments.trim())
+        .header(header::ACCESS_CONTROL_EXPOSE_HEADERS, "x-outpost-filaments")
         .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"outpost-{short}.3mf\""))
         .header(header::CACHE_CONTROL, "private, no-cache")
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")

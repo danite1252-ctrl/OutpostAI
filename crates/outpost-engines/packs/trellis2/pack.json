@@ -89,6 +89,34 @@
       "help": "How tall the printed model is. You can still resize it in the slicer."
     },
     {
+      "key": "print_colours",
+      "label": "Colours for printing",
+      "kind": "choice",
+      "default": "4 colours",
+      "options": [
+        "One colour",
+        "2 colours",
+        "3 colours",
+        "4 colours"
+      ],
+      "targets": [],
+      "help": "For a multi-colour printer (an AMS): the model's colours become this many filaments in the .3mf, most used first. One colour prints it plain."
+    },
+    {
+      "key": "print_base",
+      "label": "Base for printing",
+      "kind": "choice",
+      "default": "As made",
+      "options": [
+        "As made",
+        "Flat bottom",
+        "Flat back"
+      ],
+      "advanced": true,
+      "targets": [],
+      "help": "Flat bottom slices a little off the bottom so it stands steady. Flat back lays it on its back, cut flat (wall pieces, reliefs)."
+    },
+    {
       "key": "texture",
       "label": "Texture detail",
       "kind": "choice",

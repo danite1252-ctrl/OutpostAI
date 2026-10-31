@@ -1,6 +1,7 @@
 // Chatting with documents: the documents a chat (or persona) uses, and the library to pick
 // them from. Documents are read on the server; while one is being read it says so.
 
+import { saveToDownloads } from "./save";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, authedBlob, DOC_TYPES, docsApi, type Doc, type Source } from "../api";
 import { Button, ErrorNote, Icon, icons } from "./ui";
@@ -20,12 +21,9 @@ function describe(d: Doc) {
 /** Save one of my documents' files. */
 async function download(token: string, d: { id: string; name: string }) {
   const blob = await authedBlob(token, `/api/documents/${d.id}/file`);
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = d.name;
-  a.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  const path = await saveToDownloads(blob, d.name);
+  // Say where it went, and offer the folder.
+  window.dispatchEvent(new CustomEvent("outpost-saved", { detail: path }));
 }
 
 /**

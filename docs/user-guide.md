@@ -1,8 +1,9 @@
 # Outpost user guide
 
-Outpost turns one Windows PC into a private AI server for your household or small team:
-chat with personas that remember things, make and edit pictures and short videos, train
-characters from your own photos, and talk out loud, on your own graphics card. Phones and
+Outpost turns one Windows PC (or a Linux server) into a private AI server for your household
+or small team: chat with personas that remember things and read your documents, make and edit
+pictures, short videos and 3D models (ready for your 3D printer), train characters from your
+own photos, and talk out loud, on your own graphics card. Phones and
 other apps use the same PC. Nothing goes to a cloud AI service.
 
 - [What you need](#what-you-need)
@@ -81,8 +82,22 @@ Whisper and Kokoro.
   model files the first time (the **Downloads** button shows progress).
 - Jobs wait their turn in the **queue** (top bar), one at a time on the graphics card. Chat
   pauses image work automatically and the other way round, so they don't fight over memory.
-- **Gallery**: everything you made, with the prompt and settings. Share a picture with the
-  household, edit it, animate it, or delete it.
+- **3D**: a 3D model from a picture of one thing (its background is removed for you).
+  Hunyuan3D makes a plain shape on an 8 GB card; TRELLIS.2 makes a coloured one and needs
+  about 16 GB (a lent PC can make it). **Ready for 3D printing** (on by default) also saves a
+  `.3mf` for Bambu Studio and other slicers: standing on the bed at the height you chose, in
+  up to 4 colours (load the filaments in the order Outpost shows), with an optional flat
+  bottom or back. Turn it off for games and 3D apps (`.glb` only).
+- **Gallery**: everything you made, with the prompt and settings. New things appear as
+  they're made. Search it by what's in the pictures, share with the household, edit,
+  animate, upscale, remove a background, make a 3D model, or delete. 3D models turn round
+  with the mouse (or a finger on the phone).
+- **Saving**: on the PC, **Save** puts the file in your **Downloads** folder and says so,
+  with **Show in folder**. On the phone it goes to Pictures, Movies or Download (an Outpost
+  folder in each), then **Share it…** sends it on (to Bambu Handy for cloud printing, say).
+- **Notifications**: when a long job (3D, video, training, or anything over a minute)
+  finishes or fails, Windows and the phone tell you, unless you're looking at Outpost. Switch
+  it off in **Settings › Updates, notifications and this window** (PC) or **You** (phone).
 
 ## Train a character
 
@@ -96,6 +111,11 @@ Whisper and Kokoro.
    Character tab, `/draw Kat at the beach` in chat, the phone, and other apps.
 
 You can also import a LoRA you trained elsewhere as a character.
+
+Training needs about 16 GB of video memory. With a server whose card is smaller, a PC that
+lends its graphics card can train instead: on that PC, **Settings › Server › Lend this PC's
+graphics card**, then **Install ai-toolkit here**. Its checkpoints come back to the server as
+they're saved. Pausing lending (for gaming) stops a training and keeps the checkpoints so far.
 
 ## Voice
 

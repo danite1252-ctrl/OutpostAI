@@ -242,6 +242,7 @@ pub fn router(state: AppState) -> Router {
                 .post(create::create_job)
                 .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
         )
+        .route("/api/jobs/finished", get(create::finished_jobs))
         .route("/api/jobs/{id}", get(create::get_job).delete(create::cancel_job))
         .route("/api/queue", get(create::queue))
         .route("/api/gallery", get(create::gallery))

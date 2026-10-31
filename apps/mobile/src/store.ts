@@ -115,3 +115,22 @@ export function parsePairLink(link: string): { name: string; hosts: string[]; po
   if (!port || !/^[0-9a-f]{64}$/.test(fingerprint) || !/^\d{6}$/.test(code) || hosts.length === 0) return null;
   return { name: q.get("name") ?? "Outpost", hosts, port, fingerprint, code };
 }
+
+const NOTIFY_KEY = "outpost.notify.v1";
+
+/** "It's ready" notifications for long jobs. On unless turned off. */
+export async function loadNotify(): Promise<boolean> {
+  try {
+    return (await SecureStore.getItemAsync(NOTIFY_KEY)) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+export async function saveNotify(on: boolean): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(NOTIFY_KEY, on ? "1" : "0");
+  } catch {
+    // Not kept: stays on.
+  }
+}

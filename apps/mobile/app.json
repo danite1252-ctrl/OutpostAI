@@ -17,7 +17,8 @@
         "android.permission.CHANGE_WIFI_MULTICAST_STATE",
         "android.permission.CAMERA",
         "android.permission.USE_BIOMETRIC",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "versionCode": 23,
       "adaptiveIcon": {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { ApiError, authedBlob, createApi, type Media, type Pack, type Task } from "../api";
+import { ApiError, authedBlob, authedFile, createApi, type Media, type Pack, type Task } from "../api";
+import { SaveButton } from "./save";
 import { Lightbox, prepareImage, useAuthedUrl } from "./images";
 import { ModelTile, ModelView } from "./model3d";
 import { jobsChanged } from "./queue";
@@ -192,13 +193,12 @@ export function Viewer({
           )}
           {m.kind === "model" && <SaveForPrinting token={token} media={m} />}
           {src && (
-            <a
-              href={src}
-              download={`outpost-${m.id}.${extension(m.mime)}`}
-              className="flex min-h-11 items-center justify-center rounded-xl border border-line px-4 text-sm hover:bg-raised"
-            >
-              {m.kind === "model" ? "Save for games and 3D apps (.glb)" : "Save a copy"}
-            </a>
+            <SaveButton
+              key={`copy-${m.id}`}
+              label={m.kind === "model" ? "Save for games and 3D apps (.glb)" : "Save a copy"}
+              name={`outpost-${m.id.slice(0, 8)}.${extension(m.mime)}`}
+              fetchFile={async () => ({ blob: await fetch(src).then((r) => r.blob()) })}
+            />
           )}
           {onShare && (
             <Button variant="ghost" onClick={() => onShare(!m.shared_at)}>
@@ -357,33 +357,38 @@ function extension(mime: string) {
 
 /** The model as a .3mf for Bambu Studio and other slicers: upright, flat on the bed. */
 function SaveForPrinting({ token, media: m }: { token: string; media: Media }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const save = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const url = URL.createObjectURL(await authedBlob(token, `/api/media/${m.id}/print`));
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `outpost-${m.id.slice(0, 8)}.3mf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch {
-      setError("Couldn't make the printing copy of this model.");
-    } finally {
-      setBusy(false);
-    }
-  };
   return (
     <>
-      <Button onClick={() => void save()} disabled={busy}>
-        {busy ? "Getting it ready…" : "Save for 3D printing (.3mf)"}
-      </Button>
+      <SaveButton
+        key={`print-${m.id}`}
+        variant="primary"
+        label="Save for 3D printing (.3mf)"
+        busyLabel="Getting it ready…"
+        name={`outpost-${m.id.slice(0, 8)}.3mf`}
+        fetchFile={async () => {
+          const { blob, headers } = await authedFile(token, `/api/media/${m.id}/print`);
+          const filaments = (headers.get("x-outpost-filaments") ?? "").split(",").filter(Boolean);
+          return { blob, extra: filaments.length > 1 ? <Filaments colours={filaments} /> : undefined };
+        }}
+      />
       <p className="text-xs text-muted">Opens in Bambu Studio, PrusaSlicer and Cura, standing on the bed. You can resize it there.</p>
-      {error && <ErrorNote>{error}</ErrorNote>}
     </>
+  );
+}
+
+/** The filaments a coloured print uses, in order (load them in the AMS slots 1 to 4). */
+function Filaments({ colours }: { colours: string[] }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-muted">Filaments, in Bambu Studio's order (match them to your AMS):</span>
+      <ul className="flex flex-wrap gap-2">
+        {colours.map((c, i) => (
+          <li key={c + i} className="flex items-center gap-1.5 text-xs">
+            <span className="inline-block size-4 rounded border border-line" style={{ background: c }} aria-hidden="true" />
+            {i + 1}: {c}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

@@ -162,6 +162,79 @@ fn helper_install_comfyui() -> Result<(), String> {
     helper()?.install_comfyui().map_err(|e| format!("{e:#}"))
 }
 
+/// Save a file the app fetched (a picture, video, 3D model or document) into this PC's
+/// Downloads folder, under a new name if that one's taken. Returns where it went.
+#[tauri::command]
+fn save_download(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let name = request
+        .headers()
+        .get("x-file-name")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| safe_file_name(&percent_decode(v)))
+        .filter(|n| !n.is_empty())
+        .ok_or("No file name.")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("No file to save.".into());
+    };
+    let dir = app.path().download_dir().map_err(|e| format!("Can't find the Downloads folder: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (name.clone(), String::new()),
+    };
+    let mut path = dir.join(&name);
+    let mut n = 2;
+    while path.exists() {
+        path = dir.join(format!("{stem} ({n}){ext}"));
+        n += 1;
+    }
+    std::fs::write(&path, bytes).map_err(|e| format!("Couldn't save it: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// The file name as the app sent it (`encodeURIComponent`, so any language fits in a header).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() && s.is_char_boundary(i + 1) && s.is_char_boundary(i + 3) {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A file name that's safe on Windows (no folders, no reserved characters).
+fn safe_file_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c })
+        .collect();
+    cleaned.trim().trim_matches('.').chars().take(120).collect()
+}
+
+/// Open the folder holding a file Outpost saved, with the file selected.
+#[tauri::command]
+fn show_in_folder(app: AppHandle, path: String) -> Result<(), String> {
+    let downloads = app.path().download_dir().map_err(|e| e.to_string())?;
+    let file = std::path::PathBuf::from(&path);
+    if !file.starts_with(&downloads) || !file.is_file() {
+        return Err("That file isn't in Downloads any more.".into());
+    }
+    #[cfg(windows)]
+    let result = std::process::Command::new("explorer").arg(format!("/select,{}", file.display())).spawn();
+    #[cfg(not(windows))]
+    let result = std::process::Command::new("xdg-open").arg(&downloads).spawn();
+    result.map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Install ai-toolkit on this PC, so it can take trainings too.
 #[tauri::command]
 fn helper_install_trainer() -> Result<(), String> {
@@ -665,6 +738,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_window(app)))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if CLOSE_TO_TRAY.load(Ordering::Relaxed) {
@@ -742,7 +816,9 @@ pub fn run() {
             helper_packs,
             helper_install_pack,
             helper_install_comfyui,
-            helper_install_trainer
+            helper_install_trainer,
+            save_download,
+            show_in_folder
         ])
         .build(context)
         .expect("error while building Outpost");

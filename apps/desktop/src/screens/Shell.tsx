@@ -12,6 +12,8 @@ import Connections from "./Connections";
 import Train from "./Train";
 import Api from "./Api";
 import { DownloadsButton } from "../components/downloads";
+import { useJobNotifications } from "../components/notify";
+import { SavedToasts } from "../components/save";
 import { QueueButton } from "../components/queue";
 import { CrashNotice, UpdateBanner } from "../components/system";
 import type { CreateRequest } from "../components/gallery";
@@ -53,6 +55,7 @@ export default function Shell({
     if (SERVER) void refreshServerHosts(auth.token).catch(() => undefined);
   }, [auth.token]);
   const [createRequest, setCreateRequest] = useState<CreateRequest | null>(null);
+  useJobNotifications(auth.token);
   const { status: engines, refresh: refreshEngines } = useEngines(auth.token, onSignedOutElsewhere);
   const ollamaUp = engineReady(engines, "ollama");
   const comfyUp = engineReady(engines, "comfyui");
@@ -61,6 +64,7 @@ export default function Shell({
 
   return (
     <div className="flex h-full bg-night">
+      <SavedToasts />
       <nav aria-label="Main" className="flex w-[76px] shrink-0 flex-col items-center gap-1.5 border-r border-line py-4">
         <Mark size={44} className="mb-4" />
         {NAV.map((n) => (

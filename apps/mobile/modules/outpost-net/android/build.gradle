@@ -24,4 +24,7 @@ android {
 dependencies {
   // React Native already ships OkHttp; this makes the dependency explicit.
   implementation "com.squareup.okhttp3:okhttp:4.12.0"
+  // Background checks for finished jobs (notifications with the app closed).
+  implementation "androidx.work:work-runtime-ktx:2.9.1"
+  implementation "androidx.core:core-ktx:1.13.1"
 }

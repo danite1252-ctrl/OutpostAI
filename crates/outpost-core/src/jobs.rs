@@ -175,6 +175,29 @@ pub async fn list(pool: &SqlitePool, account_id: &str, limit: i64) -> CoreResult
     .await?)
 }
 
+/// My jobs that finished at or after `since` (Unix seconds), oldest first: done, failed or
+/// stopped. (For "it's ready" notifications; a job finishing in the same second as the last
+/// look comes again, so callers skip ids they've seen.)
+pub async fn finished_since(pool: &SqlitePool, account_id: &str, since: i64, limit: i64) -> CoreResult<Vec<Job>> {
+    Ok(sqlx::query_as(&format!(
+        "SELECT {COLS} FROM jobs WHERE account_id = ? AND finished_at IS NOT NULL AND finished_at >= ?
+         AND status IN ('done', 'failed', 'cancelled') ORDER BY finished_at, rowid LIMIT ?"
+    ))
+    .bind(account_id)
+    .bind(since)
+    .bind(limit.clamp(1, 100))
+    .fetch_all(pool)
+    .await?)
+}
+
+/// How many of my jobs are waiting or running.
+pub async fn unfinished(pool: &SqlitePool, account_id: &str) -> CoreResult<i64> {
+    Ok(sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE account_id = ? AND status IN ('queued', 'running')")
+        .bind(account_id)
+        .fetch_one(pool)
+        .await?)
+}
+
 /// The order queued jobs run in: priority, then first come, first served.
 const RUN_ORDER: &str = "priority, created_at, rowid";
 
@@ -329,6 +352,25 @@ mod tests {
         .await
         .unwrap()
         .id
+    }
+
+    #[tokio::test]
+    async fn finished_jobs_are_found_for_notifications_and_only_mine() {
+        let pool = open_in_memory().await.unwrap();
+        let dan = account(&pool, "Dan").await;
+        let sam = account(&pool, "Sam").await;
+        let a = create(&pool, &dan, "trellis2", &json!({}), 0).await.unwrap();
+        let b = create(&pool, &dan, "z_image_turbo", &json!({}), 0).await.unwrap();
+        let s = create(&pool, &sam, "z_image_turbo", &json!({}), 0).await.unwrap();
+        assert_eq!(unfinished(&pool, &dan).await.unwrap(), 2);
+        let before = now();
+        finish(&pool, &a.id, JobStatus::Done, None).await.unwrap();
+        finish(&pool, &s.id, JobStatus::Failed, Some("no")).await.unwrap();
+        let found = finished_since(&pool, &dan, before, 50).await.unwrap();
+        assert_eq!(found.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(), vec![a.id.as_str()]);
+        assert_eq!(unfinished(&pool, &dan).await.unwrap(), 1);
+        assert!(finished_since(&pool, &dan, before + 3600, 50).await.unwrap().is_empty());
+        let _ = b;
     }
 
     #[tokio::test]

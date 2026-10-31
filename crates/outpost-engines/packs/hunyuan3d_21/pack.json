@@ -65,6 +65,20 @@
       "help": "How tall the printed model is. You can still resize it in the slicer."
     },
     {
+      "key": "print_base",
+      "label": "Base for printing",
+      "kind": "choice",
+      "default": "As made",
+      "options": [
+        "As made",
+        "Flat bottom",
+        "Flat back"
+      ],
+      "advanced": true,
+      "targets": [],
+      "help": "Flat bottom slices a little off the bottom so it stands steady. Flat back lays it on its back, cut flat (wall pieces, reliefs)."
+    },
+    {
       "key": "detail",
       "label": "Detail",
       "kind": "choice",

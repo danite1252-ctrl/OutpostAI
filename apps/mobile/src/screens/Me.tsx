@@ -3,7 +3,8 @@ import { Alert, ScrollView, Text, View } from "react-native";
 import { checkWords } from "../words";
 import { APP_VERSION } from "../version";
 import type { Outpost } from "../outpost";
-import { loadAutoUpdate, loadVoiceCheck, saveAutoUpdate, saveVoiceCheck, type Saved } from "../store";
+import { loadAutoUpdate, loadNotify, loadVoiceCheck, saveAutoUpdate, saveVoiceCheck, type Saved } from "../store";
+import { setNotify } from "../notify";
 import type { usePhoneUpdate } from "../updater";
 import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
 
@@ -26,6 +27,11 @@ export default function Me({
   const [auto, setAuto] = useState(true);
   useEffect(() => {
     void loadAutoUpdate().then(setAuto);
+  }, []);
+  const [notify, setNotifyOn] = useState(true);
+  const [notifyNote, setNotifyNote] = useState<string | null>(null);
+  useEffect(() => {
+    void loadNotify().then(setNotifyOn);
   }, []);
   const u = update.state;
 
@@ -104,6 +110,28 @@ export default function Me({
           Updates come from Outpost's GitHub releases (about 90 MB) and only install if they're signed with the same key
           as this app. You stay paired.
         </P>
+      </View>
+      <View style={s.card}>
+        <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Notifications</Text>
+        <View style={s.row}>
+          <Chip
+            label={notify ? "Tell me when long jobs finish: on" : "Tell me when long jobs finish: off"}
+            active={notify}
+            onPress={() => {
+              const on = !notify;
+              setNotifyOn(on);
+              setNotifyNote(null);
+              void setNotify(saved, on).then((allowed) => {
+                if (!allowed) setNotifyNote("Android has notifications turned off for Outpost: allow them in the phone's Settings › Apps › Outpost.");
+              });
+            }}
+          />
+        </View>
+        <P muted>
+          A notification when a 3D model, video or training (or anything that took a minute or more) is ready or fails.
+          The phone checks every few minutes while something is running, and every 15 minutes otherwise.
+        </P>
+        {notifyNote && <P muted>{notifyNote}</P>}
       </View>
       <View style={s.card}>
         <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Troubleshooting</Text>

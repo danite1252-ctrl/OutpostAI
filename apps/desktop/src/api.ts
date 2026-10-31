@@ -460,7 +460,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(
+export async function request<T>(
   method: string,
   path: string,
   opts: { token?: string; body?: unknown; pin?: string; base?: string } = {},
@@ -1018,9 +1018,17 @@ export const createApi = {
 
 /** Any authenticated file (attachment or gallery item) as a blob. */
 export async function authedBlob(token: string, path: string): Promise<Blob> {
+  return (await authedFile(token, path)).blob;
+}
+
+/** An authenticated file and its response headers. */
+export async function authedFile(token: string, path: string): Promise<{ blob: Blob; headers: Headers }> {
   const res = await fetch(`${GATEWAY}${path}`, { headers: { Authorization: `Bearer ${token}` } }).catch(() => null);
-  if (!res || !res.ok) throw new ApiError(res?.status ?? 0, "not_found", "File not found.");
-  return res.blob();
+  if (!res || !res.ok) {
+    const body = res ? await res.json().catch(() => null) : null;
+    throw new ApiError(res?.status ?? 0, "not_found", (body as { message?: string } | null)?.message ?? "File not found.");
+  }
+  return { blob: await res.blob(), headers: res.headers };
 }
 
 /** Any authenticated file (attachment or gallery item) as an object URL. */

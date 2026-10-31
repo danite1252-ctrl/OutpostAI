@@ -7,6 +7,8 @@
   <!-- Updating the app from inside it: Android asks once to allow it, and (Android 14+)
        later updates of itself can go in without a prompt. -->
   <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+  <!-- "It's ready" notifications for long jobs (asked for on Android 13+). -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
   <!-- Android 11+ only shows apps the speech recognizer if they say they look for it. -->
   <queries>

@@ -353,6 +353,10 @@ pub struct Built {
 /// The tickbox that makes a 3D model ready for a slicer, and the height it's printed at.
 pub const FOR_PRINTING: &str = "for_printing";
 pub const PRINT_HEIGHT: &str = "print_height";
+/// How many filaments a coloured model prints with ("4 colours").
+pub const PRINT_COLOURS: &str = "print_colours";
+/// What it stands on: as made, a flat bottom or a flat back.
+pub const PRINT_BASE: &str = "print_base";
 
 impl Pack {
     /// For a 3D model made "ready for 3D printing": the height to print it at, in mm.

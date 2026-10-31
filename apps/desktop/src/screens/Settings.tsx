@@ -1,3 +1,4 @@
+import { NotificationsPanel } from "../components/notify";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, SERVER, secretProblem, type Account, type EnginesStatus, type Role, type SignInResponse } from "../api";
 import { EnginesPanel } from "../components/engines";
@@ -87,9 +88,10 @@ export default function Settings({
         <ListeningPanel token={auth.token} canManage={isOwner} />
       </Section>
 
-      <Section id="app" title="Updates and this window" summary={`Outpost ${version}`}>
+      <Section id="app" title="Updates, notifications and this window" summary={`Outpost ${version}`}>
         <UpdatesPanel token={auth.token} canManage={isOwner} />
         <WindowPanel />
+        <NotificationsPanel />
       </Section>
 
       {isOwner && (

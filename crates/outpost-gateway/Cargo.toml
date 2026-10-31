@@ -36,6 +36,8 @@ outpost-engines.workspace = true
 # Reading documents to chat with: text from PDFs, and Word files (a zip of XML).
 pdf-extract = "0.12"
 zip.workspace = true
+# Reading 3D models' textures (their colours, for multi-colour prints).
+png = "0.18"
 qrcode.workspace = true
 reqwest.workspace = true
 serde.workspace = true

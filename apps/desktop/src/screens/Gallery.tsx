@@ -82,6 +82,28 @@ export default function Gallery({
     void load();
   }, [load]);
 
+  // New pictures, videos and models appear by themselves (every few seconds while this is open).
+  useEffect(() => {
+    const t = window.setInterval(async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        const page: Item[] =
+          tab.kind === "shared"
+            ? await createApi.sharedGallery(token)
+            : await createApi.gallery(token, undefined, tab.kind === "account" ? tab.account.id : undefined);
+        if (showing.current !== key) return;
+        setItems((have) => {
+          const seen = new Set(have.map((m) => m.id));
+          const fresh = page.filter((m) => !seen.has(m.id));
+          return fresh.length ? [...fresh, ...have] : have;
+        });
+      } catch {
+        /* the next look will do */
+      }
+    }, 6000);
+    return () => window.clearInterval(t);
+  }, [token, key]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     void createApi.packs(token).then(setPacks, () => undefined);
     if (isOwner) void api.listAccounts(token).then(setAccounts, () => undefined);

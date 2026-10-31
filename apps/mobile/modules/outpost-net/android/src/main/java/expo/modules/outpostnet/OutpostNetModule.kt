@@ -58,7 +58,7 @@ private fun sha256Hex(bytes: ByteArray): String =
  * Trusts exactly one certificate: the Outpost's own, by its SHA-256. Outpost makes its
  * certificate itself, so no certificate authority vouches for it; pinning is the check.
  */
-private class PinnedTrust(private val pin: String) : X509TrustManager {
+internal class PinnedTrust(private val pin: String) : X509TrustManager {
   override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
     throw CertificateException("Client certificates aren't used.")
   }
@@ -154,6 +154,33 @@ class OutpostNetModule : Module() {
 
     /** Delete the copies of shared files. */
     Function("clearShared") { ShareReceiver.clear(context) }
+
+    // ------------------------------------------------------------ "it's ready" notifications (see JobNotifier)
+
+    /** Check for finished jobs in the background with this connection, or stop (on = false). */
+    Function("notifyConfigure") { on: Boolean, hosts: List<String>, port: Int, fingerprint: String, token: String ->
+      JobNotifier.configure(context, on, hosts, port, fingerprint, token)
+    }
+
+    /** The app came to the front (true) or was left (false). */
+    Function("notifyInFront") { inFront: Boolean -> JobNotifier.setInFront(context, inFront) }
+
+    /** Android 13+: ask to show notifications. True when allowed. */
+    AsyncFunction("askNotifications") { promise: Promise ->
+      val permissions = appContext.permissions
+      if (android.os.Build.VERSION.SDK_INT < 33) {
+        promise.resolve(true)
+      } else if (permissions == null) {
+        promise.resolve(false)
+      } else {
+        permissions.askForPermissions(
+          PermissionsResponseListener { result ->
+            promise.resolve(result[Manifest.permission.POST_NOTIFICATIONS]?.status == PermissionsStatus.GRANTED)
+          },
+          Manifest.permission.POST_NOTIFICATIONS
+        )
+      }
+    }
 
     // ------------------------------------------------------------ saving to the phone (see Saving)
 
