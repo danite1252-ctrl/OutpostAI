@@ -342,7 +342,7 @@ pub async fn result(
         let _ = jobs::set_seed(&state.pool, &id, seed).await;
     }
     let values: Value = serde_json::from_str(&job.inputs).unwrap_or_default();
-    media::add(
+    let saved = media::add(
         &state.pool,
         &state.config.files_dir(),
         NewMedia {
@@ -357,6 +357,9 @@ pub async fn result(
         },
     )
     .await?;
+    if let (Some(pack), Some(values)) = (packs::find(&job.pack_id), values.as_object()) {
+        crate::print3d::after_saved(&state, &pack, values, &saved.id).await;
+    }
     Ok(StatusCode::CREATED)
 }
 

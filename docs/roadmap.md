@@ -8,7 +8,9 @@ share to Outpost from any Android app, pairing QR codes that open a download pag
 phone without the app, gallery search by what's in the pictures, automatic server updates, and
 a choice of listening model for voice (up to Whisper large-v3-turbo), and 3D models from a
 picture (Hunyuan3D 2.1 for a quick shape, TRELLIS.2 for a textured model on a 16 GB card),
-shown and turned around in the desktop gallery and saved as .glb.
+shown and turned around in the desktop gallery, saved as .glb for games and 3D apps or (by
+default) as a print-ready .3mf for Bambu Studio and other slicers, and saving any gallery item
+to the phone (Pictures, Movies or Download, then the share sheet).
 
 ## Next, in order
 

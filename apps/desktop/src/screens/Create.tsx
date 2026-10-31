@@ -14,7 +14,7 @@ import { GalleryGrid, GalleryPicker, mediaAsInput, Viewer, type CreateRequest } 
 import { dropCached, prepareImage } from "../components/images";
 import { jobsChanged } from "../components/queue";
 import { AddLora } from "../components/loras";
-import { Button, ErrorNote } from "../components/ui";
+import { Button, ErrorNote, ToggleRow } from "../components/ui";
 
 const TASKS: { id: Task; label: string; blurb: string }[] = [
   { id: "picture", label: "Text to image", blurb: "Describe a picture" },
@@ -765,6 +765,8 @@ function InputField({
           {help}
         </div>
       );
+    case "toggle":
+      return <ToggleRow title={i.label} hint={helpText ?? i.help ?? undefined} checked={value === true} onChange={(on) => onChange(i.key, on)} />;
     case "integer":
     case "number":
       return (

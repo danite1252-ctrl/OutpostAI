@@ -717,6 +717,37 @@ pub async fn get_media(State(state): State<AppState>, auth: Auth, Path(id): Path
         })
 }
 
+/// A 3D model ready for a slicer (Bambu Studio, PrusaSlicer, Cura): a .3mf, upright, flat on
+/// the bed. Made when the model was (with "Ready for 3D printing" on), or now, at 100 mm tall.
+#[utoipa::path(get, path = "/api/media/{id}/print", tag = "create", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Media id")),
+    responses((status = 200, description = "The .3mf file"), (status = 400, description = "Not a 3D model", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody)))]
+pub async fn get_media_print(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Response> {
+    let (m, path) = find_media(&state, &auth, &id, true).await?;
+    if m.kind != "model" {
+        return Err(ApiError::bad_request("Only 3D models can be made ready for printing."));
+    }
+    let print = crate::print3d::sidecar(&path);
+    if !tokio::fs::try_exists(&print).await.unwrap_or(false) {
+        let title = m.prompt.clone().unwrap_or_else(|| "Outpost 3D model".into());
+        crate::print3d::make(path, crate::print3d::DEFAULT_HEIGHT_MM, title)
+            .await
+            .map_err(|e| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "not_printable", e))?;
+    }
+    let data = tokio::fs::read(&print)
+        .await
+        .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, "not_found", "That file is missing."))?;
+    let short: String = m.id.chars().take(8).collect();
+    Response::builder()
+        .header(header::CONTENT_TYPE, "model/3mf")
+        .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"outpost-{short}.3mf\""))
+        .header(header::CACHE_CONTROL, "private, no-cache")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(Body::from(data))
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "Could not send the file."))
+}
+
 /// Mine, for the owner anyone's; for viewing, also anything in the shared gallery.
 async fn find_media(state: &AppState, auth: &Auth, id: &str, viewing: bool) -> ApiResult<(Media, std::path::PathBuf)> {
     let dir = state.config.files_dir();

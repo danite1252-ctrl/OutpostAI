@@ -155,6 +155,19 @@ class OutpostNetModule : Module() {
     /** Delete the copies of shared files. */
     Function("clearShared") { ShareReceiver.clear(context) }
 
+    // ------------------------------------------------------------ saving to the phone (see Saving)
+
+    /** Copy a downloaded file into the phone's Pictures, Movies or Download folder (Outpost). */
+    AsyncFunction("saveToPhone") { path: String, name: String, mime: String ->
+      Saving.save(context, path, name, mime).toString()
+    }
+
+    /** The share sheet for a file saved with saveToPhone. */
+    AsyncFunction("shareSaved") { uri: String, mime: String, title: String ->
+      val activity = appContext.currentActivity ?: throw IllegalStateException("Outpost isn't open.")
+      Saving.share(activity, android.net.Uri.parse(uri), mime, title)
+    }
+
     /** Opened again with a share (or link) while running: the app is told, and takes it. */
     OnNewIntent { intent ->
       if (intent.action == android.content.Intent.ACTION_SEND ||

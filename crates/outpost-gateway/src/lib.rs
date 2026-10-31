@@ -17,6 +17,7 @@ pub mod llm;
 pub mod mcp;
 pub mod memory;
 pub mod openapi;
+pub mod print3d;
 pub mod remote;
 pub mod routes;
 pub mod setup_code;
@@ -251,6 +252,7 @@ pub fn router(state: AppState) -> Router {
             post(create::import_media).layer(DefaultBodyLimit::max(create::MAX_IMPORT_BYTES)),
         )
         .route("/api/media/{id}", get(create::get_media).delete(create::delete_media))
+        .route("/api/media/{id}/print", get(create::get_media_print))
         .route("/api/downloads", get(downloads::list))
         .route("/api/pairing", post(pairing::create_code))
         .route("/api/pairing/{id}", get(pairing::code_status))

@@ -251,6 +251,10 @@ pub async fn delete(pool: &SqlitePool, files_dir: &Path, account_id: &str, id: &
         .bind(account_id)
         .execute(pool)
         .await?;
+    // A 3D model's slicer copy (.3mf) sits beside it.
+    if path.extension().is_some_and(|e| e == "glb") {
+        let _ = tokio::fs::remove_file(path.with_extension("3mf")).await;
+    }
     let _ = tokio::fs::remove_file(path).await;
     Ok(())
 }

@@ -774,7 +774,7 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 // ---------------------------------------------------------------- Create
 
 export type Lane = "text_to_image" | "edit_image" | "text_to_video" | "image_to_video" | "tool" | "image_to_model";
-export type InputKind = "text" | "size" | "integer" | "number" | "seed" | "choice" | "image" | "lora";
+export type InputKind = "text" | "size" | "integer" | "number" | "seed" | "choice" | "image" | "lora" | "toggle";
 
 export interface PackInput {
   key: string;

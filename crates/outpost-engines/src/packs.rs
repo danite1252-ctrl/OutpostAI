@@ -121,6 +121,8 @@ pub enum InputKind {
     Image,
     /// A LoRA file from the LoRA folder; optional, inserts a loader node.
     Lora,
+    /// On or off (a tickbox).
+    Toggle,
 }
 
 /// Where a chosen LoRA is spliced into the graph.
@@ -348,7 +350,30 @@ pub struct Built {
     pub seed: Option<u64>,
 }
 
+/// The tickbox that makes a 3D model ready for a slicer, and the height it's printed at.
+pub const FOR_PRINTING: &str = "for_printing";
+pub const PRINT_HEIGHT: &str = "print_height";
+
 impl Pack {
+    /// For a 3D model made "ready for 3D printing": the height to print it at, in mm.
+    pub fn print_height(&self, values: &serde_json::Map<String, Value>) -> Option<f64> {
+        if self.output.kind != OutputKind::Model {
+            return None;
+        }
+        let input = |k: &str| self.inputs.iter().find(|i| i.key == k);
+        let toggle = input(FOR_PRINTING)?;
+        let on = values.get(FOR_PRINTING).and_then(Value::as_bool).or_else(|| toggle.default.as_bool()).unwrap_or(false);
+        if !on {
+            return None;
+        }
+        let h = values
+            .get(PRINT_HEIGHT)
+            .and_then(Value::as_f64)
+            .or_else(|| input(PRINT_HEIGHT).and_then(|i| i.default.as_f64()))
+            .unwrap_or(100.0);
+        Some(h.clamp(5.0, 1000.0))
+    }
+
     /// Fill the graph from the user's values. `random_seed` supplies a seed when the
     /// user left it empty. `uploaded` maps image input keys to the names ComfyUI gave
     /// the uploaded files. `loras` is the list of LoRA files that exist.
@@ -447,6 +472,10 @@ impl Pack {
                         }
                         None => set_all(&mut graph, &input.targets, json!(text)),
                     }
+                }
+                InputKind::Toggle => {
+                    let on = value.as_bool().ok_or_else(|| PackError::Invalid(format!("{} must be on or off.", input.label)))?;
+                    set_all(&mut graph, &input.targets, json!(on));
                 }
                 InputKind::Image => match uploaded.get(&input.key) {
                     Some(name) => set_all(&mut graph, &input.targets, json!(name)),
@@ -897,6 +926,16 @@ mod tests {
         assert_eq!(g["30"]["inputs"]["texture_size"], 4096);
         // Only ComfyUI's own nodes.
         assert!(t.node_types().contains(&"Trellis2TextureStage".to_string()));
+        // Ready for printing unless it's turned off, at 100 mm unless asked otherwise.
+        assert_eq!(t.print_height(&v), Some(100.0));
+        v.insert("print_height".into(), json!(150));
+        assert_eq!(t.print_height(&v), Some(150.0));
+        v.insert("for_printing".into(), json!(false));
+        assert_eq!(t.print_height(&v), None);
+        t.build(&v, || 7, &up, &[]).unwrap();
+        v.insert("for_printing".into(), json!("yes"));
+        assert!(t.build(&v, || 7, &up, &[]).is_err());
+        assert_eq!(find("z_image_turbo").unwrap().print_height(&serde_json::Map::new()), None);
     }
 
     #[test]

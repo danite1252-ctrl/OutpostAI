@@ -45,6 +45,26 @@
       "help": "One object, seen clearly. Its background is removed for you."
     },
     {
+      "key": "for_printing",
+      "label": "Ready for 3D printing",
+      "kind": "toggle",
+      "default": true,
+      "targets": [],
+      "help": "Also saves it for slicers like Bambu Studio (.3mf): standing upright, flat on the bed, at the height below. Turn off for games and 3D apps (.glb only)."
+    },
+    {
+      "key": "print_height",
+      "label": "Print height (mm)",
+      "kind": "integer",
+      "default": 100,
+      "min": 10,
+      "max": 300,
+      "step": 5,
+      "advanced": true,
+      "targets": [],
+      "help": "How tall the printed model is. You can still resize it in the slicer."
+    },
+    {
       "key": "detail",
       "label": "Detail",
       "kind": "choice",

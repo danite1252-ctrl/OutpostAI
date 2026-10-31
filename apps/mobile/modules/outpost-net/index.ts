@@ -142,6 +142,11 @@ declare class OutpostNetModule extends NativeModule<Events> {
   takeShared(): Promise<Shared | null>;
   /** Delete the copies of shared files. */
   clearShared(): void;
+  /** Copy a downloaded file (file:// or path) into Pictures, Movies or Download, in an Outpost
+   * folder; resolves with its content:// URI. Android 10 or newer. */
+  saveToPhone(path: string, name: string, mime: string): Promise<string>;
+  /** Android's share sheet for a file saved with saveToPhone. */
+  shareSaved(uri: string, mime: string, title: string): Promise<void>;
   /** POST a file from the phone as the body. */
   upload(options: RequestOptions, path: string, contentType: string): Promise<NativeResponse>;
 }

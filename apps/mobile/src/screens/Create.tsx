@@ -1,6 +1,6 @@
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Dimensions, Image, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Dimensions, Image, Modal, Pressable, ScrollView, Switch, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AuthedImage } from "../images";
 import type { Media, Outpost, Pack, PackInput, Task } from "../outpost";
@@ -265,6 +265,16 @@ function Input({
             {i.options.map((o) => (
               <Chip key={o} label={i.kind === "size" ? sizeLabel(o) : o} active={value === o} onPress={() => onChange(o)} />
             ))}
+          </View>
+          {help}
+        </View>
+      );
+    case "toggle":
+      return (
+        <View style={{ gap: 4 }}>
+          <View style={[s.row, { justifyContent: "space-between" }]}>
+            <Text style={[s.label, { flex: 1 }]}>{label}</Text>
+            <Switch value={value === true} onValueChange={onChange} trackColor={{ true: C.ember }} accessibilityLabel={i.label} />
           </View>
           {help}
         </View>

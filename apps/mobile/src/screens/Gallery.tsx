@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert, Dimensions, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import OutpostNet from "../../modules/outpost-net";
 import { AuthedImage, dropImage, useAuthedImage } from "../images";
 import type { Account, Media, Outpost } from "../outpost";
 import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
@@ -248,7 +249,8 @@ function Viewer({
             <Text style={{ color: C.soft, fontSize: 40 }}>⬡</Text>
             <Text style={{ color: C.ink, textAlign: "center" }}>A 3D model</Text>
             <Text style={{ color: C.muted, textAlign: "center" }}>
-              Open it in the Outpost desktop app to turn it around, or save it from there for Blender, games or 3D printing.
+              Turn it around in the Outpost desktop app. Save it here for 3D printing (Bambu Handy, cloud printing) or for
+              games and 3D apps.
             </Text>
           </View>
         ) : m.kind === "image" ? (
@@ -273,6 +275,20 @@ function Viewer({
             <Button kind="ghost" title="Make a 3D model" onPress={() => onUse(uri, "model")} />
           </>
         )}
+        {m.kind === "model" ? (
+          <>
+            <SaveButton api={api} path={`/api/media/${m.id}/print`} name={`outpost-${m.id.slice(0, 8)}.3mf`} mime="model/3mf" label="for 3D printing (.3mf)" primary />
+            <SaveButton api={api} path={`/api/media/${m.id}`} name={`outpost-${m.id.slice(0, 8)}.glb`} mime="model/gltf-binary" label="for games and 3D apps (.glb)" />
+          </>
+        ) : (
+          <SaveButton
+            api={api}
+            path={`/api/media/${m.id}`}
+            name={`outpost-${m.id.slice(0, 8)}.${m.mime === "image/jpeg" ? "jpg" : (m.mime.split("/")[1] ?? "png")}`}
+            mime={m.mime}
+            label={m.kind === "video" ? "to the phone's videos" : "to the phone's pictures"}
+          />
+        )}
         {(mine || (canUnshare && m.shared_at)) && (
           <Button kind="ghost" title={m.shared_at ? "Stop sharing" : "Share with everyone"} onPress={() => onShare(!m.shared_at)} />
         )}
@@ -280,6 +296,41 @@ function Viewer({
         <Button title="Close" onPress={onClose} />
       </ScrollView>
     </Modal>
+  );
+}
+
+/** Download a gallery item and copy it into the phone's own folders, then offer to share it. */
+function SaveButton({ api, path, name, mime, label, primary }: { api: Outpost; path: string; name: string; mime: string; label: string; primary?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const folder = mime.startsWith("image/") ? "Pictures/Outpost" : mime.startsWith("video/") ? "Movies/Outpost" : "Download/Outpost";
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const file = await api.download(path, name);
+      setSaved(await OutpostNet.saveToPhone(file, name, mime));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save it.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (saved) {
+    return (
+      <View style={{ gap: 6 }}>
+        <P muted>Saved in {folder}.</P>
+        <Button kind="ghost" title="Share it…" onPress={() => OutpostNet.shareSaved(saved, mime, "Send it to").catch((e) => setError(String(e?.message ?? e)))} />
+        {error && <ErrorText>{error}</ErrorText>}
+      </View>
+    );
+  }
+  return (
+    <View style={{ gap: 6 }}>
+      <Button kind={primary ? "primary" : "ghost"} title={busy ? "Saving…" : `Save ${label}`} disabled={busy} onPress={() => void save()} />
+      {error && <ErrorText>{error}</ErrorText>}
+    </View>
   );
 }
 

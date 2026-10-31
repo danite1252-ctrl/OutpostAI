@@ -341,7 +341,7 @@ async fn run(state: AppState, job: Job) -> Result<(), ComfyError> {
     let mut saved = 0;
     for (node, file) in files.iter().filter(|(node, _)| *node == pack.output.node) {
         let data = state.comfy.fetch(file).await?;
-        media::add(
+        let saved_media = media::add(
             &state.pool,
             &state.config.files_dir(),
             NewMedia {
@@ -357,6 +357,10 @@ async fn run(state: AppState, job: Job) -> Result<(), ComfyError> {
         )
         .await
         .map_err(|e| ComfyError::Failed(e.to_string()))?;
+        if pack.print_height(&values).is_some() {
+            state.queue.update(|r| r.progress.phase = "Making it ready for 3D printing".into());
+            crate::print3d::after_saved(state, &pack, &values, &saved_media.id).await;
+        }
         tracing::debug!(job = %job.id, node, "saved a result");
         saved += 1;
     }

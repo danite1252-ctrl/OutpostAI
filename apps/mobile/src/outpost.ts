@@ -317,7 +317,7 @@ export interface Message {
 }
 
 export type Task = "picture" | "character" | "edit" | "video" | "animate" | "model" | "upscale" | "cutout";
-export type InputKind = "text" | "size" | "integer" | "number" | "seed" | "choice" | "image" | "lora";
+export type InputKind = "text" | "size" | "integer" | "number" | "seed" | "choice" | "image" | "lora" | "toggle";
 
 export interface PackInput {
   key: string;

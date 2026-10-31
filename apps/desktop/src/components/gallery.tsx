@@ -163,7 +163,7 @@ export function Viewer({
         </div>
         <aside className="flex w-full flex-col gap-3 overflow-auto rounded-2xl border border-line bg-surface p-4 lg:w-72">
           <p className="text-sm whitespace-pre-wrap">{m.prompt || (m.kind === "model" ? "3D model" : "No prompt")}</p>
-          {m.kind === "model" && <p className="text-xs text-muted">Drag to turn it, scroll to zoom. Save a copy for Blender, games or 3D printing (.glb).</p>}
+          {m.kind === "model" && <p className="text-xs text-muted">Drag to turn it, scroll to zoom.</p>}
           {m.description && <p className="text-xs text-soft">Outpost sees: {m.description}</p>}
           <p className="font-mono text-xs text-muted">
             {packName ?? m.pack_id} · seed {m.seed ?? "—"} · {new Date(m.created_at * 1000).toLocaleString()}
@@ -190,13 +190,14 @@ export function Viewer({
               </Button>
             </>
           )}
+          {m.kind === "model" && <SaveForPrinting token={token} media={m} />}
           {src && (
             <a
               href={src}
-              download={`outpost-${m.id}.${m.mime.split("/")[1] ?? "png"}`}
+              download={`outpost-${m.id}.${extension(m.mime)}`}
               className="flex min-h-11 items-center justify-center rounded-xl border border-line px-4 text-sm hover:bg-raised"
             >
-              Save a copy
+              {m.kind === "model" ? "Save for games and 3D apps (.glb)" : "Save a copy"}
             </a>
           )}
           {onShare && (
@@ -345,5 +346,44 @@ function PictureTools({ token, media: m }: { token: string; media: Media }) {
       {note && <p className="text-xs text-ok" role="status">{note}</p>}
       <ErrorNote>{error}</ErrorNote>
     </div>
+  );
+}
+
+function extension(mime: string) {
+  if (mime === "model/gltf-binary") return "glb";
+  if (mime === "image/jpeg") return "jpg";
+  return mime.split("/")[1] ?? "png";
+}
+
+/** The model as a .3mf for Bambu Studio and other slicers: upright, flat on the bed. */
+function SaveForPrinting({ token, media: m }: { token: string; media: Media }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const url = URL.createObjectURL(await authedBlob(token, `/api/media/${m.id}/print`));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `outpost-${m.id.slice(0, 8)}.3mf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setError("Couldn't make the printing copy of this model.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <Button onClick={() => void save()} disabled={busy}>
+        {busy ? "Getting it ready…" : "Save for 3D printing (.3mf)"}
+      </Button>
+      <p className="text-xs text-muted">Opens in Bambu Studio, PrusaSlicer and Cura, standing on the bed. You can resize it there.</p>
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </>
   );
 }
