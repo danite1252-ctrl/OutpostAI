@@ -1,7 +1,7 @@
 import { clock } from "../outpost";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Alert, BackHandler, Image, Keyboard, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, BackHandler, Image, Keyboard, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { MicIcon, PlusIcon, SendIcon, StopIcon } from "../icons";
 import { AuthedImage } from "../images";
 import type { ChatStart } from "./Share";
@@ -70,7 +70,36 @@ export default function Chat({
     }
   }
 
-  // Long-press a chat to delete it (with its pictures, and what the persona learned from it).
+  // Long-press a chat: rename it, or delete it.
+  const [renaming, setRenaming] = useState<ChatT | null>(null);
+  const [newTitle, setNewTitle] = useState("");
+  const chatMenu = (c: ChatT) =>
+    Alert.alert(c.title, undefined, [
+      {
+        text: "Rename",
+        onPress: () => {
+          setNewTitle(c.title);
+          setRenaming(c);
+        },
+      },
+      { text: "Delete", style: "destructive", onPress: () => removeChat(c) },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  async function rename() {
+    const c = renaming;
+    const t = newTitle.trim();
+    setRenaming(null);
+    if (!c || !t || t === c.title) return;
+    try {
+      const chat = await api.json<ChatT>("PATCH", `/api/chats/${c.id}`, { title: t.slice(0, 120) });
+      setChats((list) => list.map((x) => (x.id === chat.id ? chat : x)));
+    } catch (e) {
+      onError(e);
+      setError(e instanceof Error ? e.message : "Couldn't rename that chat.");
+    }
+  }
+
+  // Delete a chat (with its pictures, and what the persona learned from it).
   const removeChat = (c: ChatT) =>
     Alert.alert("Delete this chat?", `"${c.title}" goes, with its pictures and anything the persona learned from it.`, [
       { text: "Cancel", style: "cancel" },
@@ -134,9 +163,9 @@ export default function Chat({
           <Pressable
             key={c.id}
             accessibilityRole="button"
-            accessibilityHint="Long-press to delete"
+            accessibilityHint="Long-press to rename or delete"
             onPress={() => setOpen(c)}
-            onLongPress={() => removeChat(c)}
+            onLongPress={() => chatMenu(c)}
             delayLongPress={450}
             style={({ pressed }) => [s.card, s.row, pressed && { backgroundColor: C.raised }]}
           >
@@ -150,7 +179,29 @@ export default function Chat({
           </Pressable>
         );
       })}
-      {chats.length === 0 ? <P muted>No chats yet. Everything stays on your PC.</P> : <P muted>Long-press a chat to delete it.</P>}
+      {chats.length === 0 ? <P muted>No chats yet. Everything stays on your PC.</P> : <P muted>Long-press a chat to rename or delete it.</P>}
+      <Modal visible={!!renaming} transparent animationType="fade" onRequestClose={() => setRenaming(null)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", padding: 24 }}>
+          <View style={[s.card, { gap: 12 }]}>
+            <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Rename chat</Text>
+            <TextInput
+              autoFocus
+              value={newTitle}
+              onChangeText={setNewTitle}
+              maxLength={120}
+              selectTextOnFocus
+              returnKeyType="done"
+              onSubmitEditing={() => void rename()}
+              accessibilityLabel="Chat name"
+              style={{ color: C.ink, borderWidth: 1, borderColor: C.ember, borderRadius: 10, paddingHorizontal: 12, minHeight: 44, fontSize: 16 }}
+            />
+            <View style={[s.row, { justifyContent: "flex-end" }]}>
+              <Button kind="ghost" title="Cancel" onPress={() => setRenaming(null)} />
+              <Button title="Save" onPress={() => void rename()} />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }

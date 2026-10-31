@@ -66,6 +66,8 @@ Whisper and Kokoro.
 
 - **Chat**: start a chat with a persona. Replies are formatted (lists, tables, code with a
   Copy button). Attach up to four pictures for a model that can see them.
+- **Rename a chat**: the pencil beside it in the list (or double-click it); on the phone,
+  long-press it. A new chat is named after its first message until you do.
 - **Delete a message** (long-press on the phone): your message takes its reply with it, and
   anything the persona learned from it is forgotten.
 - **Personas** (side bar): name, colour, model, instructions, voice, and **memory**. With

@@ -163,6 +163,23 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
     }
   }
 
+  // Renaming a chat in the list: its id, and the name being typed.
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [newTitle, setNewTitle] = useState("");
+  async function renameChat(id: string, title: string) {
+    if (renaming !== id) return;
+    setRenaming(null);
+    const t = title.trim();
+    const before = chats.find((c) => c.id === id);
+    if (!t || t === before?.title) return;
+    try {
+      const chat = await api.updateChat(token, id, { title: t.slice(0, 120) });
+      setChats((cs) => cs.map((c) => (c.id === chat.id ? chat : c)));
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   async function removeChat(id: string) {
     if (!window.confirm("Delete this chat? Its images, and anything Outpost learned from it, go too.")) return;
     try {
@@ -284,15 +301,53 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
             const p = personas.find((x) => x.id === c.persona_id);
             return (
               <li key={c.id} className="group flex items-center gap-1">
+                {renaming === c.id ? (
+                  <form
+                    className="flex min-w-0 flex-1 flex-col rounded-lg bg-raised px-2 py-1.5"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void renameChat(c.id, newTitle);
+                    }}
+                  >
+                    <input
+                      autoFocus
+                      aria-label="Chat name"
+                      value={newTitle}
+                      maxLength={120}
+                      onChange={(e) => setNewTitle(e.target.value)}
+                      onKeyDown={(e) => e.key === "Escape" && setRenaming(null)}
+                      onBlur={() => void renameChat(c.id, newTitle)}
+                      className="min-h-8 rounded-md border border-ember bg-deep px-2 text-sm text-ink focus:outline-none"
+                    />
+                    <span className="truncate px-1 pt-0.5 text-xs text-muted">Enter to save, Esc to cancel</span>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setActiveId(c.id)}
+                    onDoubleClick={() => {
+                      setNewTitle(c.title);
+                      setRenaming(c.id);
+                    }}
+                    className={`flex min-w-0 flex-1 flex-col rounded-lg px-3 py-2 text-left ${
+                      c.id === activeId ? "bg-raised" : "hover:bg-raised/60"
+                    }`}
+                  >
+                    <span className="truncate text-sm">{c.title}</span>
+                    <span className="truncate text-xs text-muted">{p?.name ?? "No persona"}</span>
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => setActiveId(c.id)}
-                  className={`flex min-w-0 flex-1 flex-col rounded-lg px-3 py-2 text-left ${
-                    c.id === activeId ? "bg-raised" : "hover:bg-raised/60"
-                  }`}
+                  aria-label={`Rename ${c.title}`}
+                  title="Rename"
+                  onClick={() => {
+                    setNewTitle(c.title);
+                    setRenaming(c.id);
+                  }}
+                  className="rounded-md px-1.5 py-1 text-muted opacity-0 group-hover:opacity-100 hover:text-ink focus:opacity-100"
                 >
-                  <span className="truncate text-sm">{c.title}</span>
-                  <span className="truncate text-xs text-muted">{p?.name ?? "No persona"}</span>
+                  ✎
                 </button>
                 <button
                   type="button"
