@@ -92,21 +92,13 @@ pub async fn chat_completions(
         apply_persona(&state, &auth, &mut body, slug).await?;
     }
 
-    let url = format!("{}/v1/chat/completions", state.config.ollama_url.trim_end_matches('/'));
-    let resp = state.llm.post(&url).json(&body).send().await.map_err(|_| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "ollama_offline",
-            "Ollama isn't running. Start it in Settings → Engines.",
-        )
-    })?;
-    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    let content_type = resp
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/json")
-        .to_string();
+    // Here, or on a lent PC that runs this model.
+    let resp = crate::lent::post(&state, "/v1/chat/completions", &body, None)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "ollama_offline", e))?;
+    let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::BAD_GATEWAY);
+    let streaming = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let content_type = if streaming && resp.ok() { "text/event-stream" } else { "application/json" };
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, content_type)

@@ -1,13 +1,14 @@
 // Lending this PC's graphics card to the server (Settings › Server, while using one).
 //
 // The server runs Create jobs it can't fit on its own card here instead: this PC checks in,
-// runs them in its own ComfyUI (never Ollama) and sends the pictures back. With ai-toolkit
+// runs them in its own ComfyUI and sends the pictures back. Lending for chat too, the server's
+// chats can use the models in this PC's Ollama, running here. With ai-toolkit
 // installed and a 16 GB card it takes trainings too, sending each checkpoint back as it's
 // saved. Pause it while gaming (here or from the tray icon) and ComfyUI stops, so the card is
 // all yours (a training stops too, keeping the checkpoints it sent).
 
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, createApi, type Fit, type Pack, type PackSetup } from "../api";
+import { ApiError, createApi, type CatalogEntry, type Fit, type InstalledModel, type Pack, type PackSetup, type PullState } from "../api";
 import { Button, ErrorNote, ToggleRow } from "./ui";
 
 interface HelperStatus {
@@ -30,6 +31,14 @@ interface HelperStatus {
     pinned_version: string;
     progress: { step: string; step_index: number; step_count: number; percent: number | null } | null;
   } | null;
+  chat: boolean;
+  ollama: boolean;
+  ollama_running: boolean;
+  ollama_installing: boolean;
+  ollama_error: string | null;
+  chat_models: string[];
+  chatting: number;
+  chats: number;
 }
 
 /** ai-toolkit's settings need about 16 GB; cards report a little under. */
@@ -131,17 +140,17 @@ export function HelperPanel({ token, isOwner }: { token: string; isOwner: boolea
       ) : (
         <>
           <ToggleRow
-            title="Lend this PC for Create jobs"
+            title="Lend this PC's graphics card"
             hint={`Jobs too big for the server's card are made here instead${
               status.vram_mb ? ` (this PC has ${gb(status.vram_mb)} of video memory)` : ""
-            }. Only ComfyUI runs here, only while there's a job, and the results go to the server's gallery.`}
+            }, and (if you like) chats run here with this PC's models. Results go to the server.`}
             checked={status.enabled}
             onChange={(on) => set(on, false)}
           />
           {status.enabled && (
             <ToggleRow
               title="Pause (e.g. while gaming)"
-              hint="ComfyUI stops so the card is free; jobs for this PC wait on the server. Also in the tray icon's menu."
+              hint="ComfyUI stops and chat models unload so the card is free; jobs for this PC wait on the server, and chats use the server's own models. Also in the tray icon's menu."
               checked={status.paused}
               onChange={(on) => (on && training ? setConfirmPause(true) : set(true, on))}
             />
@@ -216,10 +225,161 @@ export function HelperPanel({ token, isOwner }: { token: string; isOwner: boolea
               )}
             </div>
           )}
+          {status.enabled && <ChatHere status={status} onError={setError} onChanged={refresh} />}
           {status.enabled && <TrainingHere status={status} onError={setError} onStarted={refresh} />}
         </>
       )}
       <ErrorNote>{error}</ErrorNote>
+    </div>
+  );
+}
+
+interface ChatModelsHere {
+  installed: InstalledModel[];
+  catalog: CatalogEntry[];
+  pulls: PullState[];
+}
+
+/** Chats on this PC: the server runs chats with the models in Ollama here. */
+function ChatHere({ status, onError, onChanged }: { status: HelperStatus; onError: (e: string) => void; onChanged: () => void }) {
+  const [models, setModels] = useState<ChatModelsHere | null>(null);
+  const [name, setName] = useState("");
+  const load = useCallback(() => {
+    if (!status.chat || !status.ollama_running) return;
+    invoke<ChatModelsHere>("helper_chat_models")
+      .then(setModels)
+      .catch(() => {});
+  }, [status.chat, status.ollama_running]);
+  useEffect(() => {
+    load();
+    const t = window.setInterval(load, 3000);
+    return () => window.clearInterval(t);
+  }, [load]);
+
+  const pull = (model: string) =>
+    void invoke("helper_pull_chat_model", { model })
+      .then(load)
+      .catch((e) => onError(message(e)));
+  const remove = (model: string) =>
+    void invoke("helper_remove_chat_model", { model })
+      .then(() => {
+        load();
+        onChanged();
+      })
+      .catch((e) => onError(message(e)));
+
+  const chatModels = (models?.installed ?? []).filter((m) => !m.badges.includes("embedding"));
+  const have = new Set(chatModels.map((m) => m.model.toLowerCase()));
+  const pulling = (models?.pulls ?? []).filter((p) => !p.done);
+  const failed = (models?.pulls ?? []).filter((p) => p.done && p.error);
+  const suggested = (models?.catalog ?? [])
+    .filter((c) => c.fit === "fits" && !have.has(c.model.toLowerCase()) && !pulling.some((p) => p.model === c.model))
+    .sort((a, b) => Number(b.recommended) - Number(a.recommended) || b.size_gb - a.size_gb)
+    .slice(0, 5);
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-line pt-3">
+      <ToggleRow
+        title="Run chats here too"
+        hint="Chats with a model on this PC run here on this card (bigger models than the server can fit). The server's own models still run on the server unless this card is bigger."
+        checked={status.chat}
+        onChange={(on) =>
+          void invoke("set_helper_chat", { on })
+            .then(onChanged)
+            .catch((e) => onError(message(e)))
+        }
+      />
+      {status.chat && !status.ollama && (
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="flex-1 text-sm">
+            {status.ollama_installing ? "Installing Ollama on this PC…" : "Ollama isn't on this PC yet (about 2 GB)."}
+          </span>
+          {!status.ollama_installing && (
+            <Button
+              onClick={() =>
+                void invoke("helper_install_ollama")
+                  .then(onChanged)
+                  .catch((e) => onError(message(e)))
+              }
+            >
+              Install Ollama here
+            </Button>
+          )}
+          {status.ollama_error && <ErrorNote>{status.ollama_error}</ErrorNote>}
+        </div>
+      )}
+      {status.chat && status.ollama && !status.ollama_running && !status.paused && (
+        <p className="text-sm text-muted">Starting Ollama on this PC…</p>
+      )}
+      {status.chat && status.ollama_running && (
+        <>
+          <p className="text-sm" aria-live="polite">
+            {chatModels.length
+              ? status.chatting > 0
+                ? `Answering ${status.chatting === 1 ? "a chat" : `${status.chatting} chats`} for the server now.`
+                : "Chats with these models run here:"
+              : "No chat models on this PC yet: get one below and it shows up in the server's model lists."}
+            {status.chats > 0 ? ` ${status.chats} replies since Outpost started.` : ""}
+          </p>
+          {chatModels.length > 0 && (
+            <ul className="flex flex-col gap-1">
+              {chatModels.map((m) => (
+                <li key={m.model} className="flex items-center gap-3 rounded-xl border border-line px-3 py-2 text-sm">
+                  <span className="flex-1 font-mono">{m.model}</span>
+                  <span className="text-muted">{(m.size_bytes / 1e9).toFixed(1)} GB</span>
+                  <Button variant="ghost" onClick={() => remove(m.model)}>
+                    Delete
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {pulling.map((p) => (
+            <p key={p.model} className="text-sm">
+              Downloading {p.model}
+              {p.percent != null ? `: ${Math.round(p.percent)}%` : `: ${p.status}`}
+            </p>
+          ))}
+          {failed.map((p) => (
+            <ErrorNote key={p.model}>{`${p.model}: ${p.error}`}</ErrorNote>
+          ))}
+          {suggested.length > 0 && (
+            <>
+              <p className="text-sm text-muted">Fit this PC's card:</p>
+              <ul className="flex flex-col gap-1">
+                {suggested.map((c) => (
+                  <li key={c.model} className="flex items-center gap-3 rounded-xl border border-line px-3 py-2 text-sm">
+                    <span className="flex-1">
+                      {c.name} <span className="text-muted">({c.size_gb.toFixed(1)} GB)</span>
+                      {c.recommended && <span className="ml-2 text-xs text-ember">Best fit</span>}
+                    </span>
+                    <Button onClick={() => pull(c.model)}>Get</Button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          <form
+            className="flex flex-wrap items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (name.trim()) pull(name.trim());
+              setName("");
+            }}
+          >
+            <input
+              className="min-w-0 flex-1 rounded-xl border border-line bg-raised px-3 py-2 text-sm"
+              placeholder="Or any Ollama model, e.g. qwen3:14b"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              aria-label="Ollama model name"
+            />
+            <Button type="submit" disabled={!name.trim()}>
+              Get
+            </Button>
+          </form>
+        </>
+      )}
     </div>
   );
 }

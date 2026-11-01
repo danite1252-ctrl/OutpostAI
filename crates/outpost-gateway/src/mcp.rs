@@ -334,15 +334,15 @@ async fn ask(state: &AppState, account: &str, slug: &str, message: &str) -> Resu
     if let Some(t) = persona.temperature {
         body["options"] = json!({ "temperature": t });
     }
-    let url = format!("{}/api/chat", state.config.ollama_url.trim_end_matches('/'));
-    let resp = tokio::time::timeout(Duration::from_secs(600), state.llm.post(&url).json(&body).send())
-        .await
-        .map_err(|_| "The model took too long to answer.".to_string())?
-        .map_err(|_| "Ollama isn't running on the Outpost PC.".to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("Ollama refused: {}", resp.text().await.unwrap_or_default()));
-    }
-    let v: Value = resp.json().await.map_err(|e| e.to_string())?;
+    let v: Value = tokio::time::timeout(Duration::from_secs(600), async {
+        let resp = crate::lent::post(state, "/api/chat", &body, None).await?;
+        if !resp.ok() {
+            return Err(format!("Ollama refused: {}", resp.text().await));
+        }
+        resp.json::<Value>().await
+    })
+    .await
+    .map_err(|_| "The model took too long to answer.".to_string())??;
     let reply = v["message"]["content"].as_str().unwrap_or_default();
     Ok(crate::routes::training::strip_thinking(reply).trim().to_string())
 }

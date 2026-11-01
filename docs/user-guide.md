@@ -77,6 +77,15 @@ Whisper and Kokoro.
   character's name), `4 pictures of Kat at the beach`, or several scenes separated by `;`.
   The picture appears in the chat and the Gallery.
 
+### Bigger chat models on a lent PC
+
+With Outpost on a server whose card is small, a desktop PC can lend its card for chat: on that
+PC, **Settings › Server › Lend this PC's graphics card**, keep **Run chats here too** on, and get
+a chat model there (it suggests ones that fit). It shows in every model list as **runs on <that
+PC>**, and chats with it run on that card, with a longer memory of the conversation. Pause
+lending while gaming and those models are unavailable until you carry on. See
+[the server guide](linux-server.md#helper-pcs-bigger-pictures-and-smarter-chat-than-the-servers-card-can-run).
+
 ### Files in chats
 
 A chat can work with folders: the model lists, reads and searches the files, and can write

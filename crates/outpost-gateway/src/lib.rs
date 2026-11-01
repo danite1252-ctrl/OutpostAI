@@ -13,6 +13,7 @@ pub mod extract;
 pub mod gallery_index;
 pub mod helper_pc;
 pub mod helpers;
+pub mod lent;
 pub mod llm;
 pub mod mcp;
 pub mod memory;
@@ -83,6 +84,8 @@ pub struct AppState {
     pub helpers: helpers::Helpers,
     /// File requests waiting for a desktop app (PC folders in chats).
     pub file_relay: workspace::Relay,
+    /// Chat requests for lent PCs' Ollama, and their answers.
+    pub lent_chat: lent::LentChat,
 }
 
 impl AppState {
@@ -124,6 +127,7 @@ impl AppState {
             setup: Default::default(),
             helpers: Default::default(),
             file_relay: Default::default(),
+            lent_chat: Default::default(),
         }
     }
 
@@ -349,6 +353,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/helpers", get(helpers::list))
         .route("/api/helpers/poll", post(helpers::poll))
         .route("/api/helpers/leave", post(helpers::leave))
+        .route("/api/helpers/chat/next", post(lent::next))
+        .route("/api/helpers/chat/{id}/reply", post(lent::reply).layer(DefaultBodyLimit::disable()))
         .route("/api/helpers/jobs/{id}/input/{key}", get(helpers::input))
         .route("/api/helpers/jobs/{id}/lora", get(helpers::lora))
         .route("/api/helpers/jobs/{id}/progress", post(helpers::progress))

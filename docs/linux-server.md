@@ -118,20 +118,28 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 If memory still runs out, Linux stops the engine doing the work (ComfyUI, Ollama, the trainer),
 not Outpost: the job fails with "the server ran out of memory", and everything else carries on.
 
-## Helper PCs: bigger pictures than the server's card can make
+## Helper PCs: bigger pictures and smarter chat than the server's card can run
 
 A desktop PC using the server can lend its graphics card for Create jobs the server's own card
-is too small for. On that PC (signed in as an owner), open **Settings › Server › Lend this PC's
+is too small for, and for chat with bigger models. On that PC (signed in as an owner), open **Settings › Server › Lend this PC's
 graphics card**:
 
-- Tick **Lend this PC for Create jobs**. Install ComfyUI there if it asks, then **Download on
+- Tick **Lend this PC's graphics card**. Install ComfyUI there if it asks, then **Download on
   this PC** the workflows listed as too big for the server.
 - Create on every device then lists those workflows as **Runs on <that PC>**. Their jobs wait in
   the server's queue and go to the PC when it's free; the results land in the gallery as usual.
-- Only ComfyUI runs on the helper, and only while there's a job (its models are unloaded after
-  five idle minutes). Chat stays on the server.
+- ComfyUI runs on the helper only while there's a job (its models are unloaded after five idle
+  minutes).
+- **Chat** (**Run chats here too**, on by default): get chat models on that PC from the same
+  panel (it suggests ones that fit its card, or type any Ollama name; it installs Ollama there
+  first if needed). They then appear in every model list (Personas, chats, the phone, the API)
+  as **runs on <that PC>**, and chats with them run on that card, streaming back as usual, with
+  a context window sized for that card (64K tokens on 16 GB). A model downloaded on both runs on
+  the lent PC when its card is bigger. Memory learning and long-chat summaries use the same
+  model there; embeddings and everything else stay on the server. File work in chats works too.
 - **Pause** (in Settings, or **Pause lending this PC** in the tray icon's menu) while gaming:
-  ComfyUI stops, and the queue shows "Waiting for <that PC>" until you carry on.
+  ComfyUI stops, chat models unload, and the queue shows "Waiting for <that PC>" until you carry
+  on. Chats using a lent-only model say that PC is paused; pick another model or carry on.
 - **Trainings** too: when the server's card is too small to train (under 16 GB), a lent PC with
   a 16 GB card can train instead. Click **Install ai-toolkit here** in the same panel. A
   training then runs on that PC (the first one downloads the base model there) and each

@@ -77,8 +77,12 @@ pub async fn list_models(State(state): State<AppState>, auth: Auth) -> ApiResult
         }
         Err(_) => Vec::new(),
     };
-    // The caller's personas, usable as `model: "persona:<slug>"` in /v1/chat/completions.
     let mut data = data;
+    // Models only on a lent PC (chat runs there).
+    for m in crate::lent::installed(&state).await.unwrap_or_default().into_iter().filter(|m| !m.here) {
+        data.push(ModelEntry { id: m.model, object: "model".into(), created: 0, owned_by: "ollama".into(), context_length });
+    }
+    // The caller's personas, usable as `model: "persona:<slug>"` in /v1/chat/completions.
     for p in outpost_core::personas::list(&state.pool, &auth.account.id).await? {
         data.push(ModelEntry {
             id: format!("persona:{}", p.slug),
@@ -149,7 +153,8 @@ pub struct ModelsOverview {
     pub hardware: Hardware,
     /// Curated models scored for this PC. Unfiltered Qwen models come first.
     pub catalog: Vec<CatalogEntry>,
-    /// What Ollama has installed, with its own capability badges.
+    /// What Ollama has installed, with its own capability badges, plus lent PCs' chat
+    /// models (`here` false; `lent` names the PC a model runs on).
     pub installed: Vec<InstalledModel>,
     /// Downloads running now, plus finished or failed ones since Outpost started.
     pub pulls: Vec<PullState>,
@@ -164,10 +169,9 @@ pub struct ModelsOverview {
     ))]
 pub async fn overview(State(state): State<AppState>, _auth: Auth) -> Json<ModelsOverview> {
     let hardware = measure(&state).await;
-    let (installed, ollama_running) = match state.models.installed().await {
-        Ok(list) => (list, true),
-        Err(_) => (Vec::new(), false),
-    };
+    let ollama_running = state.models.installed().await.is_ok();
+    // With lent PCs' chat models (each says where it runs).
+    let installed = crate::lent::installed(&state).await.unwrap_or_default();
     Json(ModelsOverview {
         catalog: catalog::build(&hardware),
         hardware,

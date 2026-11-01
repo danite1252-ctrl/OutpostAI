@@ -367,8 +367,7 @@ const MAX_TOOL_ROUNDS: usize = 12;
 /// One streamed request to Ollama: text and thinking go to the app as they come; the
 /// reply's tool calls are returned. `Err` when it failed before finishing.
 async fn stream_round(
-    client: &reqwest::Client,
-    url: &str,
+    state: &AppState,
     body: &serde_json::Value,
     tx: &tokio::sync::mpsc::Sender<Event>,
     content: &mut String,
@@ -376,8 +375,9 @@ async fn stream_round(
 ) -> (Vec<ToolCall>, Option<String>) {
     let mut calls = Vec::new();
     let mut failure = None;
-    match client.post(url).json(body).send().await {
-        Ok(resp) if resp.status().is_success() => {
+    // Here, or on a lent PC that runs this model.
+    match crate::lent::post(state, "/api/chat", body, None).await {
+        Ok(resp) if resp.ok() => {
             let mut stream = resp.bytes_stream();
             let mut buf: Vec<u8> = Vec::new();
             'read: while let Some(chunk) = stream.next().await {
@@ -414,10 +414,10 @@ async fn stream_round(
             }
         }
         Ok(resp) => {
-            let text = resp.text().await.unwrap_or_default();
+            let text = resp.text().await;
             failure = Some(format!("Ollama refused the request: {text}"));
         }
-        Err(_) => failure = Some("Ollama isn't running. Start it in Settings → Engines.".into()),
+        Err(e) => failure = Some(e),
     }
     (calls, failure)
 }
@@ -578,8 +578,7 @@ pub async fn send_message(
     let body_state = state.clone();
     let body_persona = persona.clone();
 
-    let url = format!("{}/api/chat", state.config.ollama_url.trim_end_matches('/'));
-    let client = state.llm.clone();
+    let round_state = state.clone();
     let pool = state.pool.clone();
     let chat_id = chat.id.clone();
     // For learning memories once the reply is done.
@@ -619,7 +618,7 @@ pub async fn send_message(
         }
         for round in 0..=MAX_TOOL_ROUNDS {
             let before = content.len();
-            let (calls, failed) = stream_round(&client, &url, &body, &tx, &mut content, &mut thinking).await;
+            let (calls, failed) = stream_round(&round_state, &body, &tx, &mut content, &mut thinking).await;
             failure = failed;
             let Some(w) = workspace.as_ref().filter(|_| failure.is_none() && !calls.is_empty()) else { break };
             if round == MAX_TOOL_ROUNDS {

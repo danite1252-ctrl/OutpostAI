@@ -135,6 +135,8 @@ use crate::routes::{
         crate::routes::folders::changes,
         crate::routes::folders::act,
         helpers::leave,
+        crate::lent::next,
+        crate::lent::reply,
         helpers::input,
         helpers::lora,
         helpers::progress,
@@ -177,6 +179,7 @@ use crate::routes::{
         training::delete_character,
     ),
     components(schemas(
+        crate::lent::LentRequest,
         ErrorBody,
         ErrorDetail,
         SignInResponse,

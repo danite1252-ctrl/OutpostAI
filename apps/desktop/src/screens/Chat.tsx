@@ -107,12 +107,18 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
   }, [messages, draft]);
 
   // Which models can see, to warn before sending an image to one that can't.
+  // A lent PC's model while that PC is off or paused: say so, rather than "not downloaded".
+  const [lentAway, setLentAway] = useState<{ model: string; pc: string }[]>([]);
   useEffect(() => {
     api.modelsOverview(token).then(
       (o) => setInstalled(o.installed),
       () => undefined,
     );
-  }, [token]);
+    api.helpers(token).then(
+      (hs) => setLentAway(hs.filter((h) => !h.online || h.paused).flatMap((h) => h.chat_models.map((model) => ({ model, pc: h.name })))),
+      () => undefined,
+    );
+  }, [token, activeId]);
 
   const active = chats.find((c) => c.id === activeId) ?? null;
   const chatFiles = useChatFiles(token, active?.id ?? null);
@@ -550,6 +556,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
             {missingModel && active && (
               <MissingModel
                 model={missingModel}
+                away={lentAway.find((a) => a.model === missingModel)?.pc ?? null}
                 personaName={active.model ? null : (persona?.name ?? null)}
                 choices={installed.filter((m) => !m.badges.includes("embedding")).map((m) => m.model)}
                 onPick={(m) => void pickModel(m)}
@@ -768,11 +775,14 @@ function Bubble({
 /** The model a chat needs isn't downloaded: pick one that is. */
 function MissingModel({
   model,
+  away,
   personaName,
   choices,
   onPick,
 }: {
   model: string;
+  /** The lent PC it runs on, which is off or paused now. */
+  away: string | null;
   personaName: string | null;
   choices: string[];
   onPick: (m: string) => void;
@@ -782,7 +792,8 @@ function MissingModel({
     <div className="flex flex-col gap-2 rounded-xl border border-amber/60 bg-raised px-3 py-2 text-sm" role="alert">
       <span>
         {personaName ? `${personaName} uses ` : "This chat uses "}
-        <b>{model}</b>, which isn't downloaded{SERVER ? " on the server" : " here"}.{" "}
+        <b>{model}</b>
+        {away ? `, which runs on ${away}: that PC is off or paused right now.` : `, which isn't downloaded${SERVER ? " on the server" : " here"}.`}{" "}
         {choices.length ? `Pick another${personaName ? ` for ${personaName}` : ""}, or get it in Models.` : "Get a chat model in Models first."}
       </span>
       {choices.length > 0 && (

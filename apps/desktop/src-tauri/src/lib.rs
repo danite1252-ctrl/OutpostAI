@@ -117,15 +117,18 @@ fn start_helper(app: &AppHandle) {
     let settings = read_settings();
     let enabled = settings["helper"].as_bool().unwrap_or(false);
     let paused = settings["helper_paused"].as_bool().unwrap_or(false);
+    // Lending for chat too (on unless switched off).
+    let chat = settings["helper_chat"].as_bool().unwrap_or(true);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         // This PC's own Outpost folder (its ComfyUI and models), even in a test build.
         let dir = Config::local_default().data_dir;
-        match HelperPc::new(&dir, enabled, paused).await {
+        match HelperPc::new(&dir, enabled, paused, chat).await {
             Ok(pc) => {
                 let _ = ENGINES.set(pc.engines());
                 let _ = HELPER.set(pc.clone());
                 set_tray_pause(&app, enabled, paused);
+                tauri::async_runtime::spawn(pc.clone().run_chat(ThroughTunnel));
                 pc.run(ThroughTunnel).await;
             }
             Err(e) => tracing::warn!(error = %e, "couldn't set up this PC as a helper"),
@@ -151,6 +154,45 @@ fn set_helper(app: AppHandle, enabled: bool, paused: bool) -> Result<(), String>
     save_setting("helper_paused", paused)?;
     set_tray_pause(&app, enabled, paused);
     Ok(())
+}
+
+/// Lend this PC for chat too: the server runs chats with this PC's Ollama models here.
+#[tauri::command]
+fn set_helper_chat(on: bool) -> Result<(), String> {
+    helper()?.set_chat(on);
+    save_setting("helper_chat", on)
+}
+
+/// Chat models on this PC (Ollama here), and downloads into it.
+#[derive(Serialize)]
+struct HelperChatModels {
+    installed: Vec<outpost_engines::models::InstalledModel>,
+    catalog: Vec<outpost_engines::catalog::CatalogEntry>,
+    pulls: Vec<outpost_engines::models::PullState>,
+}
+
+#[tauri::command]
+async fn helper_chat_models() -> Result<HelperChatModels, String> {
+    let h = helper()?;
+    Ok(HelperChatModels { installed: h.chat_models().await, catalog: h.chat_catalog().await, pulls: h.chat_pulls() })
+}
+
+/// Download a chat model onto this PC.
+#[tauri::command]
+fn helper_pull_chat_model(model: String) -> Result<(), String> {
+    helper()?.pull_chat_model(&model).map_err(|e| format!("{e:#}"))
+}
+
+/// Delete a chat model from this PC.
+#[tauri::command]
+async fn helper_remove_chat_model(model: String) -> Result<(), String> {
+    helper()?.remove_chat_model(&model).await.map_err(|e| format!("{e:#}"))
+}
+
+/// Install Ollama on this PC, for chat.
+#[tauri::command]
+fn helper_install_ollama() -> Result<(), String> {
+    helper()?.install_ollama().map_err(|e| format!("{e:#}"))
 }
 
 /// Every workflow, as this PC sees it (downloaded here, fits this card).
@@ -827,6 +869,11 @@ pub fn run() {
             helper_install_pack,
             helper_install_comfyui,
             helper_install_trainer,
+            set_helper_chat,
+            helper_chat_models,
+            helper_pull_chat_model,
+            helper_remove_chat_model,
+            helper_install_ollama,
             save_download,
             show_in_folder,
             pc_folders::pc_folders,

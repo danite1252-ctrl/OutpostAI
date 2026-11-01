@@ -108,7 +108,11 @@ export default function Models({
   }, [refresh, downloading, ollamaState]);
 
   // Ollama may report a tag in other capitals (e.g. E4b-qat): compare names ignoring case.
-  const installedSet = useMemo(() => new Set(data?.installed.map((m) => m.model.toLowerCase())), [data]);
+  // Downloaded on the Outpost (lent PCs' models are listed apart).
+  const installedSet = useMemo(
+    () => new Set(data?.installed.filter((m) => m.here !== false).map((m) => m.model.toLowerCase())),
+    [data],
+  );
   const installedNames = useMemo(() => ({ has: (m: string) => installedSet.has(m.toLowerCase()) }), [installedSet]);
   const pullFor = (model: string) => data?.pulls.find((p) => p.model === model);
 
@@ -140,7 +144,9 @@ export default function Models({
   };
 
   const catalogNames = new Set(data?.catalog.map((e) => e.model.toLowerCase()));
-  const extraInstalled = data?.installed.filter((m) => !catalogNames.has(m.model.toLowerCase())) ?? [];
+  const extraInstalled = data?.installed.filter((m) => m.here !== false && !catalogNames.has(m.model.toLowerCase())) ?? [];
+  const lentOnly = data?.installed.filter((m) => m.here === false) ?? [];
+  const lentShared = data?.installed.filter((m) => m.here !== false && m.lent) ?? [];
   const ollamaUp = data?.ollama_running ?? false;
 
   return (
@@ -220,6 +226,22 @@ export default function Models({
           <ul className="overflow-hidden rounded-2xl border border-line">
             {extraInstalled.map((m) => (
               <InstalledRow key={m.model} m={m} canManage={canManage} onRemove={() => void act("remove", m.model)} />
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {(lentOnly.length > 0 || lentShared.length > 0) && (filter === "all" || filter === "installed") && (
+        <div className="flex flex-col gap-3">
+          <h2 className="text-lg font-semibold">On a lent PC</h2>
+          <p className="text-sm text-muted">
+            Chats with these run on the PC lending its card (they're downloaded and removed there, in Settings › Server
+            on that PC). While it's paused or off, they aren't available
+            {lentShared.length ? "; ones also downloaded here run here instead" : ""}.
+          </p>
+          <ul className="overflow-hidden rounded-2xl border border-line">
+            {[...lentOnly, ...lentShared].map((m) => (
+              <InstalledRow key={m.model} m={m} canManage={false} onRemove={() => undefined} />
             ))}
           </ul>
         </div>
@@ -395,7 +417,7 @@ function InstalledRow({ m, canManage, onRemove }: { m: InstalledModel; canManage
       <span className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="font-mono text-sm">{m.model}</span>
         <span className="flex flex-wrap items-center gap-2 text-xs text-muted">
-          {[m.parameter_size, m.quantization, bytes(m.size_bytes)].filter(Boolean).join(" · ")}
+          {[m.parameter_size, m.quantization, bytes(m.size_bytes), m.lent ? `runs on ${m.lent}` : null].filter(Boolean).join(" · ")}
           <Badges badges={m.badges} />
         </span>
       </span>

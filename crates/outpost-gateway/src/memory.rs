@@ -200,18 +200,10 @@ pub async fn learn(state: AppState, ex: Exchange) {
     if can_think {
         body["think"] = json!(false);
     }
-    let url = format!("{}/api/chat", state.config.ollama_url.trim_end_matches('/'));
-    let Ok(resp) = state
-        .llm
-        .post(&url)
-        .timeout(Duration::from_secs(120))
-        .json(&body)
-        .send()
-        .await
-    else {
+    let Ok(resp) = crate::lent::post(&state, "/api/chat", &body, Some(Duration::from_secs(120))).await else {
         return;
     };
-    let Ok(answer) = resp.json::<ChatResponse>().await else {
+    let Ok(Ok(answer)) = tokio::time::timeout(Duration::from_secs(120), resp.json::<ChatResponse>()).await else {
         return;
     };
     let content = answer.message.map(|m| m.content).unwrap_or_default();

@@ -44,7 +44,8 @@ pub async fn resolve_model(
         ));
     }
     let wanted = chat_model.or_else(|| persona.and_then(|p| p.model.as_deref()));
-    let installed = state.models.installed().await.map_err(|_| {
+    // The server's models, and lent PCs' (chat runs there).
+    let installed = crate::lent::installed(state).await.map_err(|_| {
         ApiError::new(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "ollama_offline",
@@ -53,6 +54,14 @@ pub async fn resolve_model(
     })?;
     let chosen = match wanted {
         Some(m) => installed.iter().find(|i| i.model == m).ok_or_else(|| {
+            // On a lent PC that's off or paused?
+            if let Some(h) = state.helpers.all().into_iter().find(|h| h.chat && h.chat_models.iter().any(|x| x.model == m)) {
+                return ApiError::new(
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    "lent_pc_away",
+                    format!("{m} runs on {}, which is off or paused right now. Pick another model, or carry on lending there.", h.name),
+                );
+            }
             ApiError::new(
                 axum::http::StatusCode::BAD_REQUEST,
                 "model_missing",
@@ -300,16 +309,8 @@ async fn summarise(
     if can_think {
         body["think"] = json!(false);
     }
-    let url = format!("{}/api/chat", state.config.ollama_url.trim_end_matches('/'));
-    let resp = state
-        .llm
-        .post(&url)
-        .timeout(std::time::Duration::from_secs(180))
-        .json(&body)
-        .send()
-        .await
-        .ok()?;
-    let answer: Value = resp.json().await.ok()?;
+    let resp = crate::lent::post(state, "/api/chat", &body, Some(std::time::Duration::from_secs(180))).await.ok()?;
+    let answer: Value = tokio::time::timeout(std::time::Duration::from_secs(180), resp.json()).await.ok()?.ok()?;
     let text = answer["message"]["content"].as_str()?.trim().to_string();
     (!text.is_empty()).then_some(text)
 }
@@ -330,7 +331,13 @@ pub async fn fit_history(
     let mut recent: Vec<Message> = history.into_iter().filter(|m| m.seq > upto).collect();
     // About 55% of the window for the conversation; the rest is the persona, memories,
     // summary and room for the reply.
-    let window = outpost_engines::versions::context_length_for(crate::routes::models::measure(state).await.vram_mb) as usize;
+    // The window Ollama runs with on the card that answers: a lent PC's bigger card has room
+    // for a longer chat.
+    let vram_mb = match crate::lent::runs_on(state, model).await {
+        Some(pc) => pc.vram_mb,
+        None => crate::routes::models::measure(state).await.vram_mb,
+    };
+    let window = outpost_engines::versions::context_length_for(vram_mb) as usize;
     let budget = (window * 55 / 100).saturating_sub(system.chars().count() / 3 + summary.as_deref().map_or(0, |s| s.len() / 3));
     if let Some(n) = plan_fold(&recent, budget.max(1024)) {
         let folding = &recent[..n];

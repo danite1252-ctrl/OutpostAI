@@ -62,12 +62,20 @@ pub struct Helper {
     pub paused: bool,
     /// ai-toolkit is installed there and its card is big enough to train.
     pub trainer: bool,
+    /// Lends its card for chat too: the chat models in its Ollama (see [`crate::lent`]).
+    pub chat: bool,
+    pub chat_models: Vec<outpost_engines::models::InstalledModel>,
     pub last_seen: Instant,
 }
 
 impl Helper {
     pub fn online(&self) -> bool {
         self.last_seen.elapsed() < ONLINE_FOR
+    }
+
+    /// Online, not paused, and lending its card for chat.
+    pub fn lends_chat(&self) -> bool {
+        self.chat && self.online() && !self.paused
     }
 
     /// Can it run this pack: downloaded there, and within its card's memory.
@@ -101,6 +109,17 @@ impl Helpers {
     pub fn for_training(&self) -> Option<Helper> {
         let mut able: Vec<Helper> = self.all().into_iter().filter(|h| h.trainer).collect();
         able.sort_by_key(|h| (!(h.online() && !h.paused), std::cmp::Reverse(h.vram_mb)));
+        able.into_iter().next()
+    }
+
+    /// The lent PC that runs chats with `model` now (the biggest card that has it), if any.
+    pub fn for_model(&self, model: &str) -> Option<Helper> {
+        let mut able: Vec<Helper> = self
+            .all()
+            .into_iter()
+            .filter(|h| h.lends_chat() && h.chat_models.iter().any(|m| m.model == model))
+            .collect();
+        able.sort_by_key(|h| std::cmp::Reverse(h.vram_mb));
         able.into_iter().next()
     }
 
@@ -188,6 +207,26 @@ pub struct PollRequest {
     /// ai-toolkit is installed on the helper (it trains if its card is big enough).
     #[serde(default)]
     pub can_train: bool,
+    /// Lending for chat: runs chats for the models in `chat_models` (its Ollama's).
+    #[serde(default)]
+    pub chat: bool,
+    /// Its Ollama's models, as `/api/models` lists them (unknown badges are ignored).
+    #[serde(default)]
+    #[schema(value_type = Vec<Object>)]
+    pub chat_models: Vec<Value>,
+}
+
+/// A lent PC's models; a badge this server doesn't know (a newer app) is left off, and an
+/// entry it can't read is skipped, rather than refusing the check-in.
+fn chat_models_from(list: Vec<Value>) -> Vec<outpost_engines::models::InstalledModel> {
+    list.into_iter()
+        .filter_map(|mut v| {
+            if let Some(badges) = v.get_mut("badges").and_then(Value::as_array_mut) {
+                badges.retain(|b| serde_json::from_value::<outpost_engines::catalog::Badge>(b.clone()).is_ok());
+            }
+            serde_json::from_value(v).ok()
+        })
+        .collect()
 }
 
 /// A job for a helper to run.
@@ -239,6 +278,8 @@ pub async fn poll(State(state): State<AppState>, auth: Auth, Json(req): Json<Pol
         ready: req.ready_packs.into_iter().filter(|p| packs::find(p).is_some()).collect(),
         paused: req.paused,
         trainer: req.can_train && req.vram_mb >= TRAIN_MIN_MB,
+        chat: req.chat,
+        chat_models: chat_models_from(req.chat_models),
         last_seen: Instant::now(),
     };
     state.helpers.put(helper.clone());
@@ -468,6 +509,7 @@ const TRAINING_FILE_MAX: u64 = 4 * 1024 * 1024 * 1024;
     responses((status = 204, description = "Forgotten"), (status = 403, description = "Not an owner", body = ErrorBody)))]
 pub async fn leave(State(state): State<AppState>, auth: Auth) -> ApiResult<StatusCode> {
     require_helper(&auth)?;
+    state.lent_chat.drop_helper(&auth.session.id);
     if let Some(h) = state.helpers.remove(&auth.session.id) {
         tracing::info!(helper = %h.name, "a helper PC stopped lending");
         state.queue.wake.notify_one();
@@ -683,6 +725,8 @@ pub struct HelperView {
     pub ready: Vec<String>,
     /// What it's making now (the job's pack), if anything.
     pub busy_with: Option<String>,
+    /// The chat models it runs (lending for chat), else empty.
+    pub chat_models: Vec<String>,
 }
 
 /// The helper PCs (everyone may see them: "Waiting for Dan's PC").
@@ -699,6 +743,7 @@ pub async fn list(State(state): State<AppState>, _auth: Auth) -> Json<Vec<Helper
             online: h.online(),
             paused: h.paused,
             vram_mb: h.vram_mb,
+            chat_models: if h.chat { h.chat_models.iter().map(|m| m.model.clone()).collect() } else { Vec::new() },
             ready: h.ready,
             name: h.name,
         })

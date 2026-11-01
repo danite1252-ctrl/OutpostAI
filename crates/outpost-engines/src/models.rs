@@ -22,6 +22,16 @@ pub struct InstalledModel {
     pub family: Option<String>,
     /// From Ollama's own capability list for this model.
     pub badges: Vec<Badge>,
+    /// Downloaded on the Outpost itself (not only on a lent PC).
+    #[serde(default = "yes")]
+    pub here: bool,
+    /// The lent PC that runs it (its name), when it runs there rather than on the Outpost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lent: Option<String>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -184,6 +194,8 @@ impl ModelStore {
                 quantization: m.details.quantization_level,
                 family: m.details.family,
                 badges,
+                here: true,
+                lent: None,
             });
         }
         out.sort_by(|a, b| a.model.cmp(&b.model));

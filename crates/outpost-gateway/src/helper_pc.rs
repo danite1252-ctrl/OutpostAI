@@ -11,12 +11,17 @@
 //! run: it fetches the pictures and captions, trains here, and sends each checkpoint and test
 //! picture back as it's saved (see [`crate::helpers`]).
 //!
+//! **Chat**: lending for chat too, it runs the server's chats for the models in this PC's
+//! Ollama (see [`crate::lent`]): it asks the server for chat requests, runs each against its
+//! Ollama here, and streams the answer back.
+//!
 //! **Paused** (e.g. while gaming) it takes no jobs and stops ComfyUI, so the card is free. A
-//! training running then stops too; the checkpoints already sent are kept.
+//! training running then stops too; the checkpoints already sent are kept. Ollama here unloads
+//! its models and chats go back to the server's own models.
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -64,6 +69,19 @@ pub struct HelperStatus {
     pub trainer_ready: bool,
     /// Outpost's own install of ai-toolkit here.
     pub trainer: Option<outpost_engines::TrainerInstall>,
+    /// Lending for chat too.
+    pub chat: bool,
+    /// Ollama is installed here.
+    pub ollama: bool,
+    /// Ollama is answering here.
+    pub ollama_running: bool,
+    pub ollama_installing: bool,
+    pub ollama_error: Option<String>,
+    /// Chat models in Ollama here (the server may run chats with them).
+    pub chat_models: Vec<String>,
+    /// Chat replies running here now, and finished since the app started.
+    pub chatting: u32,
+    pub chats: u32,
 }
 
 /// A workflow as this PC sees it.
@@ -82,8 +100,13 @@ pub struct HelperPc {
     local: AppState,
     enabled: AtomicBool,
     paused: AtomicBool,
+    chat: AtomicBool,
     status: Mutex<HelperStatus>,
     wake: Notify,
+    wake_chat: Notify,
+    /// The sign-in the server took last (chat asks with it too).
+    token: Mutex<Option<String>>,
+    chatting: AtomicU32,
 }
 
 /// Where the server is and who to sign in as (an owner's paired-device token; the first
@@ -129,7 +152,7 @@ struct ProgressReply {
 
 impl HelperPc {
     /// This PC's Outpost data folder (where its ComfyUI and models are).
-    pub async fn new(data_dir: &Path, enabled: bool, paused: bool) -> anyhow::Result<Arc<Self>> {
+    pub async fn new(data_dir: &Path, enabled: bool, paused: bool, chat: bool) -> anyhow::Result<Arc<Self>> {
         let pool = outpost_core::db::open_in_memory().await?;
         let mut config = Config::local_default();
         config.data_dir = data_dir.to_path_buf();
@@ -138,8 +161,12 @@ impl HelperPc {
             local,
             enabled: AtomicBool::new(enabled),
             paused: AtomicBool::new(paused),
-            status: Mutex::new(HelperStatus { enabled, paused, state: "off".into(), ..Default::default() }),
+            chat: AtomicBool::new(chat),
+            status: Mutex::new(HelperStatus { enabled, paused, chat, state: "off".into(), ..Default::default() }),
             wake: Notify::new(),
+            wake_chat: Notify::new(),
+            token: Mutex::new(None),
+            chatting: AtomicU32::new(0),
         }))
     }
 
@@ -156,6 +183,15 @@ impl HelperPc {
             s.paused = paused;
         });
         self.wake.notify_one();
+        self.wake_chat.notify_one();
+    }
+
+    /// Lend this PC for chat too (while lending).
+    pub fn set_chat(&self, on: bool) {
+        self.chat.store(on, Ordering::Relaxed);
+        self.edit(|s| s.chat = on);
+        self.wake.notify_one();
+        self.wake_chat.notify_one();
     }
 
     pub fn status(&self) -> HelperStatus {
@@ -218,8 +254,13 @@ impl HelperPc {
 
     /// ComfyUI here: installed, installing, and the last install's error.
     async fn comfyui_here(&self) -> (bool, bool, Option<String>) {
+        self.engine_here(EngineId::Comfyui).await
+    }
+
+    /// An engine here: installed, installing, and the last install's error.
+    async fn engine_here(&self, id: EngineId) -> (bool, bool, Option<String>) {
         let status = self.local.engines.status().await;
-        match status.engines.into_iter().find(|e| e.id == EngineId::Comfyui) {
+        match status.engines.into_iter().find(|e| e.id == id) {
             Some(e) => (
                 matches!(e.state, EngineState::Stopped | EngineState::Starting | EngineState::Running | EngineState::External)
                     || (e.state == EngineState::Error && e.managed),
@@ -227,6 +268,92 @@ impl HelperPc {
                 e.error.filter(|_| e.state == EngineState::Error),
             ),
             None => (false, false, None),
+        }
+    }
+
+    /// Install Ollama here, for chat (in the background).
+    pub fn install_ollama(&self) -> anyhow::Result<()> {
+        self.local.engines.install(EngineId::Ollama).map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    /// The chat models in Ollama here (empty when it isn't running).
+    pub async fn chat_models(&self) -> Vec<outpost_engines::models::InstalledModel> {
+        self.local.models.installed().await.unwrap_or_default()
+    }
+
+    /// Chat models worth getting here, scored for this PC's card.
+    pub async fn chat_catalog(&self) -> Vec<outpost_engines::catalog::CatalogEntry> {
+        let hw = crate::routes::models::measure_cached(&self.local).await;
+        outpost_engines::catalog::build(&hw)
+            .into_iter()
+            .filter(|e| e.category != outpost_engines::catalog::Category::Embedding)
+            .collect()
+    }
+
+    /// Downloads into Ollama here, running or finished.
+    pub fn chat_pulls(&self) -> Vec<outpost_engines::models::PullState> {
+        self.local.models.pull_states()
+    }
+
+    /// Download a chat model into Ollama here (in the background).
+    pub fn pull_chat_model(&self, model: &str) -> anyhow::Result<()> {
+        self.local.models.pull(model).map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// Delete a chat model from Ollama here.
+    pub async fn remove_chat_model(&self, model: &str) -> anyhow::Result<()> {
+        self.local.models.remove(model).await.map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// Ollama here, started if it's installed and stopped; its chat models (none if it isn't
+    /// answering yet).
+    async fn ollama_here(&self, start: bool) -> Vec<outpost_engines::models::InstalledModel> {
+        let (installed, installing, error) = self.engine_here(EngineId::Ollama).await;
+        let models = self.local.models.installed().await;
+        let running = models.is_ok();
+        if !running && start && installed && !installing {
+            let _ = self.local.engines.start(EngineId::Ollama);
+        }
+        let list = models.unwrap_or_default();
+        let names: Vec<String> = list
+            .iter()
+            .filter(|m| !m.badges.contains(&outpost_engines::catalog::Badge::Embedding))
+            .map(|m| m.model.clone())
+            .collect();
+        self.edit(|s| {
+            s.ollama = installed || running;
+            s.ollama_running = running;
+            s.ollama_installing = installing;
+            s.ollama_error = error;
+            s.chat_models = names;
+        });
+        list
+    }
+
+    /// Unload Ollama's models here, so the card is free (paused, or no longer lending chat).
+    async fn free_ollama(&self) {
+        let base = self.local.config.ollama_url.trim_end_matches('/').to_string();
+        #[derive(Deserialize)]
+        struct Ps {
+            #[serde(default)]
+            models: Vec<Loaded>,
+        }
+        #[derive(Deserialize)]
+        struct Loaded {
+            name: String,
+        }
+        let Ok(resp) = self.local.http.get(format!("{base}/api/ps")).send().await else { return };
+        let Ok(ps) = resp.json::<Ps>().await else { return };
+        for m in ps.models {
+            let _ = self
+                .local
+                .http
+                .post(format!("{base}/api/generate"))
+                .json(&json!({ "model": m.name, "keep_alive": 0 }))
+                .send()
+                .await;
         }
     }
 
@@ -251,9 +378,16 @@ impl HelperPc {
         // The server may know this PC as a helper (it checked in since lending was switched on,
         // or lent before the app started): switched off, it's told once.
         let mut lent = true;
+        // Ollama here had chats to answer (its models get unloaded when that stops).
+        let mut chat_was_on = false;
         loop {
             let enabled = self.enabled.load(Ordering::Relaxed);
             let paused = self.paused.load(Ordering::Relaxed);
+            let chat_on = enabled && !paused && self.chat.load(Ordering::Relaxed);
+            if chat_was_on && !chat_on {
+                self.free_ollama().await;
+            }
+            chat_was_on = chat_on;
             if !enabled {
                 self.say("off", None);
                 if was_working {
@@ -299,20 +433,27 @@ impl HelperPc {
                 s.trainer_ready = can_train;
                 s.trainer = Some(trainer_install);
             });
-            let body = json!({"vram_mb": hw.vram_mb, "ram_mb": hw.ram_mb, "ready_packs": ready, "paused": paused, "can_train": can_train});
+            // Chat: Ollama's models here (it's started if need be).
+            let chat_models = if self.chat.load(Ordering::Relaxed) { self.ollama_here(chat_on).await } else { Vec::new() };
+            let body = json!({
+                "vram_mb": hw.vram_mb, "ram_mb": hw.ram_mb, "ready_packs": ready, "paused": paused, "can_train": can_train,
+                "chat": chat_on && !chat_models.is_empty(), "chat_models": chat_models,
+            });
 
             let answer = self.check_in(&client, &server, &mut token, &body).await;
             if answer.is_ok() {
                 lent = true;
+                *self.token.lock().unwrap_or_else(|p| p.into_inner()) = token.clone();
+                self.wake_chat.notify_one();
             }
             match answer {
                 Err(problem) => self.say("problem", Some(problem)),
                 Ok(None) => {
                     let waiting = if paused {
                         ("paused", Some("Paused: not taking jobs, and ComfyUI is stopped.".to_string()))
-                    } else if !comfyui && !can_train {
+                    } else if !comfyui && !can_train && chat_models.is_empty() {
                         ("ready", Some("ComfyUI isn't installed on this PC yet.".to_string()))
-                    } else if ready.is_empty() && !can_train {
+                    } else if ready.is_empty() && !can_train && chat_models.is_empty() {
                         ("ready", Some("No workflows are downloaded on this PC yet.".to_string()))
                     } else {
                         ("ready", None)
@@ -341,6 +482,74 @@ impl HelperPc {
             }
             let _ = tokio::time::timeout(EVERY, self.wake.notified()).await;
         }
+    }
+
+    /// Answer the server's chat requests with Ollama here, while lending for chat, until the
+    /// app closes (alongside [`Self::run`], which keeps the server told what's here).
+    pub async fn run_chat(self: Arc<Self>, server: impl Server) {
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .expect("HTTP client");
+        loop {
+            let on = self.enabled.load(Ordering::Relaxed)
+                && !self.paused.load(Ordering::Relaxed)
+                && self.chat.load(Ordering::Relaxed)
+                && self.status().ollama_running;
+            let token = self.token.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            let (true, Some(token)) = (on, token) else {
+                let _ = tokio::time::timeout(EVERY, self.wake_chat.notified()).await;
+                continue;
+            };
+            let base = server.url();
+            let asked = client
+                .post(format!("{base}/api/helpers/chat/next"))
+                .bearer_auth(&token)
+                .timeout(Duration::from_secs(40))
+                .send()
+                .await;
+            match asked {
+                Ok(r) if r.status().as_u16() == 200 => match r.json::<crate::lent::LentRequest>().await {
+                    Ok(req) => {
+                        let me = self.clone();
+                        let client = client.clone();
+                        tokio::spawn(async move { me.answer(&client, &base, &token, req).await });
+                    }
+                    Err(_) => tokio::time::sleep(Duration::from_secs(2)).await,
+                },
+                Ok(r) if r.status().as_u16() == 204 => {}
+                // An older server (no chat on helpers), or it can't be reached: try again soon.
+                _ => tokio::time::sleep(EVERY).await,
+            }
+        }
+    }
+
+    /// Run one chat request against Ollama here and stream its answer to the server. If the
+    /// server stops reading (the reply was stopped), the upload ends and so does Ollama's work.
+    async fn answer(&self, client: &reqwest::Client, base: &str, token: &str, req: crate::lent::LentRequest) {
+        let n = self.chatting.fetch_add(1, Ordering::Relaxed) + 1;
+        self.edit(|s| s.chatting = n);
+        let url = format!("{}{}", self.local.config.ollama_url.trim_end_matches('/'), req.path);
+        let (status, body) = match client.post(&url).json(&req.body).send().await {
+            Ok(r) => (r.status().as_u16(), reqwest::Body::wrap_stream(r.bytes_stream())),
+            Err(e) => (503, reqwest::Body::from(json!({ "error": format!("Ollama isn't answering on the lent PC: {e}") }).to_string())),
+        };
+        let sent = client
+            .post(format!("{base}/api/helpers/chat/{}/reply", req.id))
+            .bearer_auth(token)
+            .header("x-ollama-status", status.to_string())
+            .body(body)
+            .send()
+            .await;
+        if let Err(e) = sent {
+            tracing::debug!(error = %e, "a chat reply from this PC ended early");
+        }
+        let n = self.chatting.fetch_sub(1, Ordering::Relaxed).saturating_sub(1);
+        self.edit(|s| {
+            s.chatting = n;
+            s.chats += 1;
+        });
     }
 
     /// Tell the server this PC stopped lending. True when it heard (or there's nobody to tell).

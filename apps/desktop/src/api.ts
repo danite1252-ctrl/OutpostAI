@@ -217,6 +217,10 @@ export interface InstalledModel {
   quantization: string | null;
   family: string | null;
   badges: Badge[];
+  /** Downloaded on the Outpost itself (false: only on a lent PC). */
+  here?: boolean;
+  /** The lent PC it runs on (its name), when not the Outpost. */
+  lent?: string | null;
 }
 
 export interface PullState {
@@ -744,6 +748,9 @@ export const api = {
     request<void>("PUT", `/api/accounts/${encodeURIComponent(id)}/secret`, { token, body: { secret } }),
   models: (token: string) => request<{ object: "list"; data: ModelEntry[] }>("GET", "/v1/models", { token }),
   modelsOverview: (token: string) => request<ModelsOverview>("GET", "/api/models", { token }),
+  /** PCs lending their card (and the chat models each runs). */
+  helpers: (token: string) =>
+    request<{ name: string; online: boolean; paused: boolean; chat_models: string[] }[]>("GET", "/api/helpers", { token }),
   pullModel: (token: string, model: string) => request<void>("POST", "/api/models/pull", { token, body: { model } }),
   removeModel: (token: string, model: string) =>
     request<void>("POST", "/api/models/remove", { token, body: { model } }),

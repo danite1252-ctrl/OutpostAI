@@ -216,7 +216,7 @@ async fn this_pc_checks_in_as_a_helper() {
         }
     }
     let dir = std::env::temp_dir().join(format!("outpost-helper-pc-{}", std::process::id()));
-    let pc = HelperPc::new(&dir, true, false).await.unwrap();
+    let pc = HelperPc::new(&dir, true, false, false).await.unwrap();
     tokio::spawn(pc.clone().run(To(format!("http://{addr}"), vec!["op_not_a_real_token".into(), dan.clone()])));
 
     let wait_for = |want: &'static str| {
@@ -282,4 +282,67 @@ async fn a_gallery_picture_goes_to_a_picture_tool() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(resp.into_body().collect().await.unwrap().to_bytes().to_vec(), png);
+}
+
+#[tokio::test]
+async fn chats_with_a_lent_pcs_model_run_there() {
+    let (app, state) = app().await;
+    let dan = owner(&app).await;
+
+    // The PC lends for chat, with a model the server doesn't have.
+    let mut checkin = poll(false);
+    checkin["chat"] = json!(true);
+    checkin["chat_models"] = json!([{
+        "model": "big:14b", "size_bytes": 9000000000u64, "parameter_size": "14B",
+        "quantization": "Q4_K_M", "family": "qwen3", "badges": ["completion", "tools"]
+    }]);
+    let (status, _) = call(&app, "POST", "/api/helpers/poll", &dan, Some(checkin)).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // It's in the model list, marked as running there.
+    let (_, models) = call(&app, "GET", "/api/models", &dan, None).await;
+    let big = models["installed"].as_array().unwrap().iter().find(|m| m["model"] == "big:14b").expect("listed").clone();
+    assert_eq!(big["here"], false);
+    // A badge this server doesn't know is left off; the rest are kept.
+    assert_eq!(big["badges"], json!(["tools"]));
+    assert!(big["lent"].is_string());
+    let (_, helpers) = call(&app, "GET", "/api/helpers", &dan, None).await;
+    assert_eq!(helpers[0]["chat_models"], json!(["big:14b"]));
+
+    // A chat request for it waits for the PC, which answers as Ollama would.
+    let asking = state.clone();
+    let reply = tokio::spawn(async move {
+        let body = json!({ "model": "big:14b", "stream": false, "messages": [{ "role": "user", "content": "hi" }] });
+        let r = outpost_gateway::lent::post(&asking, "/api/chat", &body, None).await?;
+        assert!(r.ok());
+        r.json::<Value>().await
+    });
+    let (status, req) = call(&app, "POST", "/api/helpers/chat/next", &dan, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(req["path"], "/api/chat");
+    assert_eq!(req["body"]["model"], "big:14b");
+    // Sized for the lent PC's 24 GB card.
+    assert_eq!(req["body"]["options"]["num_ctx"], 65536);
+    let id = req["id"].as_str().unwrap().to_string();
+    let answer = Request::builder()
+        .method("POST")
+        .uri(format!("/api/helpers/chat/{id}/reply"))
+        .header(header::AUTHORIZATION, format!("Bearer {dan}"))
+        .header("x-ollama-status", "200")
+        .body(Body::from(json!({ "message": { "role": "assistant", "content": "Hello from the PC" }, "done": true }).to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(answer).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let got = reply.await.unwrap().unwrap();
+    assert_eq!(got["message"]["content"], "Hello from the PC");
+
+    // Nobody else's answer is taken, and an answer nobody waits for is refused.
+    let (status, _) = call(&app, "POST", &format!("/api/helpers/chat/{id}/reply"), &dan, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Paused: its models leave the list, and asking for one says where it is.
+    let (status, _) = call(&app, "POST", "/api/helpers/poll", &dan, Some(poll(true))).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, models) = call(&app, "GET", "/api/models", &dan, None).await;
+    assert!(!models["installed"].as_array().unwrap().iter().any(|m| m["model"] == "big:14b"));
 }

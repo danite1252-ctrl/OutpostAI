@@ -290,6 +290,7 @@ function PersonaEditor({
             {models.map((m) => (
               <option key={m.model} value={m.model}>
                 {m.model}
+                {m.lent ? ` (runs on ${m.lent})` : ""}
               </option>
             ))}
           </select>
