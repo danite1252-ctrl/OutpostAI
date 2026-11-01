@@ -24,6 +24,8 @@ pub struct Resolved {
     pub can_think: bool,
     /// Accepts images.
     pub can_see: bool,
+    /// Can call tools (needed to work with a chat's files).
+    pub can_use_tools: bool,
 }
 
 /// Pick the model: the chat's override, else the persona's, else the first
@@ -72,6 +74,7 @@ pub async fn resolve_model(
         model: chosen.model.clone(),
         can_think: chosen.badges.contains(&Badge::Thinking),
         can_see: chosen.badges.contains(&Badge::Vision),
+        can_use_tools: chosen.badges.contains(&Badge::Tools),
     })
 }
 
@@ -458,6 +461,7 @@ mod tests {
             created_at: 0,
             attachments: Vec::new(),
             sources: Vec::new(),
+            files: Vec::new(),
         }
     }
 

@@ -16,6 +16,13 @@ pub struct Chat {
     pub model: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// How replies change files in the chat's folders: `ask` (wait for Apply) or `auto`.
+    #[serde(default = "ask")]
+    pub file_mode: String,
+}
+
+fn ask() -> String {
+    "ask".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
@@ -39,9 +46,13 @@ pub struct Message {
     #[sqlx(skip)]
     #[serde(default)]
     pub sources: Vec<crate::documents::Source>,
+    /// What the reply did with files in the chat's folders.
+    #[sqlx(skip)]
+    #[serde(default)]
+    pub files: Vec<crate::chat_files::FileAction>,
 }
 
-const CHAT_COLS: &str = "id, account_id, persona_id, title, model, created_at, updated_at";
+const CHAT_COLS: &str = "id, account_id, persona_id, title, model, created_at, updated_at, file_mode";
 
 /// "Untitled chat", or the start of the first message.
 pub fn title_from(text: &str) -> String {
@@ -96,6 +107,7 @@ pub async fn create(
         model: None,
         created_at: t,
         updated_at: t,
+        file_mode: "ask".into(),
     };
     sqlx::query(
         "INSERT INTO chats (id, account_id, persona_id, title, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -176,7 +188,11 @@ pub async fn messages(pool: &SqlitePool, chat_id: &str) -> CoreResult<Vec<Messag
     .await?;
     let mut files = crate::attachments::for_chat(pool, chat_id).await?;
     let mut sources = crate::documents::sources_for_chat(pool, chat_id).await?;
+    let mut actions = crate::chat_files::actions_for_chat(pool, chat_id).await?;
     for m in &mut list {
+        if let Some(f) = actions.remove(&m.id) {
+            m.files = f;
+        }
         if let Some(a) = files.remove(&m.id) {
             m.attachments = a;
         }
@@ -241,6 +257,7 @@ pub async fn add_message(
         created_at: t,
         attachments: Vec::new(),
         sources: Vec::new(),
+        files: Vec::new(),
     };
     // One statement, so it waits its turn if something else is writing (a read-then-
     // write transaction would fail instead, e.g. while the job queue starts a job).

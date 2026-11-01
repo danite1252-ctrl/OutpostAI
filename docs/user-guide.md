@@ -77,6 +77,28 @@ Whisper and Kokoro.
   character's name), `4 pictures of Kat at the beach`, or several scenes separated by `;`.
   The picture appears in the chat and the Gallery.
 
+### Files in chats
+
+A chat can work with folders: the model lists, reads and searches the files, and can write
+or change them. It needs a model with the **tools** badge (Qwen 3, Llama 3.1 and similar).
+
+- **Files** (chat header) shows the chat's folders. Add up to 8:
+  - **A folder on this PC** (desktop app): Windows' folder picker. The files stay on your PC;
+    while a reply runs, the app reads and writes them for it, so that PC's Outpost app must
+    be open. The chat sees only the folder's name, never where it is.
+  - **A server folder**: upload a folder (or start an empty one) and it lives on your Outpost,
+    usable from any device, including the phone. Download it as a .zip any time.
+- **Ask before changing files** (on by default, set per chat): each change the model makes
+  waits under its reply with **Show change**, **Apply** and **Skip**. Turn it off and changes
+  are saved straight away, each with **Undo**. If the file changed in between, Outpost asks
+  before overwriting it.
+- Under each reply, **Looked at files** lists what it read or searched.
+- On the phone you can add and remove server folders, switch asking on or off, and apply,
+  skip or undo server-folder changes. A PC folder's changes are applied from the desktop app
+  on that PC.
+- The model only reaches inside the chat's folders; paths that leave them (`..`, links out)
+  are refused. Folders like `.git` and `node_modules` are skipped when listing and searching.
+
 ## Create, Gallery and the queue
 
 - **Create** has a tab per task: **Picture**, **Character**, **Edit**, **Video** and

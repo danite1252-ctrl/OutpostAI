@@ -20,6 +20,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+mod pc_folders;
+
 use outpost_engines::EngineManager;
 use outpost_gateway::helper_pc::HelperPc;
 use outpost_gateway::{remote, AppState, Config};
@@ -71,6 +73,13 @@ fn read_settings() -> serde_json::Value {
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         .filter(|v| v.is_object())
         .unwrap_or_else(|| serde_json::json!({}))
+}
+
+/// Change one setting to any value, keeping the others.
+fn save_setting_value(key: &str, value: serde_json::Value) -> Result<(), String> {
+    let mut all = read_settings();
+    all[key] = value;
+    std::fs::write(settings_file(), all.to_string()).map_err(|e| e.to_string())
 }
 
 /// Change one setting, keeping the others.
@@ -739,6 +748,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if CLOSE_TO_TRAY.load(Ordering::Relaxed) {
@@ -818,7 +828,12 @@ pub fn run() {
             helper_install_comfyui,
             helper_install_trainer,
             save_download,
-            show_in_folder
+            show_in_folder,
+            pc_folders::pc_folders,
+            pc_folders::pc_name,
+            pc_folders::pc_folder_pick,
+            pc_folders::pc_folder_forget,
+            pc_folders::pc_folder_op
         ])
         .build(context)
         .expect("error while building Outpost");

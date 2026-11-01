@@ -7,7 +7,8 @@ phone app (pairing by QR, share to Outpost, saving, a 3D viewer, notifications);
 server with helper PCs and automatic updates; gallery search; and other apps (API, MCP,
 webhooks). Since 1.0: renaming chats, naming gallery items (used when they're saved),
 phone notifications as soon as a job finishes, and warnings for personas whose model isn't
-downloaded.
+downloaded, and files in chats (folders on a PC or the server that a chat's model can read
+and change, with Apply/Skip or Undo).
 
 ## Ideas after 1.0
 

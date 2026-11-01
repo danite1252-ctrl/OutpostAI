@@ -26,6 +26,7 @@ pub mod tls;
 pub mod train;
 pub mod updates;
 pub mod webhooks;
+pub mod workspace;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, OnceLock};
@@ -80,6 +81,8 @@ pub struct AppState {
     pub setup: setup_code::SetupCodes,
     /// Helper PCs lending their graphics card for Create jobs.
     pub helpers: helpers::Helpers,
+    /// File requests waiting for a desktop app (PC folders in chats).
+    pub file_relay: workspace::Relay,
 }
 
 impl AppState {
@@ -120,6 +123,7 @@ impl AppState {
             updates: Default::default(),
             setup: Default::default(),
             helpers: Default::default(),
+            file_relay: Default::default(),
         }
     }
 
@@ -322,6 +326,22 @@ pub fn router(state: AppState) -> Router {
         .route("/api/documents/{id}", delete(docs::delete))
         .route("/api/documents/{id}/file", get(docs::file))
         .route("/api/chats/{id}/documents", get(docs::for_chat).put(docs::set_for_chat))
+        .route("/api/folders", get(routes::folders::list).post(routes::folders::create))
+        .route("/api/folders/{id}", patch(routes::folders::rename).delete(routes::folders::delete))
+        .route("/api/folders/{id}/files", get(routes::folders::files))
+        .route(
+            "/api/folders/{id}/file",
+            get(routes::folders::get_file)
+                .put(routes::folders::put_file)
+                .delete(routes::folders::delete_file)
+                .layer(DefaultBodyLimit::max(routes::folders::MAX_UPLOAD)),
+        )
+        .route("/api/folders/{id}/zip", get(routes::folders::zip))
+        .route("/api/chats/{id}/folders", get(routes::folders::chat_folders).put(routes::folders::set_chat_folders))
+        .route("/api/chats/{id}/file-mode", put(routes::folders::set_file_mode))
+        .route("/api/chats/{id}/file-answers/{request}", post(routes::folders::answer))
+        .route("/api/chats/{id}/changes", get(routes::folders::changes))
+        .route("/api/chats/{id}/changes/{change}/{action}", post(routes::folders::act))
         .route("/api/personas/{id}/documents", get(docs::for_persona).put(docs::set_for_persona))
         .route("/api/gallery/search", get(create::search_gallery))
         .route("/api/gallery/search/status", get(create::search_status))

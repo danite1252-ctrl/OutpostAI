@@ -5,6 +5,7 @@ pub mod create;
 pub mod documents;
 pub mod downloads;
 pub mod engines;
+pub mod folders;
 pub mod health;
 pub mod keys;
 pub mod models;

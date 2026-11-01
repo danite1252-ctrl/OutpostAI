@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
   api,
   ApiError,
@@ -8,6 +8,8 @@ import {
   MAX_IMAGES,
   streamMessage,
   type Chat as ChatT,
+  type FileAction,
+  filesApi,
   type InstalledModel,
   type Message,
   type Persona,
@@ -19,6 +21,7 @@ import { jobsChanged } from "../components/queue";
 import { HandsFree, MicButton, PlayButton, sayAloud } from "../components/voice";
 import { ContextPanel } from "../components/context";
 import { ChatDocuments, SourcesLine } from "../components/documents";
+import { FileActions, FilesButton, useChatFiles } from "../components/chatfiles";
 import { GalleryPicker, mediaAsInput } from "../components/gallery";
 import { Avatar, Button, ErrorNote } from "../components/ui";
 import { hasModel } from "./Personas";
@@ -37,6 +40,8 @@ interface Draft {
   content: string;
   thinking: string;
   model: string;
+  /** What the reply has done with files so far. */
+  files: FileAction[];
 }
 
 export default function Chat({ token, onUnauthorized }: { token: string; onUnauthorized: () => void }) {
@@ -110,6 +115,24 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
   }, [token]);
 
   const active = chats.find((c) => c.id === activeId) ?? null;
+  const chatFiles = useChatFiles(token, active?.id ?? null);
+  async function setFileMode(mode: "ask" | "auto") {
+    try {
+      const id = activeRef.current ?? (await ensureChat());
+      await filesApi.setFileMode(token, id, mode);
+      setChats((cs) => cs.map((c) => (c.id === id ? { ...c, file_mode: mode } : c)));
+    } catch (err) {
+      fail(err);
+    }
+  }
+  async function ensureChat() {
+    if (activeRef.current) return activeRef.current;
+    const chat = await api.createChat(token, personas[0]?.id);
+    setChats((c) => [chat, ...c]);
+    setActiveId(chat.id);
+    activeRef.current = chat.id;
+    return chat.id;
+  }
   const persona = personas.find((p) => p.id === active?.persona_id) ?? null;
   const modelName =
     active?.model ?? persona?.model ?? installed.find((m) => !m.badges.includes("embedding"))?.model ?? null;
@@ -231,7 +254,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
     }
     setInput("");
     setImages([]);
-    setDraft({ content: "", thinking: "", model: "" });
+    setDraft({ content: "", thinking: "", model: "", files: [] });
     setStreamingId(chatId);
     const here = () => activeRef.current === chatId;
     const controller = new AbortController();
@@ -259,8 +282,10 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
             if (error) setError(error);
           },
           error: (message) => setError(message),
+          file: (a) => setDraft((d) => (d ? { ...d, files: [...d.files, a] } : d)),
         },
         controller.signal,
+        chatFiles.reachable,
       );
     } catch (err) {
       if (!(err instanceof DOMException && err.name === "AbortError")) {
@@ -272,6 +297,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
       setDraft(null);
       setStreamingId(null);
       abort.current = null;
+      void chatFiles.reload(); // changes the reply made or proposed
       void loadLists(); // titles and order change after a message
     }
   }
@@ -418,12 +444,21 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
             {draft?.model || persona?.model || "default model"}
             {persona?.think ? " · thinking on" : ""}
           </span>
+          <span className="ml-auto" />
+          <FilesButton
+            token={token}
+            chatId={active?.id ?? null}
+            mode={active?.file_mode ?? "ask"}
+            files={chatFiles}
+            onMode={(m) => void setFileMode(m)}
+            ensureChat={ensureChat}
+          />
           <button
             type="button"
             onClick={() => setHandsFree(true)}
             disabled={!!draft}
             title="Talk with the persona, hands-free"
-            className="ml-auto flex min-h-9 items-center rounded-lg border border-line px-3 text-sm hover:bg-raised disabled:opacity-50"
+            className="flex min-h-9 items-center rounded-lg border border-line px-3 text-sm hover:bg-raised disabled:opacity-50"
           >
             Hands-free
           </button>
@@ -468,6 +503,11 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
                 persona={persona}
                 onVoiceError={(e) => setError(e)}
                 onDelete={streamingId === activeId ? undefined : () => void removeMessage(m)}
+                extra={
+                  m.files && m.files.length > 0 ? (
+                    <FileActions token={token} chatId={active?.id ?? null} actions={m.files} files={chatFiles} />
+                  ) : undefined
+                }
               />
             ))}
             {draft && streamingId === activeId && (
@@ -476,6 +516,11 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
                 message={{ role: "assistant", content: draft.content, thinking: draft.thinking, attachments: [] }}
                 persona={persona}
                 live
+                extra={
+                  draft.files.length > 0 ? (
+                    <FileActions token={token} chatId={active?.id ?? null} actions={draft.files} files={chatFiles} live />
+                  ) : undefined
+                }
               />
             )}
             <div ref={bottom} />
@@ -658,11 +703,14 @@ function Bubble({
   live = false,
   onDelete,
   onVoiceError,
+  extra,
 }: {
   token: string;
   message: Pick<Message, "role" | "content" | "thinking" | "attachments" | "sources">;
   persona: Persona | null;
   live?: boolean;
+  /** Under the reply (its file work). */
+  extra?: ReactNode;
   /** Saved messages can be deleted. */
   onDelete?: () => void;
   onVoiceError?: (message: string) => void;
@@ -702,6 +750,7 @@ function Bubble({
               ))}
             </div>
           )}
+          {extra}
           {sources && sources.length > 0 && !live && <SourcesLine token={token} sources={sources} />}
           {(onDelete || onVoiceError) && (
             <div className="mt-1 flex gap-1">

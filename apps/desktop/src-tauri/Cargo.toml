@@ -24,6 +24,8 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
+# The folder picker (folders on this PC for chats).
+tauri-plugin-dialog = "2"
 # tauri::generate_context! writes the plugins' settings (the updater's) as serde_json values.
 serde_json.workspace = true
 serde.workspace = true

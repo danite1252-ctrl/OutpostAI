@@ -324,6 +324,10 @@ pub struct SendRequest {
     /// Its time zone's name, e.g. "Australia/Sydney".
     #[serde(default)]
     pub time_zone: Option<String>,
+    /// The chat's PC folders this app can read and write (their ids): it answers the reply's
+    /// `file_request` events for them. Left out by apps that can't (phones).
+    #[serde(default)]
+    pub pc_folders: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -341,6 +345,81 @@ struct OllamaMessage {
     content: String,
     #[serde(default)]
     thinking: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<ToolCall>,
+}
+
+#[derive(Deserialize, Serialize, Clone)]
+struct ToolCall {
+    function: ToolFunction,
+}
+
+#[derive(Deserialize, Serialize, Clone)]
+struct ToolFunction {
+    name: String,
+    #[serde(default)]
+    arguments: serde_json::Value,
+}
+
+/// Most rounds of tool use in one reply.
+const MAX_TOOL_ROUNDS: usize = 12;
+
+/// One streamed request to Ollama: text and thinking go to the app as they come; the
+/// reply's tool calls are returned. `Err` when it failed before finishing.
+async fn stream_round(
+    client: &reqwest::Client,
+    url: &str,
+    body: &serde_json::Value,
+    tx: &tokio::sync::mpsc::Sender<Event>,
+    content: &mut String,
+    thinking: &mut String,
+) -> (Vec<ToolCall>, Option<String>) {
+    let mut calls = Vec::new();
+    let mut failure = None;
+    match client.post(url).json(body).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            let mut stream = resp.bytes_stream();
+            let mut buf: Vec<u8> = Vec::new();
+            'read: while let Some(chunk) = stream.next().await {
+                let Ok(chunk) = chunk else {
+                    failure = Some("The model stopped responding.".into());
+                    break;
+                };
+                buf.extend_from_slice(&chunk);
+                while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
+                    let line: Vec<u8> = buf.drain(..=pos).collect();
+                    let Ok(update) = serde_json::from_slice::<OllamaLine>(&line) else {
+                        continue;
+                    };
+                    if let Some(err) = update.error {
+                        failure = Some(err);
+                        break 'read;
+                    }
+                    if let Some(m) = update.message {
+                        if let Some(t) = m.thinking.filter(|t| !t.is_empty()) {
+                            thinking.push_str(&t);
+                            // A closed client just stops receiving; keep collecting the reply.
+                            let _ = tx.send(event("thinking", serde_json::json!({ "text": t }))).await;
+                        }
+                        if !m.content.is_empty() {
+                            content.push_str(&m.content);
+                            let _ = tx.send(event("token", serde_json::json!({ "text": m.content }))).await;
+                        }
+                        calls.extend(m.tool_calls);
+                    }
+                    if update.done {
+                        break 'read;
+                    }
+                }
+            }
+        }
+        Ok(resp) => {
+            let text = resp.text().await.unwrap_or_default();
+            failure = Some(format!("Ollama refused the request: {text}"));
+        }
+        Err(_) => failure = Some("Ollama isn't running. Start it in Settings → Engines.".into()),
+    }
+    (calls, failure)
 }
 
 fn event(name: &str, data: serde_json::Value) -> Event {
@@ -419,6 +498,19 @@ pub async fn send_message(
             ),
         ));
     }
+    // Folders the chat works with: the model needs tools for them.
+    let folders = outpost_core::chat_files::chat_folders(&state.pool, &chat.id).await?;
+    if !folders.is_empty() && !resolved.can_use_tools {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "model_no_tools",
+            format!(
+                "{} can't use tools, so it can't work with this chat's folders. Pick a model with the tools badge for \
+                 this persona (or this chat), or take the folders off the chat.",
+                resolved.model
+            ),
+        ));
+    }
     let model = resolved.model.clone();
     if let Some(clock) = llm::UserClock::from_app(req.utc_offset_minutes, req.time_zone.as_deref()) {
         clock.save(&state, &account_id).await;
@@ -436,6 +528,19 @@ pub async fn send_message(
         system = format!("{system}\n\n{}", d.section);
     }
     let doc_sources = docs.map(|d| d.sources).unwrap_or_default();
+    let (tx, rx) = tokio::sync::mpsc::channel::<Event>(256);
+    let workspace = (!folders.is_empty()).then(|| crate::workspace::Workspace {
+        state: state.clone(),
+        account_id: account_id.clone(),
+        chat_id: chat.id.clone(),
+        folders,
+        mode: chat.file_mode.clone(),
+        reachable: req.pc_folders.clone(),
+        events: tx.clone(),
+    });
+    if let Some(w) = &workspace {
+        system = format!("{system}\n\n{}", w.instructions());
+    }
     if earlier.is_empty() && chat.title == "New chat" {
         let title = if content.is_empty() {
             "Image".to_string()
@@ -473,7 +578,6 @@ pub async fn send_message(
     let body_state = state.clone();
     let body_persona = persona.clone();
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<Event>(256);
     let url = format!("{}/api/chat", state.config.ollama_url.trim_end_matches('/'));
     let client = state.llm.clone();
     let pool = state.pool.clone();
@@ -505,51 +609,55 @@ pub async fn send_message(
             can_think,
             body_persona.as_ref(),
         );
+        let mut body = body;
         let mut content = String::new();
         let mut thinking = String::new();
         let mut failure: Option<String> = None;
-        match client.post(&url).json(&body).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                let mut stream = resp.bytes_stream();
-                let mut buf: Vec<u8> = Vec::new();
-                'read: while let Some(chunk) = stream.next().await {
-                    let Ok(chunk) = chunk else {
-                        failure = Some("The model stopped responding.".into());
-                        break;
-                    };
-                    buf.extend_from_slice(&chunk);
-                    while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
-                        let line: Vec<u8> = buf.drain(..=pos).collect();
-                        let Ok(update) = serde_json::from_slice::<OllamaLine>(&line) else {
-                            continue;
-                        };
-                        if let Some(err) = update.error {
-                            failure = Some(err);
-                            break 'read;
-                        }
-                        if let Some(m) = update.message {
-                            if let Some(t) = m.thinking.filter(|t| !t.is_empty()) {
-                                thinking.push_str(&t);
-                                // A closed client just stops receiving; keep collecting the reply.
-                                let _ = tx.send(event("thinking", serde_json::json!({ "text": t }))).await;
-                            }
-                            if !m.content.is_empty() {
-                                content.push_str(&m.content);
-                                let _ = tx.send(event("token", serde_json::json!({ "text": m.content }))).await;
-                            }
-                        }
-                        if update.done {
-                            break 'read;
-                        }
-                    }
+        let mut actions: Vec<outpost_core::chat_files::FileAction> = Vec::new();
+        if workspace.is_some() {
+            body["tools"] = crate::workspace::Workspace::tools();
+        }
+        for round in 0..=MAX_TOOL_ROUNDS {
+            let before = content.len();
+            let (calls, failed) = stream_round(&client, &url, &body, &tx, &mut content, &mut thinking).await;
+            failure = failed;
+            let Some(w) = workspace.as_ref().filter(|_| failure.is_none() && !calls.is_empty()) else { break };
+            if round == MAX_TOOL_ROUNDS {
+                failure = Some("Stopped after many rounds of file work; ask it to carry on.".into());
+                break;
+            }
+            // The model's turn (with its calls), then each call's result, then it carries on.
+            let said = content[before..].to_string();
+            if let Some(messages) = body.get_mut("messages").and_then(serde_json::Value::as_array_mut) {
+                messages.push(serde_json::json!({ "role": "assistant", "content": said, "tool_calls": calls }));
+            }
+            for call in &calls {
+                // Some models send the arguments as a JSON string.
+                let args = match &call.function.arguments {
+                    serde_json::Value::String(text) => serde_json::from_str(text).unwrap_or_default(),
+                    other => other.clone(),
+                };
+                let outcome = w.run(&call.function.name, &args).await;
+                let _ = tx.send(event("file", serde_json::json!(outcome.action))).await;
+                actions.push(outcome.action);
+                if let Some(messages) = body.get_mut("messages").and_then(serde_json::Value::as_array_mut) {
+                    messages.push(serde_json::json!({ "role": "tool", "tool_name": call.function.name, "content": outcome.reply }));
                 }
             }
-            Ok(resp) => {
-                let text = resp.text().await.unwrap_or_default();
-                failure = Some(format!("Ollama refused the request: {text}"));
+            if !content.is_empty() && !content.ends_with('\n') {
+                content.push_str("\n\n");
+                let _ = tx.send(event("token", serde_json::json!({ "text": "\n\n" }))).await;
             }
-            Err(_) => failure = Some("Ollama isn't running. Start it in Settings → Engines.".into()),
         }
+        // Its copy of the event channel goes, so the stream ends with the reply.
+        drop(workspace);
+        let content = content.trim_end().to_string();
+        // Some file work but no words: say so, rather than an empty reply.
+        let content = if content.is_empty() && !actions.is_empty() && failure.is_none() {
+            "Done: the file work is listed below.".to_string()
+        } else {
+            content
+        };
 
         if content.is_empty() && failure.is_some() {
             let message = failure.unwrap_or_default();
@@ -560,6 +668,10 @@ pub async fn send_message(
         let saved = chats::add_message(&pool, &chat_id, "assistant", &content, thinking, Some(model.as_str())).await;
         match saved {
             Ok(mut saved) => {
+                if !actions.is_empty() {
+                    let _ = outpost_core::chat_files::set_actions(&pool, &saved.id, &actions).await;
+                    saved.files = actions;
+                }
                 if !doc_sources.is_empty() {
                     saved.sources = crate::documents::cited(&content, &doc_sources);
                     let _ = outpost_core::documents::set_message_sources(&pool, &saved.id, &saved.sources).await;

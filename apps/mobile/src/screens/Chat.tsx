@@ -10,6 +10,7 @@ import HandsFree from "./HandsFree";
 import { hear, onSaying, say, stopSaying, type Listening } from "../voice";
 import type { Chat as ChatT, Message, Outpost, Persona } from "../outpost";
 import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
+import { FileActions, FilesSheet, useChatFiles, type FileAction } from "../chatfiles";
 
 const MAX_IMAGES = 4;
 
@@ -209,6 +210,7 @@ export default function Chat({
 interface Draft {
   content: string;
   thinking: string;
+  files: FileAction[];
 }
 
 function Conversation({
@@ -240,6 +242,19 @@ function Conversation({
   const [handsFree, setHandsFree] = useState(false);
   const [saying, setSaying] = useState<string | null>(null);
   useEffect(() => onSaying(setSaying), []);
+  // Files in chats: the chat's folders, its changes, and whether it asks first.
+  const chatFiles = useChatFiles(api, chat.id);
+  const [fileMode, setFileMode] = useState<"ask" | "auto">(chat.file_mode ?? "ask");
+  const [filesOpen, setFilesOpen] = useState(false);
+  async function changeFileMode(m: "ask" | "auto") {
+    setFileMode(m);
+    try {
+      await api.json("PUT", `/api/chats/${chat.id}/file-mode`, { mode: m });
+    } catch (e) {
+      setFileMode(m === "ask" ? "auto" : "ask");
+      setError(e instanceof Error ? e.message : "Couldn't change that.");
+    }
+  }
   // The model this chat needs, if it isn't downloaded (a persona copied from another PC).
   const [chatModels, setChatModels] = useState<string[] | null>(null);
   const [chosen, setChosen] = useState<string | null>(null);
@@ -369,7 +384,7 @@ function Conversation({
     setInput("");
     setImages([]);
     setError(null);
-    setDraft({ content: "", thinking: "" });
+    setDraft({ content: "", thinking: "", files: [] });
     stopSaying();
     let reply: Message | null = null;
     stop.current = api.stream(`/api/chats/${chat.id}/messages`, { content: text, images: sending, ...clock() }, {
@@ -379,12 +394,18 @@ function Conversation({
         if (name === "start" && d.user_message) setMessages((m) => [...m, d.user_message!]);
         else if (name === "token") setDraft((x) => (x ? { ...x, content: x.content + (d.text ?? "") } : x));
         else if (name === "thinking") setDraft((x) => (x ? { ...x, thinking: x.thinking + (d.text ?? "") } : x));
+        else if (name === "file") {
+          const f = data as FileAction;
+          setDraft((x) => (x ? { ...x, files: [...x.files, f] } : x));
+          if (f.change_id) void chatFiles.reload();
+        }
         else if (name === "error") setError(String((d as { message?: string }).message ?? "The reply failed."));
       },
       done: () => {
         setDraft(null);
         stop.current = null;
         void reload();
+        void chatFiles.reload();
         const r = reply as Message | null;
         if (persona?.speak_replies && r?.content) readAloud(r.id, r.content);
       },
@@ -412,6 +433,14 @@ function Conversation({
         </Text>
         <Pressable
           accessibilityRole="button"
+          accessibilityLabel="Files for this chat"
+          onPress={() => setFilesOpen(true)}
+          style={[s.chip, { minHeight: 40 }, chatFiles.folders.length > 0 && { borderColor: C.ember }]}
+        >
+          <Text style={{ color: C.ink }}>Files{chatFiles.folders.length > 0 ? ` ${chatFiles.folders.length}` : ""}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
           accessibilityLabel="Talk hands-free"
           disabled={!!draft}
           onPress={() => {
@@ -436,8 +465,8 @@ function Conversation({
         {messages
           .filter((m) => m.role !== "system")
           .map((m) => (
+            <View key={m.id} style={{ gap: 8 }}>
             <Bubble
-              key={m.id}
               api={api}
               role={m.role}
               content={m.content}
@@ -448,8 +477,11 @@ function Conversation({
               speaking={saying === m.id}
               onSpeak={m.role === "assistant" ? () => readAloud(m.id, m.content) : undefined}
             />
+            {m.files && m.files.length > 0 && <FileActions api={api} chatId={chat.id} actions={m.files} files={chatFiles} />}
+            </View>
           ))}
         {draft && <Bubble api={api} role="assistant" content={draft.content || "…"} thinking={draft.thinking || null} attachments={[]} />}
+        {draft && draft.files.length > 0 && <FileActions api={api} chatId={chat.id} actions={draft.files} files={chatFiles} live />}
       </ScrollView>
       <View style={{ padding: 12, gap: 8, borderTopWidth: 1, borderTopColor: C.line }}>
         {missingModel && (
@@ -532,6 +564,9 @@ function Conversation({
           )}
         </View>
       </View>
+      {filesOpen && (
+        <FilesSheet api={api} chatId={chat.id} mode={fileMode} files={chatFiles} onMode={(m) => void changeFileMode(m)} onClose={() => setFilesOpen(false)} />
+      )}
       {handsFree && (
         <HandsFree
           api={api}

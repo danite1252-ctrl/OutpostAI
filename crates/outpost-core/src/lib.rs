@@ -7,6 +7,7 @@ pub mod accounts;
 pub mod attachments;
 pub mod audit;
 pub mod auth;
+pub mod chat_files;
 pub mod chats;
 pub mod db;
 pub mod documents;

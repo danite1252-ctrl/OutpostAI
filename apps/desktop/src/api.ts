@@ -289,6 +289,8 @@ export interface Chat {
   model: string | null;
   created_at: number;
   updated_at: number;
+  /** How replies change files in the chat's folders: ask first, or straight away. */
+  file_mode?: "ask" | "auto";
 }
 
 export interface Attachment {
@@ -312,6 +314,122 @@ export interface Message {
   attachments: Attachment[];
   /** Document passages the reply used, numbered as it cites them ("[1]"). */
   sources?: Source[];
+  /** What the reply did with files in the chat's folders. */
+  files?: FileAction[];
+}
+
+/** A folder kept on the server, for chats to work in. */
+export interface Folder {
+  id: string;
+  account_id: string;
+  name: string;
+  created_at: number;
+  updated_at: number;
+}
+
+/** A folder a chat works with: on the server, or on a PC. */
+export interface ChatFolder {
+  kind: "server" | "pc";
+  /** The server folder's id, or the PC folder's id on its PC. */
+  id: string;
+  name: string;
+  /** For a PC folder: which PC. */
+  device?: string | null;
+}
+
+/** One thing a reply did with files. */
+export interface FileAction {
+  op: "list" | "read" | "search" | "write" | "edit" | "tool";
+  path: string;
+  note?: string | null;
+  change_id?: string | null;
+  failed?: boolean;
+}
+
+/** A change a reply made or proposed. */
+export interface FileChange {
+  id: string;
+  chat_id: string;
+  kind: "server" | "pc";
+  folder_id: string;
+  folder: string;
+  path: string;
+  before: string | null;
+  after: string;
+  status: "proposed" | "applied" | "skipped" | "undone";
+  created_at: number;
+  updated_at: number;
+}
+
+/** A folder on this PC that chats may use (kept by the desktop app). */
+export interface PcFolder {
+  id: string;
+  name: string;
+  path: string;
+}
+
+export const filesApi = {
+  folders: (token: string) => request<Folder[]>("GET", "/api/folders", { token }),
+  createFolder: (token: string, name: string) => request<Folder>("POST", "/api/folders", { token, body: { name } }),
+  renameFolder: (token: string, id: string, name: string) => request<Folder>("PATCH", `/api/folders/${id}`, { token, body: { name } }),
+  deleteFolder: (token: string, id: string) => request<void>("DELETE", `/api/folders/${id}`, { token }),
+  folderFiles: (token: string, id: string) => request<{ path: string; bytes: number }[]>("GET", `/api/folders/${id}/files`, { token }),
+  /** Put one file (any type) into a server folder. */
+  async putFile(token: string, id: string, path: string, data: Blob): Promise<void> {
+    const res = await fetch(`${GATEWAY}/api/folders/${id}/file?path=${encodeURIComponent(path)}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
+      body: data,
+    }).catch(() => null);
+    if (!res || !res.ok) {
+      const body = res ? await res.json().catch(() => null) : null;
+      throw new ApiError(res?.status ?? 0, "upload", body?.error?.message ?? `Couldn't upload ${path}.`);
+    }
+  },
+  chatFolders: (token: string, chatId: string) => request<ChatFolder[]>("GET", `/api/chats/${chatId}/folders`, { token }),
+  setChatFolders: (token: string, chatId: string, folders: ChatFolder[]) =>
+    request<ChatFolder[]>("PUT", `/api/chats/${chatId}/folders`, { token, body: folders }),
+  setFileMode: (token: string, chatId: string, mode: "ask" | "auto") =>
+    request<void>("PUT", `/api/chats/${chatId}/file-mode`, { token, body: { mode } }),
+  changes: (token: string, chatId: string) => request<FileChange[]>("GET", `/api/chats/${chatId}/changes`, { token }),
+  act: (token: string, chatId: string, changeId: string, action: "apply" | "skip" | "undo", body: { done_on_pc?: boolean; force?: boolean } = {}) =>
+    request<FileChange>("POST", `/api/chats/${chatId}/changes/${changeId}/${action}`, { token, body }),
+};
+
+/** The desktop app's own folder commands (folders on this PC). */
+export const pcFolders = {
+  async list(): Promise<PcFolder[]> {
+    if (!inTauri()) return [];
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<PcFolder[]>("pc_folders");
+  },
+  async pick(): Promise<PcFolder | null> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<PcFolder | null>("pc_folder_pick");
+  },
+  async forget(id: string): Promise<void> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("pc_folder_forget", { id });
+  },
+  async op(id: string, op: string, path: string, extra: { text?: string; content?: string } = {}): Promise<Record<string, unknown>> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<Record<string, unknown>>("pc_folder_op", { id, op, path, text: extra.text ?? null, content: extra.content ?? null });
+  },
+};
+
+/** A reply asked for something in one of this PC's folders: do it and send the answer. */
+async function answerFileRequest(token: string, chatId: string, req: { id: string; folder: string; op: string; path: string; text?: string; content?: string }) {
+  let answer: Record<string, unknown>;
+  try {
+    answer = await pcFolders.op(req.folder, req.op, req.path, { text: req.text, content: req.content });
+  } catch (e) {
+    answer = { error: typeof e === "string" ? e : "The desktop app couldn't do that." };
+  }
+  await fetch(`${GATEWAY}/api/chats/${chatId}/file-answers/${req.id}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(answer),
+  }).catch(() => undefined);
 }
 
 export interface Source {
@@ -703,6 +821,8 @@ export interface StreamHandlers {
   token?: (text: string) => void;
   done?: (data: { message: Message; error: string | null }) => void;
   error?: (message: string) => void;
+  /** Something the reply did with files, as it happens. */
+  file?: (action: FileAction) => void;
 }
 
 /** Send a chat message and follow the streamed reply (Server-Sent Events over POST). */
@@ -713,13 +833,15 @@ export async function streamMessage(
   images: string[],
   on: StreamHandlers,
   signal?: AbortSignal,
+  /** The chat's PC folders this app can reach (it answers the reply's file requests). */
+  pcFolderIds: string[] = [],
 ): Promise<void> {
   let res: Response;
   try {
     res = await fetch(`${GATEWAY}/api/chats/${chatId}/messages`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ content, images, ...clock() }),
+      body: JSON.stringify({ content, images, ...clock(), pc_folders: pcFolderIds }),
       signal,
     });
   } catch {
@@ -754,6 +876,8 @@ export async function streamMessage(
       else if (name === "token") on.token?.(payload.text);
       else if (name === "done") on.done?.(payload);
       else if (name === "error") on.error?.(payload.message);
+      else if (name === "file") on.file?.(payload);
+      else if (name === "file_request") void answerFileRequest(token, chatId, payload);
     }
   }
 }

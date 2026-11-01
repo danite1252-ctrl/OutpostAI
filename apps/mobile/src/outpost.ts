@@ -302,6 +302,8 @@ export interface Chat {
   title: string;
   /** This chat's own model, over the persona's. */
   model?: string | null;
+  /** Files in chats: "ask" before changing files, or "auto". */
+  file_mode?: "ask" | "auto";
   updated_at: number;
 }
 
@@ -318,6 +320,8 @@ export interface Message {
   attachments: Attachment[];
   /** Document passages the reply used ("[2] Handbook.pdf, page 3"). */
   sources?: { n: number; document_id: string; name: string; page: number | null }[];
+  /** What the reply did in the chat's folders (files in chats). */
+  files?: import("./chatfiles").FileAction[];
 }
 
 export type Task = "picture" | "character" | "edit" | "video" | "animate" | "model" | "upscale" | "cutout";
