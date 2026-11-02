@@ -186,7 +186,21 @@ export function ToolLibrary({ onClose }: { onClose: () => void }) {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [error, setError] = useState<string | null>(null);
   const rt = useRuntimes();
-  const reload = useCallback(() => pcTools.list().then(setServers, (e) => setError(message(e))), []);
+  const reload = useCallback(
+    () =>
+      pcTools.list().then(async (list) => {
+        // Library entries fixed since they were added (Weather's start command).
+        for (const s of list) {
+          if (s.catalog_id === "weather" && s.args.length === 1 && s.args[0] === "mcp_weather_server") {
+            const fixed = { ...s, args: ["--with", "mcp<2", "mcp_weather_server"] };
+            await pcTools.save(fixed).catch(() => undefined);
+            Object.assign(s, fixed);
+          }
+        }
+        setServers(list);
+      }, (e) => setError(message(e))),
+    [],
+  );
   useEffect(() => {
     void reload();
   }, [reload]);

@@ -369,6 +369,9 @@ impl HttpConn {
             self.alive.store(false, Ordering::Relaxed);
             return Err("The tool server's session ended; try again.".into());
         }
+        if status == 404 {
+            return Err("Nothing answers at that address (404). Check the address; the service may need its MCP feature turned on first.".into());
+        }
         if status == 401 || status == 403 {
             return Err(format!("The tool server refused the key or token ({status}). Check it in Tools."));
         }

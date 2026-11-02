@@ -228,7 +228,8 @@ export const CATALOG: CatalogEntry[] = [
     description: "Current weather, forecasts and air quality anywhere (Open-Meteo).",
     transport: "stdio",
     command: "uvx",
-    args: ["mcp_weather_server"],
+    // Its code needs the MCP library before 2.0 (which renamed McpError): pin it.
+    args: ["--with", "mcp<2", "mcp_weather_server"],
     inputs: [],
     cost: "Free, no key",
     page: "https://github.com/isdaniel/mcp_weather_server",
@@ -261,9 +262,15 @@ export const CATALOG: CatalogEntry[] = [
     category: "Home & tasks",
     description: "Ask about and control the lights, switches and sensors you expose to Assist.",
     transport: "http",
-    url: "{url}/api/mcp",
+    url: "{url}",
     inputs: [
-      { key: "url", label: "Home Assistant address", kind: "url", placeholder: "http://homeassistant.local:8123" },
+      {
+        key: "url",
+        label: "Its MCP address",
+        kind: "url",
+        placeholder: "http://homeassistant.local:8123/api/mcp",
+        help: "In Home Assistant: Settings › System › AI, turn on the Model Context Protocol card and copy its address.",
+      },
       {
         key: "token",
         label: "Long-lived access token",
@@ -276,7 +283,7 @@ export const CATALOG: CatalogEntry[] = [
     ],
     cost: "Free (your own Home Assistant)",
     page: "https://www.home-assistant.io/integrations/mcp_server/",
-    note: "Add the Model Context Protocol Server integration in Home Assistant first. Press Test to check the token is accepted.",
+    note: "First add the Model Context Protocol Server integration (Settings › Devices & services), then copy the MCP address from Settings › System › AI. Use an admin's token.",
   },
   {
     id: "todoist",
