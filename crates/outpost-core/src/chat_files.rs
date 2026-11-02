@@ -293,6 +293,29 @@ pub async fn actions_for_chat(pool: &SqlitePool, chat_id: &str) -> CoreResult<Ha
         .collect())
 }
 
+/// Keep a reply's tool calls and results (Ollama's messages), for the history next time.
+pub async fn set_trace(pool: &SqlitePool, message_id: &str, trace: &[serde_json::Value]) -> CoreResult<()> {
+    if trace.is_empty() {
+        return Ok(());
+    }
+    let json = serde_json::to_string(trace).map_err(|e| CoreError::Invalid(e.to_string()))?;
+    sqlx::query("UPDATE messages SET tool_trace = ? WHERE id = ?").bind(json).bind(message_id).execute(pool).await?;
+    Ok(())
+}
+
+/// The tool calls and results of a chat's replies, by message.
+pub async fn traces_for_chat(pool: &SqlitePool, chat_id: &str) -> CoreResult<HashMap<String, Vec<serde_json::Value>>> {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, tool_trace FROM messages WHERE chat_id = ? AND tool_trace IS NOT NULL")
+            .bind(chat_id)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, json)| serde_json::from_str(&json).ok().map(|t| (id, t)))
+        .collect())
+}
+
 // ---------------------------------------------------------------- changes
 
 const CHANGE_COLS: &str = "id, chat_id, kind, ref, folder, path, before, after, status, created_at, updated_at";

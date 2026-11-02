@@ -426,6 +426,9 @@ async fn stream_round(
     (calls, failure)
 }
 
+/// How much of each tool result is kept for the history (the newest replies' go back).
+const TRACE_RESULT_CHARS: usize = 1500;
+
 fn event(name: &str, data: serde_json::Value) -> Event {
     Event::default().event(name).data(data.to_string())
 }
@@ -620,12 +623,15 @@ pub async fn send_message(
     tokio::spawn(async move {
         let (summary, recent) =
             llm::fit_history(&body_state, &chat_id, &model_for_body, can_think, &system, history).await;
+        // Earlier replies' tool calls and results.
+        let traces = outpost_core::chat_files::traces_for_chat(&pool, &chat_id).await.unwrap_or_default();
         let body = llm::ollama_chat_body(
             &model_for_body,
             &system,
             summary.as_deref(),
             &recent,
             &history_images,
+            &traces,
             can_think,
             body_persona.as_ref(),
         );
@@ -634,6 +640,8 @@ pub async fn send_message(
         let mut thinking = String::new();
         let mut failure: Option<String> = None;
         let mut actions: Vec<outpost_core::chat_files::FileAction> = Vec::new();
+        // This reply's tool calls and (shortened) results, kept for the history next time.
+        let mut trace: Vec<serde_json::Value> = Vec::new();
         let mut tools: Vec<serde_json::Value> = Vec::new();
         if workspace.is_some() {
             tools.extend(crate::workspace::Workspace::tools().as_array().cloned().unwrap_or_default());
@@ -660,6 +668,8 @@ pub async fn send_message(
             if let Some(messages) = body.get_mut("messages").and_then(serde_json::Value::as_array_mut) {
                 messages.push(serde_json::json!({ "role": "assistant", "content": said, "tool_calls": calls }));
             }
+            // (Its words are in the saved reply already.)
+            trace.push(serde_json::json!({ "role": "assistant", "content": "", "tool_calls": calls }));
             for call in &calls {
                 // Some models send the arguments as a JSON string.
                 let args = match &call.function.arguments {
@@ -677,6 +687,11 @@ pub async fn send_message(
                 if let Some(messages) = body.get_mut("messages").and_then(serde_json::Value::as_array_mut) {
                     messages.push(serde_json::json!({ "role": "tool", "tool_name": call.function.name, "content": outcome.reply }));
                 }
+                let mut kept: String = outcome.reply.chars().take(TRACE_RESULT_CHARS).collect();
+                if outcome.reply.chars().count() > TRACE_RESULT_CHARS {
+                    kept.push_str(" [...]");
+                }
+                trace.push(serde_json::json!({ "role": "tool", "tool_name": call.function.name, "content": kept }));
             }
             if !content.is_empty() && !content.ends_with('\n') {
                 content.push_str("\n\n");
@@ -705,6 +720,7 @@ pub async fn send_message(
             Ok(mut saved) => {
                 if !actions.is_empty() {
                     let _ = outpost_core::chat_files::set_actions(&pool, &saved.id, &actions).await;
+                    let _ = outpost_core::chat_files::set_trace(&pool, &saved.id, &trace).await;
                     saved.files = actions;
                 }
                 if !doc_sources.is_empty() {

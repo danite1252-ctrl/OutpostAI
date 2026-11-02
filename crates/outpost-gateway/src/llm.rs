@@ -13,6 +13,9 @@ use crate::AppState;
 /// How many earlier messages go back to the model with each new one.
 pub const HISTORY: usize = 40;
 
+/// Replies whose tool calls go back with the history (the newest).
+pub const TRACED_REPLIES: usize = 6;
+
 /// Most images sent back to the model with one request (the newest win).
 pub const HISTORY_IMAGES: usize = 6;
 
@@ -376,6 +379,7 @@ pub fn ollama_chat_body(
     summary: Option<&str>,
     history: &[Message],
     images: &HashMap<String, Vec<String>>,
+    traces: &HashMap<String, Vec<Value>>,
     can_think: bool,
     persona: Option<&Persona>,
 ) -> Value {
@@ -393,7 +397,19 @@ pub fn ollama_chat_body(
         }));
     }
     let start = history.len().saturating_sub(HISTORY);
+    // The newest replies' tool calls and results go back too, so the model sees it used tools
+    // (and does again for a follow-up) rather than copying replies that seem to act without.
+    let traced: Vec<&str> = history[start..]
+        .iter()
+        .rev()
+        .filter(|m| m.role == "assistant" && traces.contains_key(&m.id))
+        .take(TRACED_REPLIES)
+        .map(|m| m.id.as_str())
+        .collect();
     for m in &history[start..] {
+        if m.role == "assistant" && traced.contains(&m.id.as_str()) {
+            messages.extend(traces[&m.id].iter().cloned());
+        }
         if m.role == "user" || m.role == "assistant" {
             let mut msg = json!({ "role": m.role, "content": without_job_cards(&m.content) });
             if let Some(imgs) = images.get(&m.id).filter(|i| !i.is_empty()) {
@@ -443,7 +459,7 @@ mod tests {
         // In a chat, the clock sits just before the newest message, not at the top.
         let history = vec![msg(1, "user", "date?"), msg(2, "assistant", "23 September 2025"), msg(3, "user", "and now?")];
         let system = format!("Be terse.\n\n{}", clock_line(now, sydney.as_ref()));
-        let body = ollama_chat_body("m", &system, Some("The user is Dan."), &history, &HashMap::new(), false, None);
+        let body = ollama_chat_body("m", &system, Some("The user is Dan."), &history, &HashMap::new(), &HashMap::new(), false, None);
         let m = body["messages"].as_array().unwrap();
         assert_eq!(m[0]["content"], "Be terse.");
         // The chat's summary of its older part comes next.
@@ -502,26 +518,48 @@ mod tests {
     }
 
     #[test]
+    fn replies_that_used_tools_go_back_with_their_calls() {
+        let history = vec![
+            msg(1, "user", "Turn off the lamp"),
+            msg(2, "assistant", "The lamp is off."),
+            msg(3, "user", "Now turn it back on"),
+        ];
+        let call = json!({ "function": { "name": "home_assistant__HassTurnOff", "arguments": { "name": "lamp" } } });
+        let traces = HashMap::from([(
+            "2".to_string(),
+            vec![
+                json!({ "role": "assistant", "content": "", "tool_calls": [call] }),
+                json!({ "role": "tool", "tool_name": "home_assistant__HassTurnOff", "content": "Turned off" }),
+            ],
+        )]);
+        let b = ollama_chat_body("m", "", None, &history, &HashMap::new(), &traces, false, None);
+        let roles: Vec<&str> = b["messages"].as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "tool", "assistant", "user"]);
+        assert_eq!(b["messages"][1]["tool_calls"][0]["function"]["name"], "home_assistant__HassTurnOff");
+        assert_eq!(b["messages"][3]["content"], "The lamp is off.");
+    }
+
+    #[test]
     fn body_has_system_history_and_think_switch() {
         let history: Vec<_> = (1..=50)
             .map(|i| msg(i, if i % 2 == 1 { "user" } else { "assistant" }, &format!("m{i}")))
             .collect();
         let none = HashMap::new();
-        let b = ollama_chat_body("qwen3.5:9b", "Be terse.", None, &history, &none, true, None);
+        let b = ollama_chat_body("qwen3.5:9b", "Be terse.", None, &history, &none, &HashMap::new(), true, None);
         let msgs = b["messages"].as_array().unwrap();
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs.len(), 1 + HISTORY);
         assert_eq!(msgs.last().unwrap()["content"], "m50");
         assert_eq!(b["think"], false);
 
-        let no_think = ollama_chat_body("gemma", "", None, &history[..1], &none, false, None);
+        let no_think = ollama_chat_body("gemma", "", None, &history[..1], &none, &HashMap::new(), false, None);
         assert!(no_think.get("think").is_none());
         assert_eq!(no_think["messages"].as_array().unwrap().len(), 1);
         assert!(no_think["messages"][0].get("images").is_none());
 
         let mut imgs = HashMap::new();
         imgs.insert("50".to_string(), vec!["aGk=".to_string()]);
-        let seeing = ollama_chat_body("ornith", "", None, &history, &imgs, false, None);
+        let seeing = ollama_chat_body("ornith", "", None, &history, &imgs, &HashMap::new(), false, None);
         let last = seeing["messages"].as_array().unwrap().last().unwrap().clone();
         assert_eq!(last["images"][0], "aGk=");
     }

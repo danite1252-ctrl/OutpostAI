@@ -103,7 +103,10 @@ impl PcTools {
         let names: Vec<&str> = self.servers.iter().map(|s| s.name.as_str()).collect();
         format!(
             "## Tools\nYou can use tools from: {}. Use them when they help answer (to look things up, check facts or \
-             act for the user), and say what you found or did. Don't make up a tool's results; if one fails, say so.",
+             act for the user), and say what you found or did. Don't make up a tool's results; if one fails, say so. \
+             Each time the user asks for something to be done (even the same thing again, or undoing it: \"turn it back \
+             on\"), call the tool again in this reply: earlier calls don't carry over, and nothing happens unless you call \
+             a tool now. Never say something was done unless a tool call in this reply did it.",
             names.join(", ")
         )
     }
