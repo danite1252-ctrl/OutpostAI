@@ -6,6 +6,7 @@
 pub mod config;
 pub mod create;
 pub mod diagnostics;
+pub mod device_tools;
 pub mod documents;
 pub mod discovery;
 pub mod error;
@@ -90,6 +91,8 @@ pub struct AppState {
     pub file_relay: workspace::Relay,
     /// Chat requests for lent PCs' Ollama, and their answers.
     pub lent_chat: lent::LentChat,
+    /// Tools on your PCs, for chats from the phone.
+    pub device_tools: device_tools::DeviceTools,
 }
 
 impl AppState {
@@ -132,6 +135,7 @@ impl AppState {
             helpers: Default::default(),
             file_relay: Default::default(),
             lent_chat: Default::default(),
+            device_tools: Default::default(),
         }
     }
 
@@ -358,6 +362,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/helpers/poll", post(helpers::poll))
         .route("/api/helpers/leave", post(helpers::leave))
         .route("/api/helpers/chat/next", post(lent::next))
+        .route("/api/pc-tools", get(device_tools::list))
+        .route("/api/pc-tools/register", post(device_tools::register).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)))
+        .route("/api/pc-tools/next", post(device_tools::next))
+        .route("/api/pc-tools/answers/{id}", post(device_tools::answer).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)))
         .route("/api/helpers/chat/{id}/reply", post(lent::reply).layer(DefaultBodyLimit::disable()))
         .route("/api/helpers/jobs/{id}/input/{key}", get(helpers::input))
         .route("/api/helpers/jobs/{id}/lora", get(helpers::lora))

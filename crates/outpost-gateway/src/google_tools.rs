@@ -178,6 +178,11 @@ pub fn tools(args: &[String]) -> Vec<ToolInfo> {
             ));
         }
     }
+    // Which only read (hands-free asks "check..." for those).
+    const CHANGES: [&str; 7] = ["drive_create", "docs_append", "docs_replace", "sheets_write", "sheets_append", "gmail_draft", "calendar_create"];
+    for t in &mut out {
+        t.read_only = Some(!CHANGES.contains(&t.name.as_str()));
+    }
     out
 }
 

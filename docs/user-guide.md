@@ -122,8 +122,16 @@ GitHub, a hidden web browser, Wikipedia, Home Assistant, Todoist, Notion and mor
   with those); a chat can be given its own set from **+ › Tools**. **On this PC › Test** shows a
   tool server's tools; switch off any you don't want used.
 - The chat's model needs the **tools** badge. Under each reply, **Used tools** lists what it
-  did. Tools run only while the desktop app is open on that PC: keys stay on the PC, and the
-  server only sees each tool's name and description. Chats from the phone don't use them.
+  did. Tools run only while the desktop app is open on that PC (even in the tray): keys stay on
+  the PC, and the server only sees each tool's name and description.
+- **From the phone**: your phone's chats use the same tools, run on your PC, while the
+  Outpost app is open there. Each chat uses its persona's tools (or its own set, chosen on the
+  PC). Only your own PC's tools, for your own chats.
+- **Hands-free asks first**: talking hands-free (on the phone or the PC), every tool call is
+  read back before it runs ("Would you like me to check Google Calendar?", "Would you like me
+  to turn off: kitchen lamp, with Home Assistant?"). Say yes (or "go ahead") to run it;
+  anything else, or no answer within 20 seconds, cancels it, and the model asks what you
+  meant.
 - Tools act straight away (unlike a chat's folders, they don't ask first), so give keys only
   the access you're happy for the model to use (e.g. GitHub's read-only switch).
 

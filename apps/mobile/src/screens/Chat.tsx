@@ -387,7 +387,7 @@ function Conversation({
     setDraft({ content: "", thinking: "", files: [] });
     stopSaying();
     let reply: Message | null = null;
-    stop.current = api.stream(`/api/chats/${chat.id}/messages`, { content: text, images: sending, ...clock() }, {
+    stop.current = api.stream(`/api/chats/${chat.id}/messages`, { content: text, images: sending, ...clock(), use_pc_tools: true }, {
       event: (name, data) => {
         const d = data as { text?: string; message?: unknown; user_message?: Message };
         if (name === "done" && d.message && typeof d.message === "object") reply = d.message as Message;

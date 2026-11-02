@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, streamMessage, voiceApi, type Persona } from "../api";
+import { ApiError, streamMessage, voiceApi, type MessageTools, type Persona } from "../api";
 import { Button } from "./ui";
 import { VoiceWave, type WaveMode } from "./wave";
 
@@ -407,6 +407,13 @@ class Ear {
 let talkOverReplies = true;
 
 /** The reply's own words, heard back through the microphone (not the user talking over it). */
+/** A spoken yes ("yes", "yeah, go ahead", "do it"). Anything else is a no. */
+export function isYes(text: string) {
+  const t = text.toLowerCase().replace(/[^a-z' ]/g, " ").trim();
+  if (/\b(no|nope|don't|dont|stop|cancel|wait|not)\b/.test(t)) return false;
+  return /\b(yes|yeah|yep|yup|sure|ok|okay|please|correct|right|go ahead|do it|go for it|affirmative|absolutely|definitely)\b/.test(t);
+}
+
 function isEcho(heard: string, reply: string) {
   const words = (t: string) => t.toLowerCase().match(/[a-z0-9\u00C0-\uFFFF']{2,}/g) ?? [];
   const h = words(heard);
@@ -429,6 +436,8 @@ export function HandsFree({
   chatId,
   onTurn,
   onClose,
+  tools,
+  pcFolders,
 }: {
   token: string;
   persona: Persona | null;
@@ -437,10 +446,16 @@ export function HandsFree({
   /** A turn finished: reload the chat. */
   onTurn: () => void;
   onClose: () => void;
+  /** The chat's tools on this PC, to send with each turn (as typed messages do). */
+  tools?: () => Promise<MessageTools[]>;
+  /** The chat's PC folders this app can reach. */
+  pcFolders?: string[];
 }) {
   const [phase, setPhase] = useState<Phase>("starting");
   const [heard, setHeard] = useState("");
   const [reply, setReply] = useState("");
+  /** What it's doing with tools this turn ("GitHub › search_issues"). */
+  const [doing, setDoing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [talking, setTalking] = useState(false);
   const [gotIt, setGotIt] = useState(false);
@@ -512,19 +527,58 @@ export function HandsFree({
           setError(null);
           go("thinking");
           let said = "";
+          setDoing(null);
           try {
             const id = await chatId();
-            await streamMessage(token, id, text, [], {
-              token: (t) => {
-                said += t;
-                setReply(said);
+            const toolServers = tools ? await tools().catch(() => []) : [];
+            await streamMessage(
+              token,
+              id,
+              text,
+              [],
+              {
+                token: (t) => {
+                  said += t;
+                  setReply(said);
+                },
+                done: ({ message: m, error: e }) => {
+                  said = m.content;
+                  if (e) setError(e);
+                },
+                error: (m) => setError(m),
+                file: (a) => setDoing(a.op === "mcp" ? `Using ${a.path}` : `${a.op === "read" ? "Reading" : "Working on"} ${a.path}`),
+                // Before each tool: say what it's about to do, and go ahead only on a clear yes.
+                confirm: async (question) => {
+                  if (!alive()) return false;
+                  queue.current = [];
+                  setDoing(question);
+                  go("speaking");
+                  speaking.current = question;
+                  await sayAloud(token, question, persona).catch(() => undefined);
+                  go("thinking");
+                  setDoing(`${question} (say yes or no)`);
+                  const until = Date.now() + 20_000;
+                  while (alive() && Date.now() < until) {
+                    const item = queue.current.shift();
+                    if (item) {
+                      const answer = await toText(item).catch(() => "");
+                      if (isSpeech(answer) && !isEcho(answer, question)) {
+                        const ok = isYes(answer);
+                        setDoing(ok ? "Going ahead…" : "Not doing it.");
+                        return ok;
+                      }
+                    }
+                    await new Promise((r) => setTimeout(r, 150));
+                  }
+                  setDoing("No answer: not doing it.");
+                  return false;
+                },
               },
-              done: ({ message: m, error: e }) => {
-                said = m.content;
-                if (e) setError(e);
-              },
-              error: (m) => setError(m),
-            });
+              undefined,
+              pcFolders ?? [],
+              toolServers,
+            );
+            setDoing(null);
           } catch (err) {
             setError(message(err));
           }
@@ -549,7 +603,7 @@ export function HandsFree({
         if (alive() && phaseRef.current !== "paused") go("listening");
       }
     },
-    [chatId, go, onTurn, persona, toText, token],
+    [chatId, go, onTurn, persona, toText, token, tools, pcFolders],
   );
 
   // The turn loop as of this render (the microphone's callbacks were made on the first).
@@ -684,6 +738,11 @@ export function HandsFree({
           {status}
         </p>
         {heard && <p className="line-clamp-2 text-sm text-muted">“{heard}”</p>}
+        {doing && (phase === "thinking" || phase === "speaking") && (
+          <p className="truncate text-xs text-muted" aria-live="polite">
+            {doing}…
+          </p>
+        )}
         {shown && (phase === "thinking" || phase === "speaking") && <p className="mx-auto max-h-40 max-w-xl overflow-auto text-sm text-soft">{shown}</p>}
         {error && (
           <p className="text-sm text-danger" role="alert">

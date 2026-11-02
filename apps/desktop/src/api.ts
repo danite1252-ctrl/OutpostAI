@@ -512,6 +512,7 @@ export const pcTools = {
   signIn: (id: string, clientId?: string, clientSecret?: string, scope?: string) =>
     tauri<void>("mcp_sign_in", { id, clientId: clientId || null, clientSecret: clientSecret || null, scope: scope || null }),
   signOut: (id: string) => tauri<void>("mcp_sign_out", { id }),
+  allSelections: () => tauri<{ chats: Record<string, string[]>; personas: Record<string, string[]> }>("mcp_all_selections"),
 };
 
 export interface Source {
@@ -908,6 +909,8 @@ export interface StreamHandlers {
   error?: (message: string) => void;
   /** Something the reply did with files, as it happens. */
   file?: (action: FileAction) => void;
+  /** Asked before a tool runs (hands-free): resolve true to go ahead. */
+  confirm?: (question: string) => Promise<boolean>;
 }
 
 /** Send a chat message and follow the streamed reply (Server-Sent Events over POST). */
@@ -935,7 +938,12 @@ export async function streamMessage(
         pc_folders: pcFolderIds,
         pc_tools: pcToolServers
           .filter((s) => s.tools.length > 0)
-          .map((s) => ({ id: s.id, name: s.name, tools: s.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) })),
+          .map((s) => ({
+            id: s.id,
+            name: s.name,
+            tools: s.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, read_only: t.read_only })),
+          })),
+        confirm_tools: !!on.confirm,
       }),
       signal,
     });
@@ -973,6 +981,16 @@ export async function streamMessage(
       else if (name === "error") on.error?.(payload.message);
       else if (name === "file") on.file?.(payload);
       else if (name === "file_request") void answerFileRequest(token, chatId, payload);
+      else if (name === "confirm") {
+        const ask = on.confirm ? on.confirm(String(payload.question ?? "Go ahead?")).catch(() => false) : Promise.resolve(false);
+        void ask.then((ok) =>
+          fetch(`${GATEWAY}/api/chats/${chatId}/file-answers/${payload.id}`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ ok }),
+          }).catch(() => undefined),
+        );
+      }
     }
   }
 }

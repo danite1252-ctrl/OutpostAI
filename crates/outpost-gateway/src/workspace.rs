@@ -57,7 +57,7 @@ impl Relay {
     }
 
     async fn ask(&self, events: &mpsc::Sender<Event>, chat_id: &str, request: Value) -> Result<Value, String> {
-        self.ask_within(events, chat_id, request, Duration::from_secs(60)).await
+        self.ask_within(events, chat_id, request, Duration::from_secs(60), "file_request").await
     }
 
     /// Ask the app streaming this reply to do something (a `file_request` event) and wait for
@@ -68,6 +68,7 @@ impl Relay {
         chat_id: &str,
         request: Value,
         within: Duration,
+        event: &str,
     ) -> Result<Value, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
@@ -77,7 +78,7 @@ impl Relay {
             .insert(id.clone(), (chat_id.to_string(), tx));
         let mut body = request;
         body["id"] = json!(id);
-        let sent = events.send(Event::default().event("file_request").data(body.to_string())).await;
+        let sent = events.send(Event::default().event(event).data(body.to_string())).await;
         let answer = if sent.is_err() {
             Err("The app closed the chat.".to_string())
         } else {

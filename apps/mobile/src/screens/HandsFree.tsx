@@ -31,6 +31,13 @@ function isEcho(heard: string, reply: string) {
   return h.filter((w) => r.has(w)).length / h.length >= 0.6;
 }
 
+/** A spoken yes ("yes", "yeah, go ahead", "do it"). Anything else is a no. */
+function isYes(text: string) {
+  const t = text.toLowerCase().replace(/[^a-z' ]/g, " ").trim();
+  if (/\b(no|nope|don't|dont|stop|cancel|wait|not)\b/.test(t)) return false;
+  return /\b(yes|yeah|yep|yup|sure|ok|okay|please|correct|right|go ahead|do it|go for it|affirmative|absolutely|definitely)\b/.test(t);
+}
+
 /** Something said: a recording to work out, or words already worked out. */
 type Said = { audio: string } | { text: string };
 
@@ -80,6 +87,10 @@ export default function HandsFree({
   const speaking = useRef("");
   const busy = useRef(false);
   const stopStream = useRef<(() => void) | null>(null);
+  /** Waiting for a yes or no to a tool's question: takes the next thing said. */
+  const confirming = useRef<{ question: string; answer: (text: string) => void } | null>(null);
+  /** What it's doing with tools, or asking ("Would you like me to check Google?"). */
+  const [doing, setDoing] = useState<string | null>(null);
 
   const go = useCallback((p: Phase) => {
     phaseRef.current = p;
@@ -102,15 +113,61 @@ export default function HandsFree({
     return () => sub.remove();
   }, [end]);
 
+  /**
+   * Before a tool runs (on your PC): say what it's about to do, and go ahead only on a clear
+   * yes, since speech can be misheard.
+   */
+  const confirmTool = useCallback(
+    async (id: string, question: string) => {
+      let heardBack = "";
+      const answered = new Promise<string>((resolve) => {
+        confirming.current = {
+          question,
+          answer: (text) => {
+            heardBack = text;
+            resolve(text);
+          },
+        };
+      });
+      setDoing(question);
+      go("speaking");
+      speaking.current = question;
+      try {
+        await say(api, question, persona?.id ?? null, "hands-free");
+      } catch {
+        // Asked on screen, then.
+      }
+      if (!heardBack) {
+        go("thinking");
+        setDoing(`${question} (say yes or no)`);
+      }
+      const text = await Promise.race([answered, new Promise<string>((r) => setTimeout(() => r(""), 20_000))]);
+      confirming.current = null;
+      const ok = live.current && isYes(text);
+      setDoing(ok ? "Going ahead…" : text ? "Not doing it." : "No answer: not doing it.");
+      go("thinking");
+      await api.json("POST", `/api/chats/${chatId}/file-answers/${id}`, { ok }).catch(() => undefined);
+    },
+    [api, chatId, go, persona],
+  );
+
   /** Send one thing said; resolves with the reply's text. */
   const ask = useCallback(
     (text: string) =>
       new Promise<string>((resolve) => {
         let said = "";
-        stopStream.current = api.stream(`/api/chats/${chatId}/messages`, { content: text, images: [], ...clock() }, {
+        setDoing(null);
+        // The chat's tools on your PC (if its Outpost app is open), asking before each.
+        stopStream.current = api.stream(`/api/chats/${chatId}/messages`, { content: text, images: [], ...clock(), use_pc_tools: true, confirm_tools: true }, {
           event: (name, data) => {
             const d = data as { text?: string; message?: Message | string; error?: string | null };
-            if (name === "token") {
+            if (name === "confirm") {
+              const c = data as { id: string; question?: string };
+              void confirmTool(c.id, c.question ?? "Go ahead?");
+            } else if (name === "file") {
+              const a = data as { op: string; path: string };
+              if (a.op === "mcp") setDoing(`Using ${a.path}`);
+            } else if (name === "token") {
               said += d.text ?? "";
               setReply(said);
             } else if (name === "done" && d.message && typeof d.message === "object") {
@@ -120,6 +177,7 @@ export default function HandsFree({
           },
           done: () => {
             stopStream.current = null;
+            setDoing(null);
             resolve(said);
           },
           error: (e) => {
@@ -129,7 +187,7 @@ export default function HandsFree({
           },
         });
       }),
-    [api, chatId],
+    [api, chatId, confirmTool],
   );
 
   /** Work through what was said, one turn at a time. */
@@ -217,6 +275,22 @@ export default function HandsFree({
       } else if (e.type === "utterance") {
         setTalking(false);
         if (phaseRef.current === "paused") return;
+        // The answer to a tool's question.
+        const asking = confirming.current;
+        if (asking) {
+          setGotIt(true);
+          setTimeout(() => setGotIt(false), 700);
+          api.transcribe(e.audio, "audio/wav").then(
+            (r) => {
+              if (confirming.current === asking && isSpeech(r.text) && !isEcho(r.text, asking.question)) {
+                stopSaying();
+                asking.answer(r.text.trim());
+              }
+            },
+            () => undefined,
+          );
+          return;
+        }
         if (held.current || phaseRef.current === "speaking") {
           // Talking over the reply: stop it only for real words, so noise never cuts it off.
           const wasHeld = held.current;
@@ -328,6 +402,11 @@ export default function HandsFree({
           {heard ? (
             <Text numberOfLines={2} style={{ color: C.muted, fontSize: 14, textAlign: "center" }}>
               “{heard}”
+            </Text>
+          ) : null}
+          {doing ? (
+            <Text accessibilityLiveRegion="polite" style={{ color: C.amber, fontSize: 15, textAlign: "center" }}>
+              {doing}
             </Text>
           ) : null}
           {shown && (phase === "thinking" || phase === "speaking") ? (

@@ -13,6 +13,7 @@ import Train from "./Train";
 import Api from "./Api";
 import { DownloadsButton } from "../components/downloads";
 import { useJobNotifications } from "../components/notify";
+import { useDeviceTools } from "../components/devicebridge";
 import { SavedToasts } from "../components/save";
 import { QueueButton } from "../components/queue";
 import { CrashNotice, UpdateBanner } from "../components/system";
@@ -56,6 +57,8 @@ export default function Shell({
   }, [auth.token]);
   const [createRequest, setCreateRequest] = useState<CreateRequest | null>(null);
   useJobNotifications(auth.token);
+  // This PC's tools, for your chats from the phone.
+  useDeviceTools(auth.token);
   const { status: engines, refresh: refreshEngines } = useEngines(auth.token, onSignedOutElsewhere);
   const ollamaUp = engineReady(engines, "ollama");
   const comfyUp = engineReady(engines, "comfyui");

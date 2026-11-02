@@ -332,6 +332,14 @@ pub struct SendRequest {
     /// answers the reply's `file_request` events with `op: "mcp"`. Left out by phones.
     #[serde(default)]
     pub pc_tools: Vec<crate::pc_tools::PcToolServer>,
+    /// From an app without its own tools (the phone): use the chat's tools on your PC that
+    /// offers them (its Outpost app open), if there is one.
+    #[serde(default)]
+    pub use_pc_tools: bool,
+    /// Ask before each tool call (`confirm` events, answered like file requests with
+    /// `{ok}`): hands-free, where speech can be misheard.
+    #[serde(default)]
+    pub confirm_tools: bool,
 }
 
 #[derive(Deserialize)]
@@ -507,7 +515,19 @@ pub async fn send_message(
     }
     // Folders the chat works with: the model needs tools for them.
     let folders = outpost_core::chat_files::chat_folders(&state.pool, &chat.id).await?;
-    let wants_tools = req.pc_tools.iter().any(|s| !s.tools.is_empty());
+    // Tools on a PC: this app's own (desktop), or the chat's on your PC that offers them (phone).
+    let (tool_servers, tools_via) = if !req.pc_tools.is_empty() {
+        (req.pc_tools.clone(), crate::pc_tools::Via::App)
+    } else if req.use_pc_tools && resolved.can_use_tools {
+        // (A model without tools just answers without them.)
+        match state.device_tools.for_chat(&account_id, &chat.id, chat.persona_id.as_deref()) {
+            Some(ct) => (ct.servers, crate::pc_tools::Via::Device { tools: state.device_tools.clone(), session_id: ct.session_id }),
+            None => (Vec::new(), crate::pc_tools::Via::App),
+        }
+    } else {
+        (Vec::new(), crate::pc_tools::Via::App)
+    };
+    let wants_tools = tool_servers.iter().any(|s| !s.tools.is_empty());
     if wants_tools && folders.is_empty() && !resolved.can_use_tools {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -561,7 +581,7 @@ pub async fn send_message(
         system = format!("{system}\n\n{}", w.instructions());
     }
     // MCP servers on the app's PC.
-    let pc_tools = crate::pc_tools::PcTools::new(state.file_relay.clone(), &chat.id, tx.clone(), req.pc_tools.clone());
+    let pc_tools = crate::pc_tools::PcTools::new(state.file_relay.clone(), &chat.id, tx.clone(), tool_servers, tools_via, req.confirm_tools);
     if let Some(t) = &pc_tools {
         system = format!("{system}\n\n{}", t.instructions());
     }

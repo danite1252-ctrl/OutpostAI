@@ -410,6 +410,12 @@ pub fn mcp_select_chat(chat_id: String, ids: Option<Vec<String>>) -> Result<(), 
     crate::save_setting_value("mcp_chats", serde_json::to_value(map).map_err(|e| e.to_string())?)
 }
 
+/// Every chat's and persona's tool servers (for chats from the phone, which run them here).
+#[tauri::command]
+pub fn mcp_all_selections() -> Value {
+    json!({ "chats": selections("mcp_chats"), "personas": selections("mcp_personas") })
+}
+
 /// A persona's default set (new chats with it start with these).
 #[tauri::command]
 pub fn mcp_select_persona(persona_id: String, ids: Vec<String>) -> Result<(), String> {

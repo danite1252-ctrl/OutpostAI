@@ -724,6 +724,8 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
             void loadLists();
           }}
           onClose={() => setHandsFree(false)}
+          tools={chatTools.forMessage}
+          pcFolders={chatFiles.reachable}
         />
       )}
       {fromGallery && (

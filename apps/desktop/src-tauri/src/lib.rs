@@ -895,7 +895,8 @@ pub fn run() {
             pc_tools::mcp_install_runtime,
             pc_tools::mcp_missing_runtime,
             pc_tools::mcp_sign_in,
-            pc_tools::mcp_sign_out
+            pc_tools::mcp_sign_out,
+            pc_tools::mcp_all_selections
         ])
         .build(context)
         .expect("error while building Outpost");
