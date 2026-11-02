@@ -451,7 +451,8 @@ export interface McpServer {
   id: string;
   name: string;
   catalog_id: string | null;
-  transport: "stdio" | "http";
+  /** `builtin`: one of Outpost's own (command "google"). */
+  transport: "stdio" | "http" | "builtin";
   command: string;
   args: string[];
   env: Record<string, string>;
@@ -459,6 +460,12 @@ export interface McpServer {
   headers: Record<string, string>;
   enabled: boolean;
   disabled_tools: string[];
+  /** Signed in with OAuth (the tokens stay in the app). */
+  signed_in?: boolean;
+  /** The OAuth client ID you entered for it, if any. */
+  oauth_client?: string | null;
+  /** Built-in Google: the sign-in covers what's switched on (else sign in again). */
+  scope_ok?: boolean;
 }
 
 export interface McpTool {
@@ -501,6 +508,10 @@ export const pcTools = {
   runtimes: () => tauri<Runtimes>("mcp_runtimes"),
   installRuntime: (which: "node" | "uv") => tauri<void>("mcp_install_runtime", { which }),
   missingRuntime: (error: string) => tauri<"node" | "uv" | null>("mcp_missing_runtime", { error }),
+  /** Opens the browser at the service's sign-in page; resolves once you're back. */
+  signIn: (id: string, clientId?: string, clientSecret?: string, scope?: string) =>
+    tauri<void>("mcp_sign_in", { id, clientId: clientId || null, clientSecret: clientSecret || null, scope: scope || null }),
+  signOut: (id: string) => tauri<void>("mcp_sign_out", { id }),
 };
 
 export interface Source {

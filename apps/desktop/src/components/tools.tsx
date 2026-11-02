@@ -18,8 +18,11 @@ function message(e: unknown) {
 
 /** Strip the "needs node:" marker the app uses to say what to install. */
 function readable(e: string) {
-  return e.replace(/^needs (node|uv): /, "");
+  return e.replace(/^needs (node|uv|sign-in|client): /, "");
 }
+
+const needsSignIn = (e: string | null) => !!e && e.startsWith("needs sign-in:");
+const needsClient = (e: string | null) => !!e && e.startsWith("needs client:");
 
 export function useChatTools(chatId: string | null, personaId: string | null) {
   const [servers, setServers] = useState<McpServer[]>([]);
@@ -289,7 +292,9 @@ function CatalogCard({
   onAdded: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [values, setValues] = useState<Record<string, string>>({});
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(entry.inputs.filter((i) => i.value).map((i) => [i.key, i.value as string])),
+  );
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -303,6 +308,17 @@ function CatalogCard({
     try {
       const saved = await pcTools.save(fromCatalog(entry, values) as McpServer);
       onAdded();
+      if (entry.signIn) {
+        setResult("Finish signing in in your browser, then come back here…");
+        try {
+          await pcTools.signIn(saved.id, values.client_id, values.client_secret, entry.oauthScope);
+          onAdded();
+        } catch (e) {
+          setResult(null);
+          setError(`Added, but not signed in: ${readable(message(e))} Sign in from On this PC.`);
+          return;
+        }
+      }
       // Start it now, so problems show here rather than in a chat.
       try {
         const tools = await pcTools.tools(saved.id);
@@ -345,6 +361,13 @@ function CatalogCard({
       {open && (
         <div className="flex flex-col gap-3 border-t border-line pt-3">
           {entry.note && <p className="text-xs text-amber">{entry.note}</p>}
+          {entry.setup && (
+            <ol className="ml-5 list-decimal space-y-1 text-xs text-muted">
+              {entry.setup.map((step, i) => (
+                <li key={i}>{step}</li>
+              ))}
+            </ol>
+          )}
           {entry.inputs.map((i) => (
             <Field
               key={i.key}
@@ -370,7 +393,7 @@ function CatalogCard({
           ))}
           <div className="flex flex-wrap items-center gap-2">
             <Button onClick={() => void add()} disabled={busy || missing.length > 0 || (!!need && !runtimes?.[need])}>
-              {busy ? "Starting it…" : "Add and test"}
+              {busy ? (entry.signIn ? "Signing in…" : "Starting it…") : entry.signIn ? "Add and sign in" : "Add and test"}
             </Button>
             <Button variant="ghost" onClick={() => setOpen(false)}>
               Cancel
@@ -439,7 +462,11 @@ function ServerRow({
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="text-sm font-medium">{server.name}</span>
           <span className="truncate font-mono text-xs text-muted">
-            {server.transport === "http" ? server.url : [server.command, ...server.args].join(" ")}
+            {server.transport === "http"
+              ? server.url
+              : server.transport === "builtin"
+                ? `Built into Outpost${server.env.account ? ` · ${server.env.account}` : ""}`
+                : [server.command, ...server.args].join(" ")}
           </span>
         </span>
         <Toggle checked={server.enabled} label={`${server.name} on`} onChange={(on) => void save({ ...server, enabled: on })} />
@@ -454,6 +481,22 @@ function ServerRow({
         </Button>
       </div>
       {need && <RuntimeNote need={need} runtimes={runtimes} onInstall={() => onInstall(need)} />}
+      {server.transport === "builtin" && server.command === "google" && (
+        <GoogleSettings server={server} onSave={(s) => void save(s)} />
+      )}
+      {(server.transport === "http" || server.transport === "builtin") &&
+        (server.signed_in || server.oauth_client || needsSignIn(error) || needsClient(error)) && (
+        <SignIn
+          server={server}
+          askClient={needsClient(error)}
+          onDone={() => {
+            setError(null);
+            onChanged();
+            void test();
+          }}
+          onSignedOut={onChanged}
+        />
+      )}
       {tools && (
         <div className="flex flex-col gap-1">
           <p className="text-xs text-ok">Working: {tools.length} tools. Switch off any you don't want chats to use.</p>
@@ -488,6 +531,119 @@ function ServerRow({
       {editing && <EditServer server={server} onSave={(s) => void save(s).then(() => setEditing(false))} />}
       <ErrorNote>{error}</ErrorNote>
     </li>
+  );
+}
+
+const GOOGLE_PARTS: [string, string][] = [
+  ["drive", "Drive"],
+  ["docs", "Docs"],
+  ["sheets", "Sheets"],
+  ["gmail", "Gmail"],
+  ["calendar", "Calendar"],
+];
+
+/** What the built-in Google tools may use. Turning on more means signing in again. */
+function GoogleSettings({ server, onSave }: { server: McpServer; onSave: (s: McpServer) => void }) {
+  const on = (k: string) => server.args.includes(k);
+  const flip = (k: string, v: boolean) => onSave({ ...server, args: v ? [...server.args, k] : server.args.filter((x) => x !== k) });
+  return (
+    <div className="flex flex-col gap-2 text-xs">
+      <div className="flex flex-wrap gap-2">
+        {GOOGLE_PARTS.map(([k, label]) => (
+          <button
+            key={k}
+            type="button"
+            aria-pressed={on(k)}
+            onClick={() => flip(k, !on(k))}
+            className={`min-h-8 rounded-full border px-3 ${on(k) ? "border-ember bg-raised text-ink" : "border-line text-muted hover:text-ink"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <label className="flex items-center gap-2 text-muted">
+        <Toggle checked={on("write")} label="Allow changes" onChange={(v) => flip("write", v)} />
+        Allow changes (edit Docs and Sheets, create files, add events, write email drafts). Off: it only reads.
+      </label>
+      {server.signed_in && server.scope_ok === false && (
+        <span className="text-amber">You've switched on more than your sign-in allows: sign in again below.</span>
+      )}
+    </div>
+  );
+}
+
+/** Signing in to a service (OAuth): the browser opens at its page and comes back here. */
+function SignIn({
+  server,
+  askClient,
+  onDone,
+  onSignedOut,
+}: {
+  server: McpServer;
+  askClient: boolean;
+  onDone: () => void;
+  onSignedOut: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [clientId, setClientId] = useState("");
+  const [secret, setSecret] = useState("");
+  const showClient = askClient || needsClient(error);
+  async function go() {
+    setBusy(true);
+    setError(null);
+    try {
+      await pcTools.signIn(server.id, clientId.trim() || undefined, secret.trim() || undefined);
+      onDone();
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (server.signed_in)
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-ok">Signed in</span>
+        <Button variant="ghost" disabled={busy} onClick={() => void go()}>
+          Sign in again
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={() =>
+            void pcTools
+              .signOut(server.id)
+              .then(onSignedOut)
+              .catch((e) => setError(message(e)))
+          }
+        >
+          Sign out
+        </Button>
+        <ErrorNote>{error && readable(error)}</ErrorNote>
+      </div>
+    );
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-amber/60 px-3 py-2 text-xs">
+      <span>
+        {server.name} needs you to sign in. Your browser opens at its sign-in page; come back here once you've signed in.
+      </span>
+      {showClient && (
+        <>
+          <span className="text-muted">
+            This service doesn't let apps register themselves: make an OAuth client for it (a "Desktop app" type, if asked)
+            and enter it here.
+          </span>
+          <Field label="Client ID" value={clientId} onChange={(e) => setClientId(e.target.value)} autoComplete="off" />
+          <Field label="Client secret (if it gave one)" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="off" />
+        </>
+      )}
+      <div>
+        <Button disabled={busy || (showClient && !clientId.trim() && !server.oauth_client)} onClick={() => void go()}>
+          {busy ? "Waiting for the browser…" : "Sign in"}
+        </Button>
+      </div>
+      <ErrorNote>{error && !needsClient(error) ? readable(error) : null}</ErrorNote>
+    </div>
   );
 }
 

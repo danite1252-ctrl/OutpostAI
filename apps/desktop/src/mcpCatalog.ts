@@ -6,8 +6,9 @@
 export interface CatalogInput {
   key: string;
   label: string;
-  /** Where the value goes: an environment variable, a header, or command-line arguments. */
-  kind: "env" | "header" | "arg" | "url";
+  /** Where the value goes: an environment variable, a header, command-line arguments, the
+   * address, or (`client_id`/`client_secret`) the OAuth client used to sign in. */
+  kind: "env" | "header" | "arg" | "url" | "client_id" | "client_secret";
   /** env / header name. */
   name?: string;
   /** For a header: how the value is written, e.g. "Bearer {value}". */
@@ -20,15 +21,17 @@ export interface CatalogInput {
   help?: string;
   /** Where to get it. */
   link?: string;
+  /** Filled in to start with. */
+  value?: string;
 }
 
 export interface CatalogEntry {
   id: string;
   name: string;
-  category: "Search & the web" | "Coding" | "Knowledge" | "Home & tasks" | "Helpers";
+  category: "Search & the web" | "Office & files" | "Coding" | "Knowledge" | "Home & tasks" | "Helpers";
   description: string;
-  transport: "stdio" | "http";
-  command?: "npx" | "uvx";
+  transport: "stdio" | "http" | "builtin";
+  command?: string;
   args?: string[];
   url?: string;
   inputs: CatalogInput[];
@@ -39,6 +42,44 @@ export interface CatalogEntry {
   note?: string;
   /** Picked as a good first tool. */
   starter?: boolean;
+  /** Signs in with the service's own page when added (OAuth). */
+  signIn?: boolean;
+  /** Steps to do first (e.g. making an OAuth client). */
+  setup?: string[];
+  /** Scopes to ask for when signing in (services that don't publish theirs). */
+  oauthScope?: string;
+}
+
+const GOOGLE_SETUP = [
+  "Needs a Google Workspace account (Google's MCP servers are a developer preview; personal Gmail accounts can't enrol yet).",
+  "In Google Cloud (console.cloud.google.com), make or pick a project, and enrol it in the Workspace Developer Preview (developers.google.com/workspace/preview). Google takes a couple of days.",
+  "Enable the service's API and its MCP service in that project (e.g. Google Drive API and Drive MCP API).",
+  "Google Auth Platform › Audience: Internal (or External with your accounts as test users). Data Access: add the scopes this tool asks for.",
+  "Clients › Create client: type Web application, tick 'Use this client for an AI-powered agent', and add this redirect address exactly: http://127.0.0.1:33418/callback",
+  "Copy its client ID and secret below (the secret is shown once). One client works for all the Google tools.",
+];
+
+const googleInputs: CatalogInput[] = [
+  { key: "client_id", label: "OAuth client ID", kind: "client_id", placeholder: "…apps.googleusercontent.com" },
+  { key: "client_secret", label: "Client secret", kind: "client_secret", secret: true },
+];
+
+function google(id: string, name: string, description: string, host: string, scopes: string[]): CatalogEntry {
+  return {
+    id: `google-${id}`,
+    name,
+    category: "Office & files",
+    description,
+    transport: "http",
+    url: `https://${host}.googleapis.com/mcp/v1`,
+    inputs: googleInputs,
+    cost: "Free with Google Workspace (developer preview)",
+    page: "https://developers.google.com/workspace/guides/configure-mcp-servers",
+    signIn: true,
+    oauthScope: scopes.map((s) => `https://www.googleapis.com/auth/${s}`).join(" "),
+    setup: GOOGLE_SETUP,
+    note: "Google's own servers: the most capable, but setting them up takes a while (steps below). For a quicker start with a personal Google account, use Google Sheets (robot account).",
+  };
 }
 
 const windows = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
@@ -123,6 +164,173 @@ export const CATALOG: CatalogEntry[] = [
     cost: "Free",
     page: "https://github.com/microsoft/playwright-mcp",
     note: windows ? "Uses Microsoft Edge, which is already on Windows." : "May need its browser installed first (npx playwright install chromium).",
+  },
+  // ---- Office & files
+  {
+    id: "google",
+    name: "Google (Drive, Docs, Sheets, Gmail, Calendar)",
+    category: "Office & files",
+    description:
+      "Built into Outpost: search and read your Drive, read and edit Docs and Sheets, search mail and write drafts (never sent), see and add calendar events. Works with personal Google accounts.",
+    transport: "builtin",
+    command: "google",
+    args: ["drive", "docs", "sheets", "gmail", "calendar", "write"],
+    inputs: [
+      { key: "client_id", label: "OAuth client ID", kind: "client_id", placeholder: "…apps.googleusercontent.com" },
+      { key: "client_secret", label: "Client secret", kind: "client_secret", secret: true },
+    ],
+    cost: "Free (your own Google Cloud project, made once)",
+    page: "https://console.cloud.google.com/",
+    signIn: true,
+    starter: true,
+    setup: [
+      "Go to console.cloud.google.com and sign in with your Google account. Make a new project (top bar › New project), e.g. \"Outpost\".",
+      "APIs & Services › Library: search for and Enable each of Google Drive API, Google Docs API, Google Sheets API, Gmail API and Google Calendar API.",
+      "Google Auth Platform (or OAuth consent screen) › Get started: app name Outpost, your email, Audience: External. Then Audience › Publish app (In production), so sign-ins don't expire every 7 days.",
+      "Clients › Create client › Application type: Desktop app. Copy its client ID and client secret into the boxes below.",
+      "When you sign in, Google says it hasn't verified the app (it's your own): click Advanced › Go to Outpost, and tick what it may use.",
+      "Once made, the same client works for everyone in your household and on all your PCs (up to 100 people).",
+    ],
+    note: "Choose which parts it can use, and whether it can change things, under On this PC after adding it.",
+  },
+  {
+    id: "notion-signin",
+    name: "Notion",
+    category: "Office & files",
+    description: "Search, read and edit your Notion pages and databases. Sign in with Notion.",
+    transport: "http",
+    url: "https://mcp.notion.com/mcp",
+    inputs: [],
+    cost: "Free with a Notion account (some tools need a paid plan)",
+    page: "https://developers.notion.com/docs/mcp",
+    signIn: true,
+    starter: true,
+  },
+  {
+    id: "airtable",
+    name: "Airtable",
+    category: "Office & files",
+    description: "Read and write your Airtable bases and records (you pick which bases when signing in).",
+    transport: "http",
+    url: "https://mcp.airtable.com/mcp",
+    inputs: [],
+    cost: "Free with an Airtable account",
+    page: "https://airtable.com/developers/agents/mcp",
+    signIn: true,
+  },
+  {
+    id: "canva",
+    name: "Canva",
+    category: "Office & files",
+    description: "Make, find, edit and export Canva designs.",
+    transport: "http",
+    url: "https://mcp.canva.com/mcp",
+    inputs: [],
+    cost: "Free with a Canva account (some tools need Pro)",
+    page: "https://www.canva.dev/docs/apps/mcp/",
+    signIn: true,
+  },
+  {
+    id: "ms365",
+    name: "Microsoft 365 / Outlook.com",
+    category: "Office & files",
+    description: "Outlook mail and calendar, OneDrive, Excel, OneNote, To Do and contacts.",
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "@softeria/ms-365-mcp-server"],
+    inputs: [
+      {
+        key: "tenant",
+        label: "Account type",
+        kind: "env",
+        name: "MS365_MCP_TENANT_ID",
+        value: "consumers",
+        help: "consumers for a personal Microsoft account (Outlook.com, Hotmail); common for a work or school one.",
+      },
+      { key: "readonly", label: "Read only", kind: "env", name: "READ_ONLY", optional: true, placeholder: "true", help: "Type true so it can't send, change or delete anything." },
+    ],
+    cost: "Free",
+    page: "https://github.com/Softeria/ms-365-mcp-server",
+    note: "Signs in with a code: the first time, ask the chat to log in to Microsoft. It gives a link and a code to enter in your browser; then say you're done and it carries on.",
+  },
+  {
+    id: "google-sheets-sa",
+    name: "Google Sheets (robot account)",
+    category: "Office & files",
+    description: "Create, read and edit spreadsheets in one Google Drive folder you share with it. Works with a personal Google account.",
+    transport: "stdio",
+    command: "uvx",
+    args: ["mcp-google-sheets@latest"],
+    inputs: [
+      { key: "key", label: "Service account key file", kind: "env", name: "SERVICE_ACCOUNT_PATH", placeholder: windows ? "C:\\Users\\you\\Documents\\outpost-sheets.json" : "/home/me/outpost-sheets.json" },
+      { key: "folder", label: "Drive folder ID", kind: "env", name: "DRIVE_FOLDER_ID", help: "The last part of the folder's address in Drive (after /folders/)." },
+    ],
+    cost: "Free",
+    page: "https://github.com/xing5/mcp-google-sheets",
+    setup: [
+      "In Google Cloud (console.cloud.google.com), make a project, and under APIs & Services › Library enable the Google Sheets API and Google Drive API.",
+      "IAM & Admin › Service Accounts: create one. Then Keys › Add key › JSON: save the file somewhere on this PC.",
+      "In Google Drive, make a folder for it, and share it (as Editor) with the service account's email (in the JSON file, client_email).",
+      "Enter the key file's path and the folder's ID below.",
+    ],
+  },
+  google("drive", "Google Drive (Google)", "Search, read, create and copy your Drive files.", "drivemcp", ["drive.readonly", "drive.file"]),
+  google("docs", "Google Docs (Google)", "Read and write your Google Docs.", "docsmcp", ["drive.readonly", "drive.file", "documents"]),
+  google("sheets", "Google Sheets (Google)", "Read and write your Google Sheets.", "sheetsmcp", ["drive.readonly", "drive.file", "spreadsheets"]),
+  google("gmail", "Gmail (Google)", "Search and read your mail, and write drafts.", "gmailmcp", ["gmail.readonly", "gmail.compose"]),
+  google("calendar", "Google Calendar (Google)", "Your calendars, events and when you're free.", "calendarmcp", [
+    "calendar.calendarlist.readonly",
+    "calendar.events.freebusy",
+    "calendar.events.readonly",
+  ]),
+  // ---- Coding
+  {
+    id: "linear",
+    name: "Linear",
+    category: "Coding",
+    description: "Issues, projects and comments in Linear.",
+    transport: "http",
+    url: "https://mcp.linear.app/mcp",
+    inputs: [],
+    cost: "Free with a Linear account",
+    page: "https://linear.app/docs/mcp",
+    signIn: true,
+  },
+  {
+    id: "atlassian",
+    name: "Jira and Confluence",
+    category: "Coding",
+    description: "Search and edit Jira issues and Confluence pages (Atlassian Cloud).",
+    transport: "http",
+    url: "https://mcp.atlassian.com/v2/mcp",
+    inputs: [],
+    cost: "With an Atlassian Cloud account",
+    page: "https://support.atlassian.com/atlassian-rovo-mcp-server/docs/getting-started-with-the-atlassian-remote-mcp-server/",
+    signIn: true,
+  },
+  {
+    id: "supabase",
+    name: "Supabase",
+    category: "Coding",
+    description: "Your Supabase projects: tables, SQL, edge functions, logs and docs.",
+    transport: "http",
+    url: "https://mcp.supabase.com/mcp",
+    inputs: [],
+    cost: "Free with a Supabase account",
+    page: "https://supabase.com/docs/guides/getting-started/mcp",
+    signIn: true,
+  },
+  {
+    id: "sentry",
+    name: "Sentry",
+    category: "Coding",
+    description: "Look up errors, issues and traces in Sentry.",
+    transport: "http",
+    url: "https://mcp.sentry.dev/mcp",
+    inputs: [],
+    cost: "With a Sentry account",
+    page: "https://mcp.sentry.dev/",
+    signIn: true,
   },
   {
     id: "github",
@@ -286,8 +494,20 @@ export const CATALOG: CatalogEntry[] = [
     note: "First add the Model Context Protocol Server integration (Settings › Devices & services), then copy the MCP address from Settings › System › AI. Use an admin's token.",
   },
   {
-    id: "todoist",
+    id: "todoist-signin",
     name: "Todoist",
+    category: "Home & tasks",
+    description: "Read, add and finish your Todoist tasks and projects. Sign in with Todoist.",
+    transport: "http",
+    url: "https://ai.todoist.net/mcp",
+    inputs: [],
+    cost: "Free with a Todoist account",
+    page: "https://github.com/Doist/todoist-ai",
+    signIn: true,
+  },
+  {
+    id: "todoist",
+    name: "Todoist (with an API token)",
     category: "Home & tasks",
     description: "Read, add and finish your Todoist tasks and projects.",
     transport: "stdio",
@@ -299,7 +519,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     id: "notion",
-    name: "Notion",
+    name: "Notion (with an integration token)",
     category: "Home & tasks",
     description: "Search, read, create and update the Notion pages you share with it.",
     transport: "stdio",
@@ -346,7 +566,7 @@ export const CATALOG: CatalogEntry[] = [
   },
 ];
 
-export const CATEGORIES: CatalogEntry["category"][] = ["Search & the web", "Coding", "Knowledge", "Home & tasks", "Helpers"];
+export const CATEGORIES: CatalogEntry["category"][] = ["Search & the web", "Office & files", "Coding", "Knowledge", "Home & tasks", "Helpers"];
 
 /** The runtime an entry needs on this PC. */
 export function runtimeFor(e: { transport: string; command?: string }): "node" | "uv" | null {
@@ -369,6 +589,7 @@ export function fromCatalog(e: CatalogEntry, values: Record<string, string>) {
     else if (input.kind === "header" && input.name) headers[input.name] = (input.format ?? "{value}").replace("{value}", v);
     else if (input.kind === "arg") args.push(...(input.args ?? ["{value}"]).map((a) => a.replace("{value}", v)));
     else if (input.kind === "url") url = url.replace(`{${input.key}}`, v.replace(/\/+$/, ""));
+    // client_id / client_secret go to the sign-in, not the server's settings.
   }
   return {
     id: "",

@@ -279,7 +279,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
         const broken = toolServers.filter((s) => s.error);
         if (broken.length)
           setError(
-            `${broken.map((s) => `${s.name} couldn't start (${(s.error ?? "").replace(/^needs (node|uv): /, "")})`).join("; ")}. The reply goes ahead without it.`,
+            `${broken.map((s) => `${s.name} couldn't start (${(s.error ?? "").replace(/^needs (node|uv|sign-in|client): /, "")})`).join("; ")}. The reply goes ahead without it.`,
           );
       }
       await streamMessage(

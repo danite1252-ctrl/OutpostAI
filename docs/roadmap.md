@@ -13,7 +13,7 @@ card), and tools on your PC for chats (MCP servers, with a library of ready-made
 
 ## Ideas after 1.0
 
-- Tools: servers that sign in with OAuth; tools from the phone (through the desktop app);
+- Tools: tools from the phone (through the desktop app);
   asking before a tool that changes things runs.
 
 - Training lower-memory settings for 12 GB cards.

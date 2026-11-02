@@ -105,7 +105,19 @@ GitHub, a hidden web browser, Wikipedia, Home Assistant, Todoist, Notion and mor
 - Tools that run with `npx` or `uvx` need Node.js or Python: if your PC hasn't got them, the
   library offers to download them into Outpost's own folder (nothing is installed system-wide).
 - **Add your own**: any MCP server's command (or address and headers) from its instructions.
-  Servers that need a sign-in page (OAuth) aren't supported yet; use ones that take a key.
+- **Signing in (OAuth)**: services that sign you in on their own page (Notion, Linear, Google
+  and others) show **Sign in**: your browser opens at their page, and once you've signed in it
+  comes back to Outpost on this PC (a one-off address like `http://127.0.0.1:52344/callback`).
+  Outpost registers itself with services that allow it; for ones that don't (Google), make an
+  OAuth client as the library's steps say, with `http://127.0.0.1:33418/callback` as its
+  redirect address, and enter its client ID. Tokens stay on this PC and
+  are renewed automatically; **Sign out** forgets them.
+- **Google** (built in): Drive, Docs, Sheets, Gmail and Calendar, with a personal or work
+  Google account. Make a free login client once in Google Cloud (the library lists the steps:
+  a project, the five APIs switched on, the consent screen published, and a "Desktop app"
+  client), then **Sign in with Google**. Google says the app isn't verified, because it's your
+  own: **Advanced › Go to Outpost**. Under **On this PC** choose which parts it may use and
+  whether it may change things; mail is only ever written as drafts for you to send.
 - **Which chats use which**: a persona's tools are set in **Personas** (new chats with it start
   with those); a chat can be given its own set from **+ › Tools**. **On this PC › Test** shows a
   tool server's tools; switch off any you don't want used.

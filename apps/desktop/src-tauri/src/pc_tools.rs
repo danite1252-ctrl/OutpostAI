@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, OnceLock};
 
 use outpost_gateway::mcp_client::{self, Pool, ServerConfig, ToolInfo};
+use outpost_gateway::google_tools;
+use outpost_gateway::mcp_oauth::{self, OAuthState};
 use outpost_gateway::Config;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -39,6 +41,9 @@ pub struct McpServer {
     /// Tools switched off (never offered to the model).
     #[serde(default)]
     pub disabled_tools: Vec<String>,
+    /// Its OAuth sign-in (tokens included): kept here, never sent to the app's pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<OAuthState>,
 }
 
 fn yes() -> bool {
@@ -55,9 +60,220 @@ impl McpServer {
             args: self.args.clone(),
             env: self.env.clone(),
             url: self.url.clone(),
-            headers: self.headers.clone(),
+            headers: {
+                let mut h = self.headers.clone();
+                // Signed in: its token, over any key typed in.
+                if let Some(token) = self.oauth.as_ref().and_then(|o| o.access_token.as_ref()) {
+                    h.retain(|k, _| !k.eq_ignore_ascii_case("authorization"));
+                    h.insert("Authorization".into(), format!("Bearer {token}"));
+                }
+                h
+            },
         }
     }
+
+    /// For the app's pages: without the sign-in's tokens, but saying whether it's signed in.
+    fn for_page(&self) -> Value {
+        let mut v = serde_json::to_value(self).unwrap_or_default();
+        if let Some(o) = v.as_object_mut() {
+            o.remove("oauth");
+            let st = self.oauth.as_ref();
+            o.insert("signed_in".into(), json!(st.is_some_and(OAuthState::signed_in)));
+            // An OAuth client the user made (not one Outpost registered).
+            o.insert("oauth_client".into(), json!(st.filter(|s| !s.registered && !s.client_id.is_empty()).map(|s| s.client_id.clone())));
+            // Built-in Google: does the sign-in cover what's switched on (else sign in again)?
+            if self.is_google() {
+                let ok = st.and_then(|s| s.scope.as_deref()).is_some_and(|g| google_tools::covers(g, &self.args));
+                o.insert("scope_ok".into(), json!(ok));
+            }
+        }
+        v
+    }
+
+    /// Outpost's own Google tools (not an MCP server).
+    fn is_google(&self) -> bool {
+        self.transport == "builtin" && self.command == "google"
+    }
+
+    /// The signed-in token, or the sign-in to ask for.
+    fn token(&self) -> Result<String, String> {
+        self.oauth
+            .as_ref()
+            .and_then(|o| o.access_token.clone())
+            .ok_or_else(|| format!("needs sign-in: sign in to {} first (Tools › On this PC).", self.name))
+    }
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+fn http() -> reqwest::Client {
+    reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(20)).build().expect("HTTP client")
+}
+
+fn store_oauth(id: &str, oauth: Option<OAuthState>) -> Result<(), String> {
+    let mut list = all();
+    if let Some(s) = list.iter_mut().find(|s| s.id == id) {
+        s.oauth = oauth;
+    }
+    save_all(&list)
+}
+
+/// Its token refreshed if it's run out (or `force`), and kept. One refresh at a time: some
+/// services (Notion) replace the refresh token each time and cut off one used twice.
+async fn refreshed(s: McpServer, force: bool) -> Result<McpServer, String> {
+    static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let Some(had) = s.oauth.as_ref().and_then(|o| o.access_token.clone()).filter(|_| s.oauth.as_ref().is_some_and(|o| o.refresh_token.is_some())) else {
+        return Ok(s);
+    };
+    if !force && !s.oauth.as_ref().is_some_and(|o| o.needs_refresh(now())) {
+        return Ok(s);
+    }
+    let _turn = ONE_AT_A_TIME.lock().await;
+    // Another call may have refreshed it while this one waited: use that.
+    let mut s = find(&s.id)?;
+    let Some(st) = s.oauth.clone() else { return Ok(s) };
+    if st.access_token.as_deref() != Some(had.as_str()) && !st.needs_refresh(now()) {
+        return Ok(s);
+    }
+    let next = mcp_oauth::refresh(&http(), &st).await?;
+    s.oauth = Some(next);
+    store_oauth(&s.id, s.oauth.clone())?;
+    Ok(s)
+}
+
+/// Whether a sign-in error is worth a refresh and another try.
+fn can_refresh(s: &McpServer, e: &str) -> bool {
+    mcp_client::needs_sign_in(e) && s.oauth.as_ref().is_some_and(|o| o.refresh_token.is_some())
+}
+
+async fn tools_of(s: McpServer) -> Result<Vec<ToolInfo>, String> {
+    if s.is_google() {
+        // Nothing to start: its tools follow its settings, once signed in.
+        s.token()?;
+        return Ok(google_tools::tools(&s.args));
+    }
+    let s = refreshed(s, false).await?;
+    match pool().tools(&s.config()).await {
+        Err(e) if can_refresh(&s, &e) => {
+            let s = refreshed(s, true).await?;
+            pool().tools(&s.config()).await
+        }
+        other => other,
+    }
+}
+
+async fn call_on(s: McpServer, tool: &str, arguments: Value) -> Result<mcp_client::CallResult, String> {
+    if s.is_google() {
+        let s = refreshed(s, false).await?;
+        return match google_tools::call(&http(), &s.token()?, &s.args, tool, &arguments).await {
+            Err(e) if can_refresh(&s, &e) => {
+                let s = refreshed(s, true).await?;
+                google_tools::call(&http(), &s.token()?, &s.args, tool, &arguments).await
+            }
+            other => other,
+        };
+    }
+    let s = refreshed(s, false).await?;
+    match pool().call(&s.config(), tool, arguments.clone()).await {
+        Err(e) if can_refresh(&s, &e) => {
+            let s = refreshed(s, true).await?;
+            pool().call(&s.config(), tool, arguments).await
+        }
+        other => other,
+    }
+}
+
+/// Show an address in the default browser.
+fn open_in_browser(url: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    let r = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", url]).spawn();
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(url).spawn();
+    r.map(|_| ()).map_err(|e| format!("Couldn't open the browser: {e}"))
+}
+
+/// Sign in to a tool server with OAuth: the browser opens at the service's sign-in page and
+/// comes back to Outpost. `client_id` (and `client_secret`) for services where you make your
+/// own OAuth client (Google); others register Outpost themselves. An error that starts
+/// `needs client:` means this one needs a client ID.
+#[tauri::command]
+pub async fn mcp_sign_in(
+    id: String,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    scope: Option<String>,
+) -> Result<(), String> {
+    let s = find(&id)?;
+    if s.is_google() {
+        return sign_in_google(s, client_id, client_secret).await;
+    }
+    if s.transport != "http" {
+        return Err("Only tools at an address (http) sign in this way.".into());
+    }
+    let previous = s.oauth.clone();
+    let manual = match client_id.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
+        Some(c) => Some((c, client_secret.map(|x| x.trim().to_string()).filter(|x| !x.is_empty()))),
+        // The client made for it last time.
+        None => previous
+            .as_ref()
+            .filter(|p| !p.registered && !p.client_id.is_empty())
+            .map(|p| (p.client_id.clone(), p.client_secret.clone())),
+    };
+    // The scopes asked for last time, unless new ones are given.
+    let scope = scope.filter(|x| !x.trim().is_empty()).or_else(|| previous.as_ref().filter(|p| !p.registered).and_then(|p| p.scope.clone()));
+    let st = mcp_oauth::sign_in(&http(), &s.url, manual, scope, previous.as_ref(), open_in_browser).await?;
+    store_oauth(&id, Some(st))?;
+    pool().close(&id).await;
+    Ok(())
+}
+
+/// Sign in to Google for the built-in tools, asking for what its settings need.
+async fn sign_in_google(s: McpServer, client_id: Option<String>, client_secret: Option<String>) -> Result<(), String> {
+    let previous = s.oauth.clone().filter(|p| !p.client_id.is_empty());
+    let (id, secret) = match client_id.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
+        Some(c) => (c, client_secret),
+        None => match &previous {
+            Some(p) => (p.client_id.clone(), p.client_secret.clone()),
+            None => return Err("needs client: enter your Google OAuth client ID (the library's steps say how to make one).".into()),
+        },
+    };
+    let st = mcp_oauth::google_state(&id, secret, &google_tools::scopes(&s.args));
+    let client = http();
+    let st = mcp_oauth::sign_in_known(&client, st, open_in_browser).await?;
+    if st.refresh_token.is_none() {
+        tracing::warn!("Google gave no refresh token; the sign-in lasts an hour");
+    }
+    let account = match &st.access_token {
+        Some(t) => google_tools::account_email(&client, t).await,
+        None => None,
+    };
+    let mut list = all();
+    if let Some(x) = list.iter_mut().find(|x| x.id == s.id) {
+        x.oauth = Some(st);
+        match account {
+            Some(a) => {
+                x.env.insert("account".into(), a);
+            }
+            None => {
+                x.env.remove("account");
+            }
+        }
+    }
+    save_all(&list)
+}
+
+/// Sign out (its tokens are forgotten; a client ID you entered is kept).
+#[tauri::command]
+pub async fn mcp_sign_out(id: String) -> Result<(), String> {
+    let s = find(&id)?;
+    let kept = s.oauth.map(|o| OAuthState { access_token: None, refresh_token: None, expires_at: None, ..o });
+    store_oauth(&id, kept)?;
+    pool().close(&id).await;
+    Ok(())
 }
 
 fn engines_root() -> std::path::PathBuf {
@@ -92,14 +308,14 @@ fn new_id() -> String {
 
 /// The tool servers set up on this PC.
 #[tauri::command]
-pub fn mcp_list() -> Vec<McpServer> {
-    all()
+pub fn mcp_list() -> Vec<Value> {
+    all().iter().map(McpServer::for_page).collect()
 }
 
 /// Add a tool server, or change one (same id). Its connection restarts if how it's reached
 /// changed.
 #[tauri::command]
-pub async fn mcp_save(server: McpServer) -> Result<McpServer, String> {
+pub async fn mcp_save(server: McpServer) -> Result<Value, String> {
     let mut s = server;
     s.name = s.name.trim().chars().take(60).collect();
     if s.name.is_empty() {
@@ -110,14 +326,20 @@ pub async fn mcp_save(server: McpServer) -> Result<McpServer, String> {
         "http" if !(s.url.starts_with("https://") || s.url.starts_with("http://")) => {
             return Err("Give its address (https://...).".into())
         }
-        "stdio" | "http" => {}
+        "builtin" if s.command != "google" => return Err("There's no built-in tool called that.".into()),
+        "stdio" | "http" | "builtin" => {}
         _ => return Err("A tool server runs as a program (stdio) or at an address (http).".into()),
     }
     let mut list = all();
+    // The sign-in stays (pages never send it), unless the address changed.
+    s.oauth = None;
     if s.id.is_empty() {
         s.id = new_id();
         list.push(s.clone());
     } else if let Some(old) = list.iter_mut().find(|x| x.id == s.id) {
+        if old.url == s.url {
+            s.oauth = old.oauth.clone();
+        }
         *old = s.clone();
     } else {
         list.push(s.clone());
@@ -126,7 +348,7 @@ pub async fn mcp_save(server: McpServer) -> Result<McpServer, String> {
     if !s.enabled {
         pool().close(&s.id).await;
     }
-    Ok(s)
+    Ok(s.for_page())
 }
 
 /// Remove a tool server (and stop it).
@@ -142,8 +364,7 @@ pub async fn mcp_remove(id: String) -> Result<(), String> {
 /// `needs uv:` means that runtime should be installed first.
 #[tauri::command]
 pub async fn mcp_tools(id: String) -> Result<Vec<ToolInfo>, String> {
-    let s = find(&id)?;
-    pool().tools(&s.config()).await
+    tools_of(find(&id)?).await
 }
 
 /// Run a tool for a reply (the chat's `file_request` with `op: "mcp"`). Answers as the server
@@ -157,7 +378,7 @@ pub async fn mcp_call(id: String, tool: String, arguments: Value) -> Value {
     if !s.enabled || s.disabled_tools.contains(&tool) {
         return json!({ "error": format!("{tool} is switched off on this PC.") });
     }
-    match pool().call(&s.config(), &tool, arguments).await {
+    match call_on(s, &tool, arguments).await {
         Ok(r) => json!({ "text": r.text, "is_error": r.is_error }),
         Err(e) => json!({ "error": e }),
     }
@@ -212,14 +433,15 @@ pub async fn mcp_message_tools(ids: Vec<String>) -> Vec<MessageTools> {
     let list = all();
     let wanted: Vec<McpServer> = ids.iter().filter_map(|i| list.iter().find(|s| &s.id == i && s.enabled).cloned()).collect();
     let jobs = wanted.into_iter().map(|s| async move {
-        match pool().tools(&s.config()).await {
+        let (id, name, off) = (s.id.clone(), s.name.clone(), s.disabled_tools.clone());
+        match tools_of(s).await {
             Ok(tools) => MessageTools {
-                tools: tools.into_iter().filter(|t| !s.disabled_tools.contains(&t.name)).collect(),
-                id: s.id,
-                name: s.name,
+                tools: tools.into_iter().filter(|t| !off.contains(&t.name)).collect(),
+                id,
+                name,
                 error: None,
             },
-            Err(e) => MessageTools { id: s.id, name: s.name, tools: Vec::new(), error: Some(e) },
+            Err(e) => MessageTools { id, name, tools: Vec::new(), error: Some(e) },
         }
     });
     futures_util::future::join_all(jobs).await

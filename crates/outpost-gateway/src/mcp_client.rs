@@ -85,6 +85,11 @@ pub fn missing_runtime(error: &str) -> Option<&'static str> {
     }
 }
 
+/// The server wants a sign-in (OAuth), or refused its key.
+pub fn needs_sign_in(error: &str) -> bool {
+    error.starts_with("needs sign-in:")
+}
+
 /// The program and arguments that start a stdio server, with `npx`/`uvx` resolved.
 pub fn resolve_command(cfg: &ServerConfig, engines_root: &Path) -> Result<(PathBuf, Vec<String>, BTreeMap<String, String>), String> {
     use outpost_engines::runtimes;
@@ -372,8 +377,13 @@ impl HttpConn {
         if status == 404 {
             return Err("Nothing answers at that address (404). Check the address; the service may need its MCP feature turned on first.".into());
         }
-        if status == 401 || status == 403 {
-            return Err(format!("The tool server refused the key or token ({status}). Check it in Tools."));
+        if status == 401 {
+            // Signed out, or the key was refused: the app offers Sign in (OAuth) for these.
+            self.alive.store(false, Ordering::Relaxed);
+            return Err("needs sign-in: the service wants you to sign in (or refused the key).".into());
+        }
+        if status == 403 {
+            return Err("The tool server refused the key or token (403): it may not allow this. Check it in Tools.".into());
         }
         let Some(id) = id else { return Ok(Value::Null) };
         if !(200..300).contains(&status) {
