@@ -15,7 +15,7 @@ import {
 } from "../api";
 import { DocumentPicker } from "../components/documents";
 import { PersonaTools } from "../components/tools";
-import { Avatar, Button, ErrorNote, Field } from "../components/ui";
+import { Avatar, Button, ErrorNote, Field, areYouSure } from "../components/ui";
 
 export default function Personas({ token }: { token: string }) {
   const [personas, setPersonas] = useState<Persona[]>([]);
@@ -206,7 +206,7 @@ function PersonaEditor({
   }
 
   async function remove() {
-    if (!window.confirm(`Delete ${persona.name}? Its chats are kept.`)) return;
+    if (!await areYouSure(`Delete ${persona.name}? Its chats are kept.`)) return;
     try {
       await api.deletePersona(token, persona.id);
       onDeleted(persona.id);
@@ -569,7 +569,7 @@ function MemoryPanel({ token, personas }: { token: string; personas: Persona[] }
   }
 
   async function clearLearned() {
-    if (!window.confirm("Forget everything Outpost learned from your chats? Things you added yourself stay.")) return;
+    if (!await areYouSure("Forget everything Outpost learned from your chats? Things you added yourself stay.")) return;
     try {
       await api.clearAutoMemory(token);
       load();

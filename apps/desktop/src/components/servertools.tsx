@@ -15,7 +15,7 @@ import {
   type ServerToolInput,
 } from "../api";
 import { runtimeFor } from "../mcpCatalog";
-import { Button, ErrorNote, Field, Toggle } from "./ui";
+import { Button, ErrorNote, Field, Toggle, areYouSure } from "./ui";
 
 function message(e: unknown) {
   if (typeof e === "string") return e;
@@ -206,7 +206,7 @@ export function ServerToolRow({ token, tool, onChanged }: { token: string; tool:
     }
   }
   async function remove() {
-    if (!window.confirm(`Remove ${tool.name}? Its settings and sign-in on the server are deleted.`)) return;
+    if (!await areYouSure(`Remove ${tool.name}? Its settings and sign-in on the server are deleted.`)) return;
     try {
       await serverTools.remove(token, tool.id);
       onChanged();

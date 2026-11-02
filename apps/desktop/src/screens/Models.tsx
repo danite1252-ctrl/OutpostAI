@@ -13,7 +13,7 @@ import {
   type PullState,
 } from "../api";
 import { EngineCard } from "../components/engines";
-import { Button, ErrorNote } from "../components/ui";
+import { Button, ErrorNote, areYouSure } from "../components/ui";
 import { downloadsChanged, formatEta, formatSpeed } from "../components/downloads";
 
 const BADGE_LABEL: Record<Badge, string> = {
@@ -118,7 +118,7 @@ export default function Models({
 
   async function act(kind: "pull" | "remove", model: string) {
     setError(null);
-    if (kind === "remove" && !window.confirm(`Remove ${model}? You can download it again later.`)) return;
+    if (kind === "remove" && !await areYouSure(`Remove ${model}? You can download it again later.`)) return;
     try {
       if (kind === "pull") {
         await api.pullModel(token, model);
@@ -357,10 +357,10 @@ function CatalogRow({
             e.fit !== "too_large" && (
               <Button
                 variant={e.fit === "partial" ? "ghost" : "primary"}
-                onClick={() => {
+                onClick={async () => {
                   if (
                     e.fit === "partial" &&
-                    !window.confirm(
+                    !await areYouSure(
                       `${e.name} is ${justOver ? "just " : ""}bigger than your graphics card: ${slower}.\n\n` +
                         `Download ${e.size_gb} GB anyway?`,
                     )

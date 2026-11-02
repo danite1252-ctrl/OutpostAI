@@ -4,7 +4,7 @@
 import { saveToDownloads } from "./save";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, authedBlob, DOC_TYPES, docsApi, type Doc, type Source } from "../api";
-import { Button, ErrorNote, Icon, icons } from "./ui";
+import { Button, ErrorNote, Icon, icons, areYouSure } from "./ui";
 
 function message(err: unknown) {
   return err instanceof ApiError ? err.message : "Something went wrong.";
@@ -83,7 +83,7 @@ export function DocumentPicker({
   }
 
   async function remove(d: Doc) {
-    if (!window.confirm(`Delete ${d.name}? It leaves every chat and persona that uses it.`)) return;
+    if (!await areYouSure(`Delete ${d.name}? It leaves every chat and persona that uses it.`)) return;
     try {
       await docsApi.remove(token, d.id);
       setPicked((p) => p.filter((x) => x !== d.id));

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, type NetworkStatus } from "../api";
-import { ErrorNote, StatusDot, Toggle } from "./ui";
+import { ErrorNote, StatusDot, Toggle, areYouSure } from "./ui";
 
 /** Owner switch: let other machines on the network (e.g. Hermes) use app keys. */
 export function NetworkPanel({ token }: { token: string }) {
@@ -19,7 +19,7 @@ export function NetworkPanel({ token }: { token: string }) {
     const turnOn = !status.lan_access;
     if (
       turnOn &&
-      !window.confirm(
+      !await areYouSure(
         "Other devices on your network will be able to reach Outpost with an app key or a paired phone. PIN sign-in stays on this PC. " +
           "Only do this on a network you trust (home Wi-Fi, not public Wi-Fi). Continue?",
       )
@@ -41,7 +41,7 @@ export function NetworkPanel({ token }: { token: string }) {
     const turnOn = !status.tailscale_access;
     if (
       turnOn &&
-      !window.confirm(
+      !await areYouSure(
         "Your devices on Tailscale (your phone away from home, Hermes on another machine) will be able to reach Outpost with an app key or a paired phone. Nothing is opened to the internet. Continue?",
       )
     )

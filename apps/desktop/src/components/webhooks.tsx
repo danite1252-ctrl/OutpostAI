@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, hooksApi, type Webhook } from "../api";
 import { ago } from "./context";
-import { Button, ErrorNote, Field } from "./ui";
+import { Button, ErrorNote, Field, areYouSure } from "./ui";
 
 const LABELS: Record<string, string> = {
   "job.finished": "A picture or video is done",
@@ -56,7 +56,7 @@ export function WebhooksPanel({ token }: { token: string }) {
   }
 
   async function remove(h: Webhook) {
-    if (!window.confirm(`Stop sending to ${h.url}?`)) return;
+    if (!await areYouSure(`Stop sending to ${h.url}?`)) return;
     await hooksApi.remove(token, h.id).then(load, fail);
   }
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, createApi, type Account, type Media, type Pack, type SearchStatus, type SharedMedia } from "../api";
 import { GalleryGrid, Viewer, type CreateRequest } from "../components/gallery";
 import { dropCached } from "../components/images";
-import { Avatar, Button, ErrorNote } from "../components/ui";
+import { Avatar, Button, ErrorNote, areYouSure } from "../components/ui";
 
 type Filter = "all" | "image" | "video" | "model";
 /** My gallery, the shared one, or (owner only) another account's. */
@@ -145,7 +145,7 @@ export default function Gallery({
   async function remove(m: Item) {
     const whose = mineItem(m) ? "your gallery" : `${nameOf(m)}'s gallery`;
     const also = m.shared_at ? " It goes from the shared gallery too." : "";
-    if (!window.confirm(`Delete this from ${whose}?${also}`)) return;
+    if (!await areYouSure(`Delete this from ${whose}?${also}`)) return;
     try {
       await createApi.deleteMedia(token, m.id);
       dropCached(`/api/media/${m.id}`);

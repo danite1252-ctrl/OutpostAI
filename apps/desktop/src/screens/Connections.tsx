@@ -4,7 +4,7 @@ import { ago } from "../components/context";
 import { AppKeysPanel } from "../components/keys";
 import { NetworkPanel } from "../components/network";
 import { WebhooksPanel } from "../components/webhooks";
-import { Button, ErrorNote, Icon, icons } from "../components/ui";
+import { Button, ErrorNote, Icon, icons, areYouSure } from "../components/ui";
 
 /** Phones, app keys and network access: everything that reaches Outpost from elsewhere. */
 export default function Connections({ auth }: { auth: SignInResponse }) {
@@ -26,7 +26,7 @@ export default function Connections({ auth }: { auth: SignInResponse }) {
 
   async function revoke(d: DeviceView) {
     const whose = d.account_id === auth.account.id ? "" : ` (${d.account_name}'s)`;
-    if (!window.confirm(`Unpair "${d.label}"${whose}? It is signed out at once and must pair again.`)) return;
+    if (!await areYouSure(`Unpair "${d.label}"${whose}? It is signed out at once and must pair again.`)) return;
     try {
       await api.revokeDevice(auth.token, d.id);
       loadDevices();

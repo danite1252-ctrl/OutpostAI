@@ -16,7 +16,7 @@ import {
 import { formatEta } from "../components/downloads";
 import { Lightbox, useAuthedUrl } from "../components/images";
 import { jobsChanged, progressFraction } from "../components/queue";
-import { Button, ErrorNote, Field, Icon, icons } from "../components/ui";
+import { Button, ErrorNote, Field, Icon, icons, areYouSure } from "../components/ui";
 
 function message(err: unknown) {
   return err instanceof ApiError ? err.message : "Something went wrong.";
@@ -380,7 +380,7 @@ function DatasetPanel({
   const locked = latest != null && (latest.status === "queued" || latest.status === "running");
 
   async function remove() {
-    if (!view || !window.confirm(`Delete ${view.name}'s dataset and its training runs? Characters already made from it stay.`)) return;
+    if (!view || !await areYouSure(`Delete ${view.name}'s dataset and its training runs? Characters already made from it stay.`)) return;
     try {
       await trainApi.deleteDataset(token, view.id);
       onDeleted();
@@ -632,8 +632,8 @@ function Pictures({
         <Button disabled={locked || cap?.running || models.length === 0 || missing === 0} onClick={() => void caption(false)}>
           Caption {missing > 0 ? missing : ""} missing
         </Button>
-        <Button variant="ghost" disabled={locked || cap?.running || models.length === 0 || view.image_count === 0} onClick={() => {
-          if (window.confirm("Write new captions for every picture, replacing the ones there?")) void caption(true);
+        <Button variant="ghost" disabled={locked || cap?.running || models.length === 0 || view.image_count === 0} onClick={async () => {
+          if (await areYouSure("Write new captions for every picture, replacing the ones there?")) void caption(true);
         }}>
           Redo all
         </Button>
@@ -745,7 +745,7 @@ function TrainBox({
     view.captioning?.running ? "captions are being written" : null,
   ].filter(Boolean);
   async function start() {
-    if (!view.trigger_check.ok && !window.confirm(`"${view.trigger_word}" may not train well (${view.trigger_check.problem}). Train anyway?`)) return;
+    if (!view.trigger_check.ok && !await areYouSure(`"${view.trigger_word}" may not train well (${view.trigger_check.problem}). Train anyway?`)) return;
     setBusy(true);
     try {
       await trainApi.train(token, view.id, steps, prompts.filter((p) => p.trim()));
@@ -861,7 +861,7 @@ function TrainingRun({
   }
 
   async function stop() {
-    if (!window.confirm("Stop this training? Checkpoints saved so far stay and can still be used.")) return;
+    if (!await areYouSure("Stop this training? Checkpoints saved so far stay and can still be used.")) return;
     await createApi.cancelJob(token, t.job_id).catch(() => undefined);
     jobsChanged();
     onChanged();
@@ -979,7 +979,7 @@ function CharacterList({
   onImport: () => void;
 }) {
   async function remove(c: Character) {
-    if (!window.confirm(`Remove ${c.name}? ${c.training_id ? "Its LoRA file is deleted too; the dataset stays, so you can pick a checkpoint again." : ""}`)) return;
+    if (!await areYouSure(`Remove ${c.name}? ${c.training_id ? "Its LoRA file is deleted too; the dataset stays, so you can pick a checkpoint again." : ""}`)) return;
     await trainApi.deleteCharacter(token, c.id).then(onChanged, onError);
   }
   return (

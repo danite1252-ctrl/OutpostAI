@@ -15,7 +15,7 @@ import {
   type PcFolder,
 } from "../api";
 import { saveToDownloads } from "./save";
-import { Button, ErrorNote, ToggleRow } from "./ui";
+import { Button, ErrorNote, ToggleRow, areYouSure } from "./ui";
 
 const SKIP = new Set([".git", "node_modules", "target", "dist", "build", ".next", ".venv", "venv", "__pycache__", ".idea", ".vs"]);
 
@@ -437,7 +437,7 @@ function ChangeRow({ token, chatId, action, files }: { token: string; chatId: st
         if (now.error) throw new Error(String(now.error));
         const current = now.missing ? null : String(now.text ?? "");
         if (current !== expect && !force) {
-          if (!window.confirm(`${change.path} has changed since. ${what === "apply" ? "Apply" : "Undo"} anyway?`)) return;
+          if (!await areYouSure(`${change.path} has changed since. ${what === "apply" ? "Apply" : "Undo"} anyway?`)) return;
         }
         const done = becomes === null ? await pcFolders.op(change.folder_id, "delete", change.path) : await pcFolders.op(change.folder_id, "write", change.path, { content: becomes });
         if (done.error) throw new Error(String(done.error));
@@ -449,7 +449,7 @@ function ChangeRow({ token, chatId, action, files }: { token: string; chatId: st
       files.setChanges((cs) => cs.map((c) => (c.id === updated.id ? updated : c)));
     } catch (e) {
       if (e instanceof ApiError && e.code === "changed_since") {
-        if (window.confirm(`${e.message}`)) {
+        if (await areYouSure(`${e.message}`)) {
           setBusy(false);
           return act(what, true);
         }

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { pcTools, serverTools, type McpServer, type McpTool, type MessageTools, type Runtimes, type ServerTool } from "../api";
 import { addServerTool, moveToServer, ServerToolRow, useServerTools, WhereChoice, type Where } from "./servertools";
 import { CATALOG, CATEGORIES, fromCatalog, missingInputs, runtimeFor, type CatalogEntry } from "../mcpCatalog";
-import { Button, ErrorNote, Field, Toggle } from "./ui";
+import { Button, ErrorNote, Field, Toggle, areYouSure } from "./ui";
 
 /** Tools work only in the desktop app (they run on this PC). */
 export const toolsAvailable = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -579,7 +579,7 @@ function ServerRow({
     }
   }
   async function move() {
-    if (!window.confirm(`Move ${server.name} to the Outpost server? It then works from all your devices (its keys and sign-in go with it, kept encrypted), and leaves this PC.`)) return;
+    if (!await areYouSure(`Move ${server.name} to the Outpost server? It then works from all your devices (its keys and sign-in go with it, kept encrypted), and leaves this PC.`)) return;
     setError(null);
     try {
       await moveToServer(token, server);
@@ -589,7 +589,7 @@ function ServerRow({
     }
   }
   async function remove() {
-    if (!window.confirm(`Remove ${server.name}? Its settings and keys on this PC are deleted.`)) return;
+    if (!await areYouSure(`Remove ${server.name}? Its settings and keys on this PC are deleted.`)) return;
     try {
       await pcTools.remove(server.id);
       onChanged();

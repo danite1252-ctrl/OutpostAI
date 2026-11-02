@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, GATEWAY, SERVER, type Account, type NetworkStatus, type Session, type SignInResponse } from "../api";
-import { Button, ErrorNote, Field } from "./ui";
+import { Button, ErrorNote, Field, areYouSure } from "./ui";
 
 /** App keys for Hermes and other OpenAI-compatible apps. */
 export function AppKeysPanel({ auth }: { auth: SignInResponse }) {
@@ -40,7 +40,7 @@ export function AppKeysPanel({ auth }: { auth: SignInResponse }) {
   }
 
   async function revoke(k: Session) {
-    if (!window.confirm(`Revoke "${k.label}"? Apps using it stop working immediately.`)) return;
+    if (!await areYouSure(`Revoke "${k.label}"? Apps using it stop working immediately.`)) return;
     try {
       await api.revokeKey(auth.token, k.id);
       load();

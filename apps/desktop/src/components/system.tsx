@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, SERVER, systemApi, waitForServer, type CrashSummary, type Diagnostics, type UpdateStatus } from "../api";
-import { Button, ErrorNote, ToggleRow } from "./ui";
+import { Button, ErrorNote, ToggleRow, areYouSure } from "./ui";
 
 function message(err: unknown) {
   if (err instanceof ApiError) return err.message;
@@ -443,7 +443,7 @@ export function DiagnosticsPanel({ token }: { token: string }) {
   async function remove(id?: string) {
     try {
       if (id) await systemApi.deleteCrash(token, id);
-      else if (window.confirm("Delete every crash report?")) await systemApi.deleteAllCrashes(token);
+      else if (await areYouSure("Delete every crash report?")) await systemApi.deleteAllCrashes(token);
       load();
     } catch (e) {
       setError(message(e));

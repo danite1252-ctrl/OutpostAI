@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, SERVER, secretProblem, type Account, type EnginesStatus, type Role, type SignInResponse } from "../api";
 import { EnginesPanel } from "../components/engines";
 import { DiagnosticsPanel, UpdatesPanel, WindowPanel } from "../components/system";
-import { Avatar, Button, ErrorNote, Field, Section, ToggleRow } from "../components/ui";
+import { Avatar, Button, ErrorNote, Field, Section, ToggleRow, areYouSure } from "../components/ui";
 import { CopyGallery, ServerPanel } from "../components/server";
 import { HelperPanel } from "../components/helper";
 import { ListeningPanel } from "../components/listening";
@@ -120,7 +120,7 @@ function AccountsPanel({ token, selfId }: { token: string; selfId: string }) {
   useEffect(load, [load]);
 
   async function remove(a: Account) {
-    if (!window.confirm(`Delete ${a.name}'s account? Their chats and pictures will be removed in later phases too.`)) return;
+    if (!await areYouSure(`Delete ${a.name}'s account? Their chats and pictures will be removed in later phases too.`)) return;
     try {
       await api.deleteAccount(token, a.id);
       load();

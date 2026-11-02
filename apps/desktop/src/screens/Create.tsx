@@ -14,7 +14,7 @@ import { GalleryGrid, GalleryPicker, mediaAsInput, Viewer, type CreateRequest } 
 import { dropCached, prepareImage } from "../components/images";
 import { jobsChanged } from "../components/queue";
 import { AddLora } from "../components/loras";
-import { Button, ErrorNote, ToggleRow } from "../components/ui";
+import { Button, ErrorNote, ToggleRow, areYouSure } from "../components/ui";
 
 const TASKS: { id: Task; label: string; blurb: string }[] = [
   { id: "picture", label: "Text to image", blurb: "Describe a picture" },
@@ -247,7 +247,7 @@ export default function Create({
     setError(null);
     if (
       p.fit === "partial" &&
-      !window.confirm(
+      !await areYouSure(
         `${p.name} needs about ${p.vram_gb} GB of video memory, more than your graphics card has. It will run, but slowly. Download it anyway?`,
       )
     )
@@ -263,7 +263,7 @@ export default function Create({
 
   async function updateComfy() {
     if (
-      !window.confirm(
+      !await areYouSure(
         "Update ComfyUI now? It stops for a few minutes while the new version installs, and a running job is stopped. Your models and gallery stay.",
       )
     )
@@ -288,7 +288,7 @@ export default function Create({
   }
 
   async function remove(m: Media) {
-    if (!window.confirm("Delete this from your gallery?")) return;
+    if (!await areYouSure("Delete this from your gallery?")) return;
     try {
       await createApi.deleteMedia(token, m.id);
       dropCached(`/api/media/${m.id}`);

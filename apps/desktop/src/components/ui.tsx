@@ -254,3 +254,11 @@ export function Section({
     </section>
   );
 }
+
+/** Asks "are you sure?" and waits for the answer. The desktop app's dialog plugin makes
+ *  window.confirm return a promise (the native Windows box), so it has to be awaited:
+ *  a promise is always truthy, which made deletes happen before OK was pressed. */
+export async function areYouSure(question: string): Promise<boolean> {
+  const answer: unknown = window.confirm(question);
+  return Boolean(answer instanceof Promise ? await answer : answer);
+}

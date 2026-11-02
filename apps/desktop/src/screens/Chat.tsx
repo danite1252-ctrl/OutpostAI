@@ -26,7 +26,7 @@ import { PlusMenu } from "../components/plusmenu";
 import { ToolsPanel, useChatTools } from "../components/tools";
 import type { MessageTools } from "../api";
 import { GalleryPicker, mediaAsInput } from "../components/gallery";
-import { Avatar, Button, ErrorNote } from "../components/ui";
+import { Avatar, Button, ErrorNote, areYouSure } from "../components/ui";
 import { hasModel } from "./Personas";
 
 const CONTEXT_KEY = "outpost.chat.context";
@@ -239,7 +239,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
   }
 
   async function removeChat(id: string) {
-    if (!window.confirm("Delete this chat? Its images, and anything Outpost learned from it, go too.")) return;
+    if (!await areYouSure("Delete this chat? Its images, and anything Outpost learned from it, go too.")) return;
     try {
       await api.deleteChat(token, id);
       setChats((cs) => cs.filter((c) => c.id !== id));
@@ -355,7 +355,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
       m.role === "user"
         ? "Delete this message and the reply to it? Anything the persona learned from it is forgotten too."
         : "Delete this reply?";
-    if (!window.confirm(ask)) return;
+    if (!await areYouSure(ask)) return;
     try {
       const r = await api.deleteMessage(token, activeId, m.id);
       setMessages((list) => list.filter((x) => !r.removed.includes(x.id)));
