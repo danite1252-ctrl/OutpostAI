@@ -14,6 +14,7 @@ card), and tools on your PC for chats (MCP servers, with a library of ready-made
 ## Ideas after 1.0
 
 - Tools: an option to ask before tool calls in typed chats too (hands-free always asks).
+- Tools: adding tools and signing in to them from the phone app itself.
 
 - Training lower-memory settings for 12 GB cards.
 - Multi-colour prints with more than 4 filaments, or painted regions kept sharper.

@@ -513,7 +513,97 @@ export const pcTools = {
     tauri<void>("mcp_sign_in", { id, clientId: clientId || null, clientSecret: clientSecret || null, scope: scope || null }),
   signOut: (id: string) => tauri<void>("mcp_sign_out", { id }),
   allSelections: () => tauri<{ chats: Record<string, string[]>; personas: Record<string, string[]> }>("mcp_all_selections"),
+  /** A PC tool whole (its sign-in included), for moving it to the server. */
+  export: (id: string) => tauri<McpServer & { oauth?: unknown }>("mcp_export", { id }),
 };
+
+// ---------------------------------------------------------------- Tools on the server
+
+/** A tool on the Outpost server: yours, or someone's shared one. Its keys stay there. */
+export interface ServerTool {
+  id: string;
+  name: string;
+  catalog_id: string | null;
+  transport: "stdio" | "http" | "builtin";
+  command: string;
+  args: string[];
+  url: string;
+  secret_names: string[];
+  signed_in: boolean;
+  signed_in_as: string | null;
+  enabled: boolean;
+  shared: boolean;
+  restricted_ok: boolean;
+  disabled_tools: string[];
+  mine: boolean;
+  owner_name: string | null;
+}
+
+export interface ServerToolInput {
+  name?: string;
+  catalog_id?: string | null;
+  transport?: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  enabled?: boolean;
+  shared?: boolean;
+  restricted_ok?: boolean;
+  disabled_tools?: string[];
+  /** A name given empty is removed; one left out is kept. */
+  secrets?: { env?: Record<string, string>; headers?: Record<string, string> };
+}
+
+export interface SignInInfo {
+  kind: "google" | "oauth";
+  url: string;
+  client_id: string | null;
+  client_secret: string | null;
+  scope: string | null;
+  previous: unknown;
+}
+
+export const serverTools = {
+  list: (token: string) => request<ServerTool[]>("GET", "/api/tools", { token }),
+  create: (token: string, body: ServerToolInput) => request<ServerTool>("POST", "/api/tools", { token, body }),
+  update: (token: string, id: string, body: ServerToolInput) => request<ServerTool>("PATCH", `/api/tools/${id}`, { token, body }),
+  remove: (token: string, id: string) => request<void>("DELETE", `/api/tools/${id}`, { token }),
+  test: (token: string, id: string) => request<McpTool[]>("GET", `/api/tools/${id}/tools`, { token }),
+  signInInfo: (token: string, id: string) => request<SignInInfo>("GET", `/api/tools/${id}/sign-in`, { token }),
+  signInSave: (token: string, id: string, state: unknown) => request<ServerTool>("PUT", `/api/tools/${id}/sign-in`, { token, body: state }),
+  signOut: (token: string, id: string) => request<void>("DELETE", `/api/tools/${id}/sign-in`, { token }),
+  googleClient: (token: string) => request<{ client_id: string | null; has_secret: boolean }>("GET", "/api/tools/google-client", { token }),
+  setGoogleClient: (token: string, client_id: string, client_secret?: string) =>
+    request<void>("PUT", "/api/tools/google-client", { token, body: { client_id, client_secret: client_secret || null } }),
+  personaTools: (token: string, personaId: string) => request<string[]>("GET", `/api/personas/${personaId}/tools`, { token }),
+  setPersonaTools: (token: string, personaId: string, ids: string[]) =>
+    request<string[]>("PUT", `/api/personas/${personaId}/tools`, { token, body: { ids } }),
+  chatTools: (token: string, chatId: string) => request<string[]>("GET", `/api/chats/${chatId}/tools`, { token }),
+  setChatTools: (token: string, chatId: string, ids: string[]) => request<string[]>("PUT", `/api/chats/${chatId}/tools`, { token, body: { ids } }),
+  resetChatTools: (token: string, chatId: string) => request<void>("DELETE", `/api/chats/${chatId}/tools`, { token }),
+  runtimes: (token: string) => request<Runtimes>("GET", "/api/tools/runtimes", { token }),
+  installRuntime: (token: string, which: "node" | "uv") => request<void>("POST", `/api/tools/runtimes/${which}`, { token }),
+};
+
+/**
+ * Sign in to a server tool on this PC (the browser comes back here), and hand the sign-in to
+ * the server. `client` = an OAuth client to use where the server has none (Google).
+ */
+export async function signInServerTool(token: string, id: string, client?: { id?: string; secret?: string }) {
+  const info = await serverTools.signInInfo(token, id);
+  const clientId = info.client_id ?? client?.id ?? null;
+  const clientSecret = info.client_secret ?? client?.secret ?? null;
+  if (info.kind === "google" && !clientId) throw "needs client: enter the Google OAuth client ID (an owner can save it for everyone).";
+  const st = await tauri<unknown>("tool_sign_in", {
+    kind: info.kind,
+    url: info.url,
+    clientId,
+    clientSecret,
+    scope: info.scope,
+    previous: info.previous ?? null,
+  });
+  return serverTools.signInSave(token, id, st);
+}
 
 export interface Source {
   n: number;

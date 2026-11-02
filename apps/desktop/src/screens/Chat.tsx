@@ -23,7 +23,7 @@ import { ContextPanel } from "../components/context";
 import { ChatDocuments, SourcesLine } from "../components/documents";
 import { FileActions, FilesPanel, useChatFiles } from "../components/chatfiles";
 import { PlusMenu } from "../components/plusmenu";
-import { ToolsPanel, toolsAvailable, useChatTools } from "../components/tools";
+import { ToolsPanel, useChatTools } from "../components/tools";
 import type { MessageTools } from "../api";
 import { GalleryPicker, mediaAsInput } from "../components/gallery";
 import { Avatar, Button, ErrorNote } from "../components/ui";
@@ -144,7 +144,9 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
   }
   const persona = personas.find((p) => p.id === active?.persona_id) ?? null;
   // Tools on this PC the chat uses (its own set, else its persona's).
-  const chatTools = useChatTools(active?.id ?? null, active?.persona_id ?? personas[0]?.id ?? null);
+  const chatTools = useChatTools(token, active?.id ?? null, active?.persona_id ?? personas[0]?.id ?? null);
+  // Every tool the chat uses: on the server, and on this PC.
+  const toolNames = [...chatTools.serverActive.map((s) => s.name), ...chatTools.active.map((s) => s.name)];
   const [panel, setPanel] = useState<"files" | "tools" | null>(null);
   const modelName =
     active?.model ?? persona?.model ?? installed.find((m) => !m.badges.includes("embedding"))?.model ?? null;
@@ -631,17 +633,13 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
                     badge: chatFiles.folders.length ? `${chatFiles.folders.length}` : undefined,
                     onSelect: () => setPanel("files"),
                   },
-                  ...(toolsAvailable()
-                    ? [
-                        {
-                          id: "tools",
-                          label: "Tools",
-                          hint: "Web search, GitHub, a browser and more, on this PC",
-                          badge: chatTools.active.length ? `${chatTools.active.length} on` : undefined,
-                          onSelect: () => setPanel("tools"),
-                        },
-                      ]
-                    : []),
+                  {
+                    id: "tools",
+                    label: "Tools",
+                    hint: "Web search, Google, Home Assistant, GitHub and more",
+                    badge: toolNames.length ? `${toolNames.length} on` : undefined,
+                    onSelect: () => setPanel("tools"),
+                  },
                 ]}
               />
               <MicButton
@@ -661,14 +659,14 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
                   {chatFiles.folders.length === 1 ? chatFiles.folders[0].name : `${chatFiles.folders.length} folders`}
                 </button>
               )}
-              {chatTools.active.length > 0 && (
+              {toolNames.length > 0 && (
                 <button
                   type="button"
                   onClick={() => setPanel("tools")}
                   className="min-h-8 max-w-56 truncate rounded-full border border-line px-3 text-xs text-muted hover:text-ink"
                   title="Tools this chat uses"
                 >
-                  {chatTools.active.map((s) => s.name).join(", ")}
+                  {toolNames.join(", ")}
                 </button>
               )}
               <span className="flex-1" />
@@ -699,6 +697,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
       )}
       {panel === "tools" && (
         <ToolsPanel
+          token={token}
           tools={chatTools}
           chatId={active?.id ?? null}
           personaName={persona?.name ?? null}

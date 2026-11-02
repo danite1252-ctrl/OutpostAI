@@ -92,11 +92,27 @@ Everything that goes with a message is under **+** beside the message box (hover
 pictures from this PC or your gallery, documents, files and folders, and tools. What's on for
 the chat shows beside it (a folder's name, the tools in use); click one to change it.
 
-### Tools (MCP) on your PC
+### Tools (MCP)
 
-Chats can use tools that run on your PC through the desktop app: web search, reading pages,
-GitHub, a hidden web browser, Wikipedia, Home Assistant, Todoist, Notion and more. They're
-[MCP](https://modelcontextprotocol.io) servers, so any MCP server works.
+Chats can use tools: web search, reading pages, Google, Home Assistant, GitHub, a hidden web
+browser, Wikipedia, Todoist, Notion and more. They're [MCP](https://modelcontextprotocol.io)
+servers, so any MCP server works.
+
+- **Where a tool runs**: when you add one, choose **The Outpost server** (it then works from
+  every device you sign in on, the phone included, with no PC left on) or **This PC only** (for
+  tools that use that PC's own folders or browser, like Filesystem, Git and the web browser).
+  **Move to the server** moves a PC tool across, keys, sign-in and chats' choices included.
+- **Yours, or everyone's**: tools on the server are personal: SJ adds and signs in to her own
+  Google; nobody else can use yours or see its keys. An owner can **Share with everyone** (Home
+  Assistant, search), and allow **Restricted accounts too** (the kids). Only owners can add tools
+  that run programs on the server.
+- **Keys and sign-ins on the server** are encrypted with a key kept in Outpost's data folder
+  (`secrets.key`), beside the database: keep it in backups, or everyone signs in again.
+- **Signing in** happens on the PC you're using (the browser comes back to it), and the sign-in
+  is then kept on the server, renewed automatically. **Google**: the household's Google client
+  (made once, below) is saved by the owner who adds it first; everyone else just signs in.
+- **On the phone**: + › Tools turns the chat's server tools on and off. Add tools and sign in to
+  them from the desktop app.
 
 - **+ › Tools › Tool library** lists ones that are known to work, grouped (Search & the web,
   Coding, Knowledge, Home & tasks, Helpers), each saying what it costs (most are free; some need

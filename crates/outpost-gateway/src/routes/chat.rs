@@ -516,18 +516,29 @@ pub async fn send_message(
     // Folders the chat works with: the model needs tools for them.
     let folders = outpost_core::chat_files::chat_folders(&state.pool, &chat.id).await?;
     // Tools on a PC: this app's own (desktop), or the chat's on your PC that offers them (phone).
-    let (tool_servers, tools_via) = if !req.pc_tools.is_empty() {
-        (req.pc_tools.clone(), crate::pc_tools::Via::App)
+    use crate::pc_tools::Via;
+    let mut tool_servers: Vec<(crate::pc_tools::PcToolServer, Via)> = if !req.pc_tools.is_empty() {
+        req.pc_tools.iter().cloned().map(|s| (s, Via::App)).collect()
     } else if req.use_pc_tools && resolved.can_use_tools {
         // (A model without tools just answers without them.)
         match state.device_tools.for_chat(&account_id, &chat.id, chat.persona_id.as_deref()) {
-            Some(ct) => (ct.servers, crate::pc_tools::Via::Device { tools: state.device_tools.clone(), session_id: ct.session_id }),
-            None => (Vec::new(), crate::pc_tools::Via::App),
+            Some(ct) => {
+                let via = Via::Device { tools: state.device_tools.clone(), session_id: ct.session_id };
+                ct.servers.into_iter().map(|s| (s, via.clone())).collect()
+            }
+            None => Vec::new(),
         }
     } else {
-        (Vec::new(), crate::pc_tools::Via::App)
+        Vec::new()
     };
-    let wants_tools = tool_servers.iter().any(|s| !s.tools.is_empty());
+    let wants_tools = tool_servers.iter().any(|(s, _)| !s.tools.is_empty());
+    // And the chat's tools on this server (any device), for a model that can use them.
+    if resolved.can_use_tools {
+        let restricted = auth.account.role == outpost_core::accounts::Role::Restricted;
+        for s in crate::server_tools::for_chat(&state, &account_id, restricted, &chat.id).await {
+            tool_servers.push((s, Via::Server(state.clone())));
+        }
+    }
     if wants_tools && folders.is_empty() && !resolved.can_use_tools {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -581,7 +592,7 @@ pub async fn send_message(
         system = format!("{system}\n\n{}", w.instructions());
     }
     // MCP servers on the app's PC.
-    let pc_tools = crate::pc_tools::PcTools::new(state.file_relay.clone(), &chat.id, tx.clone(), tool_servers, tools_via, req.confirm_tools);
+    let pc_tools = crate::pc_tools::PcTools::new(state.file_relay.clone(), &chat.id, tx.clone(), tool_servers, req.confirm_tools);
     if let Some(t) = &pc_tools {
         system = format!("{system}\n\n{}", t.instructions());
     }

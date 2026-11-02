@@ -1,9 +1,11 @@
-// Tools on this PC for chats: MCP servers (web search, GitHub, a browser...) that the app runs
-// here. A chat uses its persona's tools unless it's given its own set. The library lists ones
-// that are known to work; any other MCP server can be added by hand.
+// Tools for chats: MCP servers (web search, GitHub, a browser...) and Outpost's own Google tools.
+// Each runs on the Outpost server (with your own keys and sign-ins, from every device) or on
+// this PC (while this app is open). A chat uses its persona's tools unless it's given its own
+// set. The library lists ones that are known to work; any other MCP server can be added by hand.
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { pcTools, type McpServer, type McpTool, type MessageTools, type Runtimes } from "../api";
+import { pcTools, serverTools, type McpServer, type McpTool, type MessageTools, type Runtimes, type ServerTool } from "../api";
+import { addServerTool, moveToServer, ServerToolRow, useServerTools, WhereChoice, type Where } from "./servertools";
 import { CATALOG, CATEGORIES, fromCatalog, missingInputs, runtimeFor, type CatalogEntry } from "../mcpCatalog";
 import { Button, ErrorNote, Field, Toggle } from "./ui";
 
@@ -24,15 +26,28 @@ function readable(e: string) {
 const needsSignIn = (e: string | null) => !!e && e.startsWith("needs sign-in:");
 const needsClient = (e: string | null) => !!e && e.startsWith("needs client:");
 
-export function useChatTools(chatId: string | null, personaId: string | null) {
+export function useChatTools(token: string, chatId: string | null, personaId: string | null) {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
+  // Tools on the server: the chat's (or, before it exists, its persona's).
+  const [onServer, setOnServer] = useState<ServerTool[]>([]);
+  const [serverSelected, setServerSelected] = useState<string[]>([]);
   const reload = useCallback(async () => {
+    const [st, ssel] = await Promise.all([
+      serverTools.list(token).catch(() => [] as ServerTool[]),
+      chatId
+        ? serverTools.chatTools(token, chatId).catch(() => [] as string[])
+        : personaId
+          ? serverTools.personaTools(token, personaId).catch(() => [] as string[])
+          : Promise.resolve([] as string[]),
+    ]);
+    setOnServer(st);
+    setServerSelected(ssel);
     if (!toolsAvailable()) return;
     const [list, sel] = await Promise.all([pcTools.list().catch(() => []), pcTools.selection(chatId, personaId).catch(() => [])]);
     setServers(list);
     setSelected(sel);
-  }, [chatId, personaId]);
+  }, [token, chatId, personaId]);
   useEffect(() => {
     void reload();
   }, [reload]);
@@ -42,7 +57,8 @@ export function useChatTools(chatId: string | null, personaId: string | null) {
     if (!toolsAvailable() || active.length === 0) return [];
     return pcTools.messageTools(active.map((s) => s.id));
   }, [active]);
-  return { servers, selected, setSelected, active, reload, forMessage };
+  const serverActive = onServer.filter((s) => s.enabled && serverSelected.includes(s.id));
+  return { servers, selected, setSelected, active, reload, forMessage, onServer, serverSelected, serverActive };
 }
 
 export type ChatTools = ReturnType<typeof useChatTools>;
@@ -73,12 +89,14 @@ function Drawer({ label, onClose, children, wide }: { label: string; onClose: ()
 
 /** Which tools this chat uses. */
 export function ToolsPanel({
+  token,
   tools,
   chatId,
   personaName,
   ensureChat,
   onClose,
 }: {
+  token: string;
   tools: ChatTools;
   chatId: string | null;
   personaName: string | null;
@@ -99,14 +117,55 @@ export function ToolsPanel({
     }
   }
 
+  async function chooseServer(ids: string[] | null) {
+    setError(null);
+    try {
+      const id = chatId ?? (await ensureChat());
+      if (ids) await serverTools.setChatTools(token, id, ids);
+      else await serverTools.resetChatTools(token, id);
+      await tools.reload();
+    } catch (e) {
+      setError(message(e));
+    }
+  }
+
   return (
     <Drawer label="Tools for this chat" onClose={onClose}>
       <p className="text-sm text-muted">
-        Tools run on this PC, while this app is open. The chat's model needs the tools badge to use them.
+        The chat's model needs the tools badge to use them.
         {personaName ? ` New chats with ${personaName} start with the tools set in Personas.` : ""}
       </p>
-      {tools.servers.length === 0 ? (
-        <p className="text-sm">No tools on this PC yet. Add some from the library: web search, GitHub, a browser and more.</p>
+      {tools.onServer.length > 0 && (
+        <>
+          <h3 className="text-sm font-semibold text-muted">On the Outpost server (every device)</h3>
+          <ul className="flex flex-col gap-2">
+            {tools.onServer.map((s) => {
+              const on = tools.serverSelected.includes(s.id);
+              return (
+                <li key={s.id} className="flex items-center gap-3 rounded-xl border border-line px-3 py-2">
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="text-sm">{s.name}</span>
+                    <span className="text-xs text-muted">
+                      {!s.enabled ? "Switched off" : s.mine ? (s.signed_in_as ?? "") : `Shared by ${s.owner_name ?? "an owner"}`}
+                    </span>
+                  </span>
+                  <Toggle
+                    checked={on}
+                    disabled={!s.enabled}
+                    label={`Use ${s.name} in this chat`}
+                    onChange={(v) =>
+                      void chooseServer(v ? [...tools.serverSelected, s.id] : tools.serverSelected.filter((x) => x !== s.id))
+                    }
+                  />
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+      {toolsAvailable() && tools.servers.length > 0 && <h3 className="text-sm font-semibold text-muted">On this PC (while it's open)</h3>}
+      {tools.servers.length === 0 && tools.onServer.length === 0 ? (
+        <p className="text-sm">No tools yet. Add some from the library: web search, Google, Home Assistant, GitHub and more.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {tools.servers.map((s) => {
@@ -130,8 +189,15 @@ export function ToolsPanel({
       )}
       <div className="flex flex-wrap gap-2">
         <Button onClick={() => setLibrary(true)}>Tool library</Button>
-        {chatId && tools.servers.length > 0 && (
-          <Button variant="ghost" onClick={() => void choose(null)} title="Use the persona's tools again">
+        {chatId && (tools.servers.length > 0 || tools.onServer.length > 0) && (
+          <Button
+            variant="ghost"
+            onClick={() => {
+              void chooseServer(null);
+              if (toolsAvailable()) void choose(null);
+            }}
+            title="Use the persona's tools again"
+          >
             Use the persona's tools
           </Button>
         )}
@@ -139,6 +205,7 @@ export function ToolsPanel({
       <ErrorNote>{error}</ErrorNote>
       {library && (
         <ToolLibrary
+          token={token}
           onClose={() => {
             setLibrary(false);
             void tools.reload();
@@ -184,8 +251,9 @@ function useRuntimes() {
 }
 
 /** The tool library: what's on this PC, what can be added, and adding your own. */
-export function ToolLibrary({ onClose }: { onClose: () => void }) {
+export function ToolLibrary({ token, onClose }: { token: string; onClose: () => void }) {
   const [tab, setTab] = useState<"library" | "mine" | "custom">("library");
+  const server = useServerTools(token);
   const [servers, setServers] = useState<McpServer[]>([]);
   const [error, setError] = useState<string | null>(null);
   const rt = useRuntimes();
@@ -211,14 +279,14 @@ export function ToolLibrary({ onClose }: { onClose: () => void }) {
   return (
     <Drawer label="Tool library" onClose={onClose} wide>
       <p className="text-sm text-muted">
-        Tools let chats search the web, read pages, work with GitHub, drive a browser and more. They run on this PC; keys you
-        enter stay on this PC.
+        Tools let chats search the web, read pages, use Google and Home Assistant, work with GitHub and more. On the Outpost
+        server they work from all your devices (keys kept there, encrypted); on this PC, only while this app is open.
       </p>
       <div className="flex gap-2" role="tablist">
         {(
           [
             ["library", "Library"],
-            ["mine", `On this PC${servers.length ? ` (${servers.length})` : ""}`],
+            ["mine", `Your tools${servers.length + server.tools.length ? ` (${servers.length + server.tools.length})` : ""}`],
             ["custom", "Add your own"],
           ] as const
         ).map(([id, label]) => (
@@ -243,12 +311,14 @@ export function ToolLibrary({ onClose }: { onClose: () => void }) {
               {CATALOG.filter((e) => e.category === c).map((e) => (
                 <CatalogCard
                   key={e.id}
+                  token={token}
                   entry={e}
-                  added={servers.filter((s) => s.catalog_id === e.id).length}
+                  added={servers.filter((s) => s.catalog_id === e.id).length + server.tools.filter((s) => s.mine && s.catalog_id === e.id).length}
                   runtimes={rt.runtimes}
                   onInstall={rt.install}
                   onAdded={() => {
                     void reload();
+                    void server.reload();
                   }}
                 />
               ))}
@@ -257,19 +327,34 @@ export function ToolLibrary({ onClose }: { onClose: () => void }) {
         </div>
       )}
       {tab === "mine" &&
-        (servers.length === 0 ? (
+        (servers.length === 0 && server.tools.length === 0 ? (
           <p className="text-sm">Nothing yet: add tools from the Library tab.</p>
         ) : (
           <ul className="flex flex-col gap-3">
+            {server.tools.map((s) => (
+              <ServerToolRow key={s.id} token={token} tool={s} onChanged={() => void server.reload()} />
+            ))}
             {servers.map((s) => (
-              <ServerRow key={s.id} server={s} runtimes={rt.runtimes} onInstall={rt.install} onChanged={reload} />
+              <ServerRow
+                key={s.id}
+                token={token}
+                server={s}
+                runtimes={rt.runtimes}
+                onInstall={rt.install}
+                onChanged={() => {
+                  void reload();
+                  void server.reload();
+                }}
+              />
             ))}
           </ul>
         ))}
       {tab === "custom" && (
         <CustomServer
+          token={token}
           onAdded={() => {
             void reload();
+            void server.reload();
             setTab("mine");
           }}
         />
@@ -278,13 +363,18 @@ export function ToolLibrary({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** Entries that work on a PC's own files or browser: best on that PC. */
+const PC_ONLY = new Set(["filesystem", "git", "playwright"]);
+
 function CatalogCard({
+  token,
   entry,
   added,
   runtimes,
   onInstall,
   onAdded,
 }: {
+  token: string;
   entry: CatalogEntry;
   added: number;
   runtimes: Runtimes | null;
@@ -298,10 +388,48 @@ function CatalogCard({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const need = runtimeFor(entry);
-  const missing = missingInputs(entry, values);
+  const pcOnly = PC_ONLY.has(entry.id);
+  const [where, setWhere] = useState<Where>(!toolsAvailable() ? "server" : pcOnly ? "pc" : "server");
+  // A Google client the household has already: no need to enter it again.
+  const [googleClient, setGoogleClient] = useState(false);
+  useEffect(() => {
+    if (entry.id === "google") serverTools.googleClient(token).then((c) => setGoogleClient(!!c.client_id), () => undefined);
+  }, [entry.id, token]);
+  const hideClient = where === "server" && googleClient;
+  const inputs = entry.inputs.filter((i) => !(hideClient && (i.kind === "client_id" || i.kind === "client_secret")));
+  const need = where === "pc" ? runtimeFor(entry) : null;
+  const missing = missingInputs({ ...entry, inputs }, values);
+
+  async function addOnServer() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const r = await addServerTool(token, fromCatalog(entry, values) as McpServer, {
+        signIn: entry.signIn,
+        client: { id: values.client_id, secret: values.client_secret },
+        onSigningIn: () => setResult("Finish signing in in your browser, then come back here…"),
+      });
+      onAdded();
+      if (r.problem) {
+        setResult(null);
+        setError(r.problem);
+      } else {
+        setResult(
+          `Ready on the server: ${r.tools?.length ?? 0} tools, on all your devices. Turn it on for a chat from the + menu, or for a persona in Personas.`,
+        );
+        setOpen(false);
+      }
+    } catch (e) {
+      setResult(null);
+      setError(message(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function add() {
+    if (where === "server") return addOnServer();
     setBusy(true);
     setError(null);
     setResult(null);
@@ -368,7 +496,9 @@ function CatalogCard({
               ))}
             </ol>
           )}
-          {entry.inputs.map((i) => (
+          {toolsAvailable() && <WhereChoice where={where} onChange={setWhere} pcOnly={pcOnly} />}
+          {hideClient && <p className="text-xs text-muted">Your household's Google client is set up already: just sign in.</p>}
+          {inputs.map((i) => (
             <Field
               key={i.key}
               label={`${i.label}${i.optional ? " (optional)" : ""}`}
@@ -409,11 +539,13 @@ function CatalogCard({
 }
 
 function ServerRow({
+  token,
   server,
   runtimes,
   onInstall,
   onChanged,
 }: {
+  token: string;
   server: McpServer;
   runtimes: Runtimes | null;
   onInstall: (w: "node" | "uv") => void;
@@ -446,6 +578,16 @@ function ServerRow({
       setBusy(false);
     }
   }
+  async function move() {
+    if (!window.confirm(`Move ${server.name} to the Outpost server? It then works from all your devices (its keys and sign-in go with it, kept encrypted), and leaves this PC.`)) return;
+    setError(null);
+    try {
+      await moveToServer(token, server);
+      onChanged();
+    } catch (e) {
+      setError(`Couldn't move it: ${message(e)}`);
+    }
+  }
   async function remove() {
     if (!window.confirm(`Remove ${server.name}? Its settings and keys on this PC are deleted.`)) return;
     try {
@@ -460,7 +602,10 @@ function ServerRow({
     <li className="flex flex-col gap-2 rounded-xl border border-line px-4 py-3">
       <div className="flex flex-wrap items-center gap-3">
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="text-sm font-medium">{server.name}</span>
+          <span className="text-sm font-medium">
+            {server.name}
+            <span className="ml-2 text-xs text-muted">This PC</span>
+          </span>
           <span className="truncate font-mono text-xs text-muted">
             {server.transport === "http"
               ? server.url
@@ -475,6 +620,9 @@ function ServerRow({
         </Button>
         <Button variant="ghost" onClick={() => setEditing((e) => !e)}>
           Edit
+        </Button>
+        <Button variant="ghost" onClick={() => void move()} title="Run it on the Outpost server, for all your devices">
+          Move to the server
         </Button>
         <Button variant="danger" onClick={() => void remove()}>
           Remove
@@ -724,7 +872,8 @@ function TextArea({ label, hint, value, onChange }: { label: string; hint?: stri
 }
 
 /** Any other MCP server: a program to start, or an address. */
-function CustomServer({ onAdded }: { onAdded: () => void }) {
+function CustomServer({ token, onAdded }: { token: string; onAdded: () => void }) {
+  const [where, setWhere] = useState<Where>(toolsAvailable() ? "server" : "server");
   const [kind, setKind] = useState<"stdio" | "http">("stdio");
   const [name, setName] = useState("");
   const [command, setCommand] = useState("npx");
@@ -755,6 +904,19 @@ function CustomServer({ onAdded }: { onAdded: () => void }) {
     setBusy(true);
     setError(null);
     setResult(null);
+    if (where === "server") {
+      try {
+        const r = await addServerTool(token, server);
+        onAdded();
+        if (r.problem) setError(r.problem);
+        else setResult(`Added on the server: ${r.tools?.length ?? 0} tools.`);
+      } catch (e) {
+        setError(message(e));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     try {
       const saved = await pcTools.save(server);
       try {
@@ -775,8 +937,10 @@ function CustomServer({ onAdded }: { onAdded: () => void }) {
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted">
         Any MCP server works: copy the command (or address) from its instructions. <code>npx</code> and <code>uvx</code> use Outpost's own
-        Node and uv. Servers that need a sign-in page (OAuth) aren't supported yet; use one that takes a key.
+        Node and uv. One that signs in on its own page shows Sign in under Your tools once added. Programs on the server are
+        for owners.
       </p>
+      {toolsAvailable() && <WhereChoice where={where} onChange={setWhere} />}
       <div className="flex gap-2">
         {(
           [
@@ -820,26 +984,53 @@ function CustomServer({ onAdded }: { onAdded: () => void }) {
 }
 
 /** A persona's default tools (Personas screen). */
-export function PersonaTools({ personaId }: { personaId: string }) {
+export function PersonaTools({ token, personaId }: { token: string; personaId: string }) {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
+  const [onServer, setOnServer] = useState<ServerTool[]>([]);
+  const [serverSelected, setServerSelected] = useState<string[]>([]);
   const [library, setLibrary] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(() => {
+    serverTools.list(token).then(setOnServer, () => undefined);
+    serverTools.personaTools(token, personaId).then(setServerSelected, () => undefined);
     if (!toolsAvailable()) return;
     pcTools.list().then(setServers, () => undefined);
     pcTools.selection(null, personaId).then(setSelected, () => undefined);
-  }, [personaId]);
+  }, [token, personaId]);
   useEffect(load, [load]);
-  if (!toolsAvailable()) return null;
   const set = (ids: string[]) => {
     setSelected(ids);
     pcTools.selectPersona(personaId, ids).catch((e) => setError(message(e)));
   };
+  const setServer = (ids: string[]) => {
+    setServerSelected(ids);
+    serverTools.setPersonaTools(token, personaId, ids).then(setServerSelected, (e) => setError(message(e)));
+  };
+  const chip = (id: string, name: string, on: boolean, flip: () => void) => (
+    <button
+      key={id}
+      type="button"
+      aria-pressed={on}
+      onClick={flip}
+      className={`min-h-9 rounded-full border px-3.5 text-sm ${on ? "border-ember bg-raised text-ink" : "border-line text-muted hover:text-ink"}`}
+    >
+      {name}
+    </button>
+  );
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-sm text-muted">Tools on this PC (new chats with this persona start with these)</span>
-      {servers.length === 0 ? (
+      <span className="text-sm text-muted">Tools (new chats with this persona start with these)</span>
+      {onServer.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {onServer.map((s) => {
+            const on = serverSelected.includes(s.id);
+            return chip(s.id, s.name, on, () => setServer(on ? serverSelected.filter((x) => x !== s.id) : [...serverSelected, s.id]));
+          })}
+        </div>
+      )}
+      {toolsAvailable() && servers.length > 0 && <span className="text-xs text-muted">On this PC:</span>}
+      {servers.length === 0 && onServer.length === 0 ? (
         <span className="text-sm">None yet.</span>
       ) : (
         <div className="flex flex-wrap gap-2">
@@ -867,6 +1058,7 @@ export function PersonaTools({ personaId }: { personaId: string }) {
       <ErrorNote>{error}</ErrorNote>
       {library && (
         <ToolLibrary
+          token={token}
           onClose={() => {
             setLibrary(false);
             load();

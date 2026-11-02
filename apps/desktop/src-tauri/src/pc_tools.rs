@@ -410,6 +410,37 @@ pub fn mcp_select_chat(chat_id: String, ids: Option<Vec<String>>) -> Result<(), 
     crate::save_setting_value("mcp_chats", serde_json::to_value(map).map_err(|e| e.to_string())?)
 }
 
+/// Sign in on this PC for a tool on the server: the browser opens here and comes back here;
+/// the app then hands the sign-in to the server. `kind` is `google` (Outpost's Google tools,
+/// with `client_id` and `scope`) or `oauth` (an MCP server's own sign-in at `url`).
+#[tauri::command]
+pub async fn tool_sign_in(
+    kind: String,
+    url: String,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    scope: Option<String>,
+    previous: Option<OAuthState>,
+) -> Result<OAuthState, String> {
+    let client = http();
+    if kind == "google" {
+        let id = client_id.filter(|c| !c.trim().is_empty()).ok_or("needs client: enter the Google OAuth client ID.")?;
+        let st = mcp_oauth::google_state(&id, client_secret, scope.as_deref().unwrap_or("openid email"));
+        return mcp_oauth::sign_in_known(&client, st, open_in_browser).await;
+    }
+    let manual = client_id.filter(|c| !c.trim().is_empty()).map(|c| (c, client_secret));
+    mcp_oauth::sign_in(&client, &url, manual, scope, previous.as_ref(), open_in_browser).await
+}
+
+/// A PC tool whole, its sign-in included (moving it to the server).
+#[tauri::command]
+pub fn mcp_export(id: String) -> Result<Value, String> {
+    let s = find(&id)?;
+    let mut v = serde_json::to_value(&s).map_err(|e| e.to_string())?;
+    v["oauth"] = serde_json::to_value(&s.oauth).unwrap_or(Value::Null);
+    Ok(v)
+}
+
 /// Every chat's and persona's tool servers (for chats from the phone, which run them here).
 #[tauri::command]
 pub fn mcp_all_selections() -> Value {

@@ -26,11 +26,13 @@ pub mod pc_tools;
 pub mod print3d;
 pub mod remote;
 pub mod routes;
+pub mod server_tools;
 pub mod setup_code;
 pub mod tailscale;
 pub mod tls;
 pub mod train;
 pub mod updates;
+pub mod vault;
 pub mod webhooks;
 pub mod workspace;
 
@@ -93,6 +95,10 @@ pub struct AppState {
     pub lent_chat: lent::LentChat,
     /// Tools on your PCs, for chats from the phone.
     pub device_tools: device_tools::DeviceTools,
+    /// Seals tools' keys and sign-ins in the database.
+    pub vault: Arc<vault::Vault>,
+    /// Running tool servers (MCP) for tools on this server.
+    pub tool_pool: Arc<mcp_client::Pool>,
 }
 
 impl AppState {
@@ -115,7 +121,11 @@ impl AppState {
             .build()
             .expect("HTTP client");
         let assets = AssetStore::new(&config.data_dir.join("models"));
+        let vault = Arc::new(vault::Vault::open(&config.data_dir));
+        let tool_pool = Arc::new(mcp_client::Pool::new(config.data_dir.join("engines")));
         AppState {
+            vault,
+            tool_pool,
             llm,
             engines: EngineManager::new(&config.data_dir),
             models: ModelStore::new(),
@@ -362,6 +372,18 @@ pub fn router(state: AppState) -> Router {
         .route("/api/helpers/poll", post(helpers::poll))
         .route("/api/helpers/leave", post(helpers::leave))
         .route("/api/helpers/chat/next", post(lent::next))
+        .route("/api/tools", get(server_tools::list).post(server_tools::create))
+        .route("/api/tools/google-client", get(server_tools::google_client_get).put(server_tools::google_client_set))
+        .route("/api/tools/runtimes", get(server_tools::runtimes))
+        .route("/api/tools/runtimes/{which}", post(server_tools::install_runtime))
+        .route("/api/tools/{id}", patch(server_tools::update).delete(server_tools::remove))
+        .route("/api/tools/{id}/tools", get(server_tools::test))
+        .route(
+            "/api/tools/{id}/sign-in",
+            get(server_tools::sign_in_info).put(server_tools::sign_in_save).delete(server_tools::sign_out),
+        )
+        .route("/api/personas/{id}/tools", get(server_tools::persona_get).put(server_tools::persona_set))
+        .route("/api/chats/{id}/tools", get(server_tools::chat_get).put(server_tools::chat_set).delete(server_tools::chat_reset))
         .route("/api/pc-tools", get(device_tools::list))
         .route("/api/pc-tools/register", post(device_tools::register).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)))
         .route("/api/pc-tools/next", post(device_tools::next))

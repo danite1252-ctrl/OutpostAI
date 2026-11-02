@@ -49,11 +49,14 @@ pub struct PcTool {
     pub read_only: Option<bool>,
 }
 
-/// Where a message's PC tools run: the app streaming the reply (desktop), or your PC that
-/// offers them for chats from elsewhere (see [`crate::device_tools`]).
+/// Where a tool server runs: on the app streaming the reply (desktop), on your PC that offers
+/// it for chats from elsewhere (see [`crate::device_tools`]), or on this server (see
+/// [`crate::server_tools`]).
+#[derive(Clone)]
 pub enum Via {
     App,
     Device { tools: crate::device_tools::DeviceTools, session_id: String },
+    Server(crate::AppState),
 }
 
 struct Entry {
@@ -69,8 +72,9 @@ pub struct PcTools {
     chat_id: String,
     events: mpsc::Sender<Event>,
     servers: Vec<PcToolServer>,
+    /// Where each of `servers` runs.
+    routes: Vec<Via>,
     entries: Vec<Entry>,
-    via: Via,
     /// Ask the user before each call (hands-free: speech can be misheard).
     confirm: bool,
 }
@@ -161,15 +165,9 @@ fn slug(s: &str) -> String {
 
 impl PcTools {
     /// `None` when there are no tools to offer.
-    pub fn new(
-        relay: Relay,
-        chat_id: &str,
-        events: mpsc::Sender<Event>,
-        servers: Vec<PcToolServer>,
-        via: Via,
-        confirm: bool,
-    ) -> Option<Self> {
-        let servers: Vec<PcToolServer> = servers.into_iter().filter(|s| !s.tools.is_empty()).take(MAX_SERVERS).collect();
+    pub fn new(relay: Relay, chat_id: &str, events: mpsc::Sender<Event>, servers: Vec<(PcToolServer, Via)>, confirm: bool) -> Option<Self> {
+        let (servers, routes): (Vec<PcToolServer>, Vec<Via>) =
+            servers.into_iter().filter(|(s, _)| !s.tools.is_empty()).take(MAX_SERVERS).unzip();
         let mut entries: Vec<Entry> = Vec::new();
         for (i, s) in servers.iter().enumerate() {
             let prefix: String = slug(&s.name).chars().take(20).collect();
@@ -187,7 +185,7 @@ impl PcTools {
                 entries.push(Entry { call, server: i, tool: t.name.clone() });
             }
         }
-        (!entries.is_empty()).then(|| Self { relay, chat_id: chat_id.into(), events, servers, entries, via, confirm })
+        (!entries.is_empty()).then(|| Self { relay, chat_id: chat_id.into(), events, servers, routes, entries, confirm })
     }
 
     /// The system prompt's part about them.
@@ -252,10 +250,15 @@ impl PcTools {
                 };
             }
         }
-        let request = json!({ "op": "mcp", "server": server.id, "tool": e.tool, "arguments": args });
-        let answer = match &self.via {
+        let request = json!({ "op": "mcp", "server": server.id, "tool": e.tool, "arguments": args.clone() });
+        let answer = match &self.routes[e.server] {
             Via::App => self.relay.ask_within(&self.events, &self.chat_id, request, CALL_WITHIN, "file_request").await,
             Via::Device { tools, session_id } => tools.call(session_id, request, CALL_WITHIN).await,
+            Via::Server(state) => match tokio::time::timeout(CALL_WITHIN, crate::server_tools::call(state, &server.id, &e.tool, args)).await {
+                Ok(Ok(r)) => Ok(json!({ "text": r.text, "is_error": r.is_error })),
+                Ok(Err(err)) => Err(err.trim_start_matches("needs sign-in: ").to_string()),
+                Err(_) => Err("The tool took too long.".into()),
+            },
         };
         match answer {
             Ok(v) => {
@@ -297,14 +300,13 @@ mod tests {
     #[test]
     fn pc_tools_get_safe_unique_names_and_valid_schemas() {
         let (tx, _rx) = mpsc::channel(4);
-        let none = PcTools::new(Relay::default(), "c", tx.clone(), vec![server("Empty", &[])], Via::App, false);
+        let none = PcTools::new(Relay::default(), "c", tx.clone(), vec![(server("Empty", &[]), Via::App)], false);
         assert!(none.is_none());
         let t = PcTools::new(
             Relay::default(),
             "c",
             tx,
-            vec![server("Brave Search", &["brave_web_search", "brave.local search"]), server("GitHub", &["search", "search"])],
-            Via::App,
+            vec![(server("Brave Search", &["brave_web_search", "brave.local search"]), Via::App), (server("GitHub", &["search", "search"]), Via::App)],
             false,
         )
         .unwrap();
@@ -321,7 +323,7 @@ mod tests {
     async fn a_call_goes_to_the_app_and_its_answer_back_to_the_model() {
         let (tx, mut rx) = mpsc::channel(4);
         let relay = Relay::default();
-        let t = PcTools::new(relay.clone(), "chat1", tx, vec![server("Fetch", &["fetch"])], Via::App, false).unwrap();
+        let t = PcTools::new(relay.clone(), "chat1", tx, vec![(server("Fetch", &["fetch"]), Via::App)], false).unwrap();
         let app = tokio::spawn(async move {
             // The app sees the request (as an SSE event) and answers it.
             let _event = rx.recv().await.unwrap();
@@ -364,7 +366,7 @@ mod tests {
     async fn hands_free_asks_first_and_a_no_stops_it() {
         let (tx, mut rx) = mpsc::channel(4);
         let relay = Relay::default();
-        let t = PcTools::new(relay.clone(), "chat1", tx, vec![server("Home Assistant", &["HassTurnOff"])], Via::App, true).unwrap();
+        let t = PcTools::new(relay.clone(), "chat1", tx, vec![(server("Home Assistant", &["HassTurnOff"]), Via::App)], true).unwrap();
         let app = tokio::spawn(async move {
             // The question comes first; the user says no.
             let ev = rx.recv().await.unwrap();

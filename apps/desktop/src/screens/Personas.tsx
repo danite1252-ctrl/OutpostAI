@@ -340,7 +340,7 @@ function PersonaEditor({
         </label>
       </div>
       <PersonaDocuments token={token} personaId={persona.id} shared={shared} />
-      <PersonaTools personaId={persona.id} />
+      <PersonaTools token={token} personaId={persona.id} />
       <div className="flex flex-col gap-3 rounded-2xl border border-line p-4 text-sm">
         <span className="font-medium">Voice</span>
         {voices && !voices.ready ? (

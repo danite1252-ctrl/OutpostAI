@@ -11,6 +11,7 @@ import { hear, onSaying, say, stopSaying, type Listening } from "../voice";
 import type { Chat as ChatT, Message, Outpost, Persona } from "../outpost";
 import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
 import { FileActions, FilesSheet, useChatFiles, type FileAction } from "../chatfiles";
+import { ToolsSheet, useChatToolNames } from "../tools";
 
 const MAX_IMAGES = 4;
 
@@ -246,6 +247,8 @@ function Conversation({
   const chatFiles = useChatFiles(api, chat.id);
   const [fileMode, setFileMode] = useState<"ask" | "auto">(chat.file_mode ?? "ask");
   const [filesOpen, setFilesOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const chatTools = useChatToolNames(api, chat.id);
   async function changeFileMode(m: "ask" | "auto") {
     setFileMode(m);
     try {
@@ -502,6 +505,13 @@ function Conversation({
             />
             <Chip label="Phone photos" onPress={() => void pick()} />
             <Chip
+              label={chatTools.names.length ? `Tools (${chatTools.names.length})` : "Tools"}
+              onPress={() => {
+                setAttach(false);
+                setToolsOpen(true);
+              }}
+            />
+            <Chip
               label={chatFiles.folders.length ? `Files and folders (${chatFiles.folders.length})` : "Files and folders"}
               onPress={() => {
                 setAttach(false);
@@ -563,6 +573,16 @@ function Conversation({
           )}
         </View>
       </View>
+      {toolsOpen && (
+        <ToolsSheet
+          api={api}
+          chatId={chat.id}
+          onClose={() => {
+            setToolsOpen(false);
+            void chatTools.reload();
+          }}
+        />
+      )}
       {filesOpen && (
         <FilesSheet api={api} chatId={chat.id} mode={fileMode} files={chatFiles} onMode={(m) => void changeFileMode(m)} onClose={() => setFilesOpen(false)} />
       )}
