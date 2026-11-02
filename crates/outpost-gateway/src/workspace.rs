@@ -50,7 +50,25 @@ impl Relay {
         }
     }
 
+    /// Requests still waiting for an answer (for tests).
+    #[cfg(test)]
+    pub(crate) fn pending_ids(&self) -> Vec<String> {
+        self.waiting.lock().unwrap_or_else(|p| p.into_inner()).keys().cloned().collect()
+    }
+
     async fn ask(&self, events: &mpsc::Sender<Event>, chat_id: &str, request: Value) -> Result<Value, String> {
+        self.ask_within(events, chat_id, request, Duration::from_secs(60)).await
+    }
+
+    /// Ask the app streaming this reply to do something (a `file_request` event) and wait for
+    /// its answer; an `error` in the answer comes back as the error.
+    pub(crate) async fn ask_within(
+        &self,
+        events: &mpsc::Sender<Event>,
+        chat_id: &str,
+        request: Value,
+        within: Duration,
+    ) -> Result<Value, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
         self.waiting
@@ -63,9 +81,9 @@ impl Relay {
         let answer = if sent.is_err() {
             Err("The app closed the chat.".to_string())
         } else {
-            match tokio::time::timeout(Duration::from_secs(60), rx).await {
+            match tokio::time::timeout(within, rx).await {
                 Ok(Ok(v)) => Ok(v),
-                _ => Err("The desktop app didn't answer (closed, or its folder isn't there any more).".to_string()),
+                _ => Err("The desktop app didn't answer in time (closed, or what it was asked for isn't there any more).".to_string()),
             }
         };
         self.waiting.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
@@ -397,7 +415,7 @@ impl Workspace {
     }
 }
 
-fn fail(op: &str, path: &str, why: String) -> Outcome {
+pub(crate) fn fail(op: &str, path: &str, why: String) -> Outcome {
     Outcome {
         reply: format!("That didn't work: {why}"),
         action: FileAction { op: op.into(), path: path.into(), note: Some(why), change_id: None, failed: true },

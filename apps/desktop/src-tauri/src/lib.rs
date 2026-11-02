@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 mod pc_folders;
+mod pc_tools;
 
 use outpost_engines::EngineManager;
 use outpost_gateway::helper_pc::HelperPc;
@@ -880,7 +881,19 @@ pub fn run() {
             pc_folders::pc_name,
             pc_folders::pc_folder_pick,
             pc_folders::pc_folder_forget,
-            pc_folders::pc_folder_op
+            pc_folders::pc_folder_op,
+            pc_tools::mcp_list,
+            pc_tools::mcp_save,
+            pc_tools::mcp_remove,
+            pc_tools::mcp_tools,
+            pc_tools::mcp_call,
+            pc_tools::mcp_selection,
+            pc_tools::mcp_select_chat,
+            pc_tools::mcp_select_persona,
+            pc_tools::mcp_message_tools,
+            pc_tools::mcp_runtimes,
+            pc_tools::mcp_install_runtime,
+            pc_tools::mcp_missing_runtime
         ])
         .build(context)
         .expect("error while building Outpost");

@@ -14,6 +14,7 @@ import {
   type VoiceStatus,
 } from "../api";
 import { DocumentPicker } from "../components/documents";
+import { PersonaTools } from "../components/tools";
 import { Avatar, Button, ErrorNote, Field } from "../components/ui";
 
 export default function Personas({ token }: { token: string }) {
@@ -339,6 +340,7 @@ function PersonaEditor({
         </label>
       </div>
       <PersonaDocuments token={token} personaId={persona.id} shared={shared} />
+      <PersonaTools personaId={persona.id} />
       <div className="flex flex-col gap-3 rounded-2xl border border-line p-4 text-sm">
         <span className="font-medium">Voice</span>
         {voices && !voices.ready ? (

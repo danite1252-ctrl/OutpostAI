@@ -21,7 +21,10 @@ import { jobsChanged } from "../components/queue";
 import { HandsFree, MicButton, PlayButton, sayAloud } from "../components/voice";
 import { ContextPanel } from "../components/context";
 import { ChatDocuments, SourcesLine } from "../components/documents";
-import { FileActions, FilesButton, useChatFiles } from "../components/chatfiles";
+import { FileActions, FilesPanel, useChatFiles } from "../components/chatfiles";
+import { PlusMenu } from "../components/plusmenu";
+import { ToolsPanel, toolsAvailable, useChatTools } from "../components/tools";
+import type { MessageTools } from "../api";
 import { GalleryPicker, mediaAsInput } from "../components/gallery";
 import { Avatar, Button, ErrorNote } from "../components/ui";
 import { hasModel } from "./Personas";
@@ -140,6 +143,9 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
     return chat.id;
   }
   const persona = personas.find((p) => p.id === active?.persona_id) ?? null;
+  // Tools on this PC the chat uses (its own set, else its persona's).
+  const chatTools = useChatTools(active?.id ?? null, active?.persona_id ?? personas[0]?.id ?? null);
+  const [panel, setPanel] = useState<"files" | "tools" | null>(null);
   const modelName =
     active?.model ?? persona?.model ?? installed.find((m) => !m.badges.includes("embedding"))?.model ?? null;
   const modelInfo = installed.find((m) => m.model === modelName);
@@ -266,6 +272,16 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
     const controller = new AbortController();
     abort.current = controller;
     try {
+      // The chat's tools on this PC (started now if need be; the first start can take a while).
+      let toolServers: MessageTools[] = [];
+      if (chatTools.active.length > 0) {
+        toolServers = await chatTools.forMessage().catch(() => []);
+        const broken = toolServers.filter((s) => s.error);
+        if (broken.length)
+          setError(
+            `${broken.map((s) => `${s.name} couldn't start (${(s.error ?? "").replace(/^needs (node|uv): /, "")})`).join("; ")}. The reply goes ahead without it.`,
+          );
+      }
       await streamMessage(
         token,
         chatId,
@@ -292,6 +308,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
         },
         controller.signal,
         chatFiles.reachable,
+        toolServers,
       );
     } catch (err) {
       if (!(err instanceof DOMException && err.name === "AbortError")) {
@@ -451,14 +468,6 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
             {persona?.think ? " · thinking on" : ""}
           </span>
           <span className="ml-auto" />
-          <FilesButton
-            token={token}
-            chatId={active?.id ?? null}
-            mode={active?.file_mode ?? "ask"}
-            files={chatFiles}
-            onMode={(m) => void setFileMode(m)}
-            ensureChat={ensureChat}
-          />
           <button
             type="button"
             onClick={() => setHandsFree(true)}
@@ -592,36 +601,76 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
                   e.target.value = "";
                 }}
               />
+              <PlusMenu
+                disabled={!!draft}
+                items={[
+                  {
+                    id: "images",
+                    label: "Pictures from this PC",
+                    hint: "Or paste or drop them into the chat",
+                    disabled: images.length >= MAX_IMAGES,
+                    onSelect: () => filePicker.current?.click(),
+                  },
+                  {
+                    id: "gallery",
+                    label: "From your gallery",
+                    hint: "One of your Outpost pictures",
+                    disabled: images.length >= MAX_IMAGES,
+                    onSelect: () => setFromGallery(true),
+                  },
+                  {
+                    id: "documents",
+                    label: "Documents",
+                    hint: "Ask about PDFs, Word files and notes",
+                    onSelect: () => setDocsOpen(true),
+                  },
+                  {
+                    id: "files",
+                    label: "Files and folders",
+                    hint: "Folders the model can read and change",
+                    badge: chatFiles.folders.length ? `${chatFiles.folders.length}` : undefined,
+                    onSelect: () => setPanel("files"),
+                  },
+                  ...(toolsAvailable()
+                    ? [
+                        {
+                          id: "tools",
+                          label: "Tools",
+                          hint: "Web search, GitHub, a browser and more, on this PC",
+                          badge: chatTools.active.length ? `${chatTools.active.length} on` : undefined,
+                          onSelect: () => setPanel("tools"),
+                        },
+                      ]
+                    : []),
+                ]}
+              />
               <MicButton
                 token={token}
                 disabled={!!draft}
                 onText={(t) => setInput((cur) => (cur.trim() ? `${cur.trimEnd()} ${t}` : t))}
                 onError={(m) => setError(m)}
               />
-              <Button
-                variant="ghost"
-                disabled={!!draft || images.length >= MAX_IMAGES}
-                onClick={() => filePicker.current?.click()}
-                title="Attach images (or paste / drop them)"
-              >
-                Attach image
-              </Button>
-              <Button
-                variant="ghost"
-                disabled={!!draft || images.length >= MAX_IMAGES}
-                onClick={() => setFromGallery(true)}
-                title="Attach one of your Outpost pictures"
-              >
-                From gallery
-              </Button>
-              <Button
-                variant="ghost"
-                disabled={!!draft}
-                onClick={() => setDocsOpen(true)}
-                title="Ask about PDFs, Word files and notes"
-              >
-                Documents
-              </Button>
+              {/* What's on for this chat, at a glance (click to change). */}
+              {chatFiles.folders.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setPanel("files")}
+                  className="min-h-8 truncate rounded-full border border-line px-3 text-xs text-muted hover:text-ink"
+                  title="Folders this chat can read and change"
+                >
+                  {chatFiles.folders.length === 1 ? chatFiles.folders[0].name : `${chatFiles.folders.length} folders`}
+                </button>
+              )}
+              {chatTools.active.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setPanel("tools")}
+                  className="min-h-8 max-w-56 truncate rounded-full border border-line px-3 text-xs text-muted hover:text-ink"
+                  title="Tools this chat uses"
+                >
+                  {chatTools.active.map((s) => s.name).join(", ")}
+                </button>
+              )}
               <span className="flex-1" />
               {draft ? (
                 <Button variant="ghost" onClick={stop}>
@@ -637,6 +686,26 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
         </div>
       </section>
 
+      {panel === "files" && (
+        <FilesPanel
+          token={token}
+          chatId={active?.id ?? null}
+          mode={active?.file_mode ?? "ask"}
+          files={chatFiles}
+          onMode={(m) => void setFileMode(m)}
+          ensureChat={ensureChat}
+          onClose={() => setPanel(null)}
+        />
+      )}
+      {panel === "tools" && (
+        <ToolsPanel
+          tools={chatTools}
+          chatId={active?.id ?? null}
+          personaName={persona?.name ?? null}
+          ensureChat={ensureChat}
+          onClose={() => setPanel(null)}
+        />
+      )}
       {handsFree && (
         <HandsFree
           token={token}

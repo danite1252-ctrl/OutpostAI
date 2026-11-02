@@ -89,7 +89,7 @@ export function FilesButton({
   );
 }
 
-function FilesPanel({
+export function FilesPanel({
   token,
   chatId,
   mode,
@@ -364,6 +364,7 @@ const VERB: Record<FileAction["op"], string> = {
   write: "Wrote",
   edit: "Changed",
   tool: "Tried",
+  mcp: "Used",
 };
 
 /** Under a reply: what it did with files, and its changes to apply, skip or undo. */
@@ -387,7 +388,15 @@ export function FileActions({
       {looked.length > 0 && (
         <details open={live}>
           <summary className="cursor-pointer text-muted">
-            {live ? "Working with files…" : `Looked at files (${looked.length})`}
+            {live
+              ? looked.some((a) => a.op === "mcp")
+                ? "Using tools…"
+                : "Working with files…"
+              : looked.every((a) => a.op === "mcp")
+                ? `Used tools (${looked.length})`
+                : looked.some((a) => a.op === "mcp")
+                  ? `Used tools and files (${looked.length})`
+                  : `Looked at files (${looked.length})`}
           </summary>
           <ul className="mt-1 flex flex-col gap-0.5">
             {looked.map((a, i) => (

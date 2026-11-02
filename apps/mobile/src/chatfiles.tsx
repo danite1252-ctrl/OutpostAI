@@ -134,7 +134,7 @@ export function FilesSheet({
   );
 }
 
-const VERB: Record<string, string> = { list: "Looked in", read: "Read", search: "Searched", write: "Wrote", edit: "Changed", tool: "Tried" };
+const VERB: Record<string, string> = { list: "Looked in", read: "Read", search: "Searched", write: "Wrote", edit: "Changed", tool: "Tried", mcp: "Used" };
 
 /** Under a reply: what it did with files, and its changes. */
 export function FileActions({ api, chatId, actions, files, live }: { api: Outpost; chatId: string; actions: FileAction[]; files: ChatFiles; live?: boolean }) {
@@ -146,7 +146,8 @@ export function FileActions({ api, chatId, actions, files, live }: { api: Outpos
       {looked.length > 0 && (
         <Pressable accessibilityRole="button" onPress={() => setOpen((o) => !o)}>
           <Text style={{ color: C.muted }}>
-            {live ? "Working with files…" : `Looked at files (${looked.length})`} {open ? "▾" : "▸"}
+            {live ? "Working…" : looked.every((a) => a.op === "mcp") ? `Used tools (${looked.length})` : `Looked at files (${looked.length})`}{" "}
+            {open ? "▾" : "▸"}
           </Text>
         </Pressable>
       )}

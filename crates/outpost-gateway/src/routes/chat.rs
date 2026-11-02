@@ -328,6 +328,10 @@ pub struct SendRequest {
     /// `file_request` events for them. Left out by apps that can't (phones).
     #[serde(default)]
     pub pc_folders: Vec<String>,
+    /// Tools on this app's PC (MCP servers it runs) the chat may use, with their tools: it
+    /// answers the reply's `file_request` events with `op: "mcp"`. Left out by phones.
+    #[serde(default)]
+    pub pc_tools: Vec<crate::pc_tools::PcToolServer>,
 }
 
 #[derive(Deserialize)]
@@ -500,6 +504,18 @@ pub async fn send_message(
     }
     // Folders the chat works with: the model needs tools for them.
     let folders = outpost_core::chat_files::chat_folders(&state.pool, &chat.id).await?;
+    let wants_tools = req.pc_tools.iter().any(|s| !s.tools.is_empty());
+    if wants_tools && folders.is_empty() && !resolved.can_use_tools {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "model_no_tools",
+            format!(
+                "{} can't use tools, so it can't use this chat's tools on your PC. Pick a model with the tools badge for \
+                 this persona (or this chat), or turn the tools off for this chat.",
+                resolved.model
+            ),
+        ));
+    }
     if !folders.is_empty() && !resolved.can_use_tools {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -540,6 +556,11 @@ pub async fn send_message(
     });
     if let Some(w) = &workspace {
         system = format!("{system}\n\n{}", w.instructions());
+    }
+    // MCP servers on the app's PC.
+    let pc_tools = crate::pc_tools::PcTools::new(state.file_relay.clone(), &chat.id, tx.clone(), req.pc_tools.clone());
+    if let Some(t) = &pc_tools {
+        system = format!("{system}\n\n{}", t.instructions());
     }
     if earlier.is_empty() && chat.title == "New chat" {
         let title = if content.is_empty() {
@@ -613,16 +634,25 @@ pub async fn send_message(
         let mut thinking = String::new();
         let mut failure: Option<String> = None;
         let mut actions: Vec<outpost_core::chat_files::FileAction> = Vec::new();
+        let mut tools: Vec<serde_json::Value> = Vec::new();
         if workspace.is_some() {
-            body["tools"] = crate::workspace::Workspace::tools();
+            tools.extend(crate::workspace::Workspace::tools().as_array().cloned().unwrap_or_default());
+        }
+        if let Some(t) = &pc_tools {
+            tools.extend(t.tools());
+        }
+        if !tools.is_empty() {
+            body["tools"] = serde_json::Value::Array(tools);
         }
         for round in 0..=MAX_TOOL_ROUNDS {
             let before = content.len();
             let (calls, failed) = stream_round(&round_state, &body, &tx, &mut content, &mut thinking).await;
             failure = failed;
-            let Some(w) = workspace.as_ref().filter(|_| failure.is_none() && !calls.is_empty()) else { break };
+            if failure.is_some() || calls.is_empty() || (workspace.is_none() && pc_tools.is_none()) {
+                break;
+            }
             if round == MAX_TOOL_ROUNDS {
-                failure = Some("Stopped after many rounds of file work; ask it to carry on.".into());
+                failure = Some("Stopped after many rounds of tool use; ask it to carry on.".into());
                 break;
             }
             // The model's turn (with its calls), then each call's result, then it carries on.
@@ -636,7 +666,12 @@ pub async fn send_message(
                     serde_json::Value::String(text) => serde_json::from_str(text).unwrap_or_default(),
                     other => other.clone(),
                 };
-                let outcome = w.run(&call.function.name, &args).await;
+                let name = &call.function.name;
+                let outcome = match (&pc_tools, &workspace) {
+                    (Some(t), _) if t.has(name) => t.run(name, &args).await,
+                    (_, Some(w)) => w.run(name, &args).await,
+                    _ => crate::workspace::fail("tool", name, format!("There's no tool called {name}.")),
+                };
                 let _ = tx.send(event("file", serde_json::json!(outcome.action))).await;
                 actions.push(outcome.action);
                 if let Some(messages) = body.get_mut("messages").and_then(serde_json::Value::as_array_mut) {
@@ -650,10 +685,11 @@ pub async fn send_message(
         }
         // Its copy of the event channel goes, so the stream ends with the reply.
         drop(workspace);
+        drop(pc_tools);
         let content = content.trim_end().to_string();
         // Some file work but no words: say so, rather than an empty reply.
         let content = if content.is_empty() && !actions.is_empty() && failure.is_none() {
-            "Done: the file work is listed below.".to_string()
+            "Done: what it did is listed below.".to_string()
         } else {
             content
         };

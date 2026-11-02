@@ -31,5 +31,8 @@ serde_json.workspace = true
 serde.workspace = true
 # The tunnel to a server (when the app uses one instead of its own gateway).
 tokio.workspace = true
+# Tools on this PC (MCP servers): downloading Node or uv, starting servers together.
+reqwest.workspace = true
+futures-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

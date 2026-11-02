@@ -433,14 +433,6 @@ function Conversation({
         </Text>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Files for this chat"
-          onPress={() => setFilesOpen(true)}
-          style={[s.chip, { minHeight: 40 }, chatFiles.folders.length > 0 && { borderColor: C.ember }]}
-        >
-          <Text style={{ color: C.ink }}>Files{chatFiles.folders.length > 0 ? ` ${chatFiles.folders.length}` : ""}</Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
           accessibilityLabel="Talk hands-free"
           disabled={!!draft}
           onPress={() => {
@@ -500,7 +492,7 @@ function Conversation({
         )}
         <ErrorText>{error}</ErrorText>
         {attach && (
-          <View style={s.row}>
+          <View style={[s.row, { flexWrap: "wrap" }]}>
             <Chip
               label="From gallery"
               onPress={() => {
@@ -509,6 +501,13 @@ function Conversation({
               }}
             />
             <Chip label="Phone photos" onPress={() => void pick()} />
+            <Chip
+              label={chatFiles.folders.length ? `Files and folders (${chatFiles.folders.length})` : "Files and folders"}
+              onPress={() => {
+                setAttach(false);
+                setFilesOpen(true);
+              }}
+            />
           </View>
         )}
         {images.length > 0 && (
@@ -523,7 +522,7 @@ function Conversation({
         <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8 }}>
           {/* Attach and talk, stacked, so the message box gets the width. */}
           <View style={{ gap: 6 }}>
-            <RoundButton label="Attach a picture" onPress={() => setAttach((a) => !a)} active={attach}>
+            <RoundButton label="Add pictures or files" onPress={() => setAttach((a) => !a)} active={attach}>
               <PlusIcon size={20} color={attach ? C.onEmber : C.soft} />
             </RoundButton>
             <RoundButton label={mic ? "Stop listening" : "Talk instead of typing"} onPress={toggleMic} active={!!mic} disabled={!!draft}>

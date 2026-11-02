@@ -8,10 +8,13 @@ server with helper PCs and automatic updates; gallery search; and other apps (AP
 webhooks). Since 1.0: renaming chats, naming gallery items (used when they're saved),
 phone notifications as soon as a job finishes, and warnings for personas whose model isn't
 downloaded, files in chats (folders on a PC or the server that a chat's model can read
-and change, with Apply/Skip or Undo), and chat on a lent PC (bigger models on a helper PC's
-card).
+and change, with Apply/Skip or Undo), chat on a lent PC (bigger models on a helper PC's
+card), and tools on your PC for chats (MCP servers, with a library of ready-made ones).
 
 ## Ideas after 1.0
+
+- Tools: servers that sign in with OAuth; tools from the phone (through the desktop app);
+  asking before a tool that changes things runs.
 
 - Training lower-memory settings for 12 GB cards.
 - Multi-colour prints with more than 4 filaments, or painted regions kept sharper.

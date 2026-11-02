@@ -3314,9 +3314,11 @@ dependencies = [
 name = "outpost-desktop"
 version = "1.0.10"
 dependencies = [
+ "futures-util",
  "outpost-core",
  "outpost-engines",
  "outpost-gateway",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tauri",

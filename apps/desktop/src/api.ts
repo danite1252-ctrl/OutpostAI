@@ -343,7 +343,8 @@ export interface ChatFolder {
 
 /** One thing a reply did with files. */
 export interface FileAction {
-  op: "list" | "read" | "search" | "write" | "edit" | "tool";
+  /** `mcp`: a tool on this PC ("GitHub › search_issues"). */
+  op: "list" | "read" | "search" | "write" | "edit" | "tool" | "mcp";
   path: string;
   note?: string | null;
   change_id?: string | null;
@@ -422,10 +423,17 @@ export const pcFolders = {
 };
 
 /** A reply asked for something in one of this PC's folders: do it and send the answer. */
-async function answerFileRequest(token: string, chatId: string, req: { id: string; folder: string; op: string; path: string; text?: string; content?: string }) {
+async function answerFileRequest(
+  token: string,
+  chatId: string,
+  req: { id: string; folder: string; op: string; path: string; text?: string; content?: string; server?: string; tool?: string; arguments?: unknown },
+) {
   let answer: Record<string, unknown>;
   try {
-    answer = await pcFolders.op(req.folder, req.op, req.path, { text: req.text, content: req.content });
+    answer =
+      req.op === "mcp"
+        ? await pcTools.call(req.server ?? "", req.tool ?? "", req.arguments ?? {})
+        : await pcFolders.op(req.folder, req.op, req.path, { text: req.text, content: req.content });
   } catch (e) {
     answer = { error: typeof e === "string" ? e : "The desktop app couldn't do that." };
   }
@@ -435,6 +443,65 @@ async function answerFileRequest(token: string, chatId: string, req: { id: strin
     body: JSON.stringify(answer),
   }).catch(() => undefined);
 }
+
+// ---------------------------------------------------------------- Tools on this PC (MCP)
+
+/** A tool server set up on this PC (its keys stay here). */
+export interface McpServer {
+  id: string;
+  name: string;
+  catalog_id: string | null;
+  transport: "stdio" | "http";
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  url: string;
+  headers: Record<string, string>;
+  enabled: boolean;
+  disabled_tools: string[];
+}
+
+export interface McpTool {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  read_only: boolean | null;
+}
+
+export interface MessageTools {
+  id: string;
+  name: string;
+  tools: McpTool[];
+  error: string | null;
+}
+
+export interface Runtimes {
+  node: boolean;
+  uv: boolean;
+  installing: "node" | "uv" | null;
+  percent: number | null;
+  error: string | null;
+}
+
+async function tauri<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<T>(cmd, args);
+}
+
+export const pcTools = {
+  list: () => tauri<McpServer[]>("mcp_list"),
+  save: (server: McpServer) => tauri<McpServer>("mcp_save", { server }),
+  remove: (id: string) => tauri<void>("mcp_remove", { id }),
+  tools: (id: string) => tauri<McpTool[]>("mcp_tools", { id }),
+  call: (id: string, tool: string, args: unknown) => tauri<Record<string, unknown>>("mcp_call", { id, tool, arguments: args }),
+  selection: (chatId: string | null, personaId: string | null) => tauri<string[]>("mcp_selection", { chatId, personaId }),
+  selectChat: (chatId: string, ids: string[] | null) => tauri<void>("mcp_select_chat", { chatId, ids }),
+  selectPersona: (personaId: string, ids: string[]) => tauri<void>("mcp_select_persona", { personaId, ids }),
+  messageTools: (ids: string[]) => tauri<MessageTools[]>("mcp_message_tools", { ids }),
+  runtimes: () => tauri<Runtimes>("mcp_runtimes"),
+  installRuntime: (which: "node" | "uv") => tauri<void>("mcp_install_runtime", { which }),
+  missingRuntime: (error: string) => tauri<"node" | "uv" | null>("mcp_missing_runtime", { error }),
+};
 
 export interface Source {
   n: number;
@@ -842,13 +909,23 @@ export async function streamMessage(
   signal?: AbortSignal,
   /** The chat's PC folders this app can reach (it answers the reply's file requests). */
   pcFolderIds: string[] = [],
+  /** Tool servers on this PC the chat uses, with their tools (it runs the reply's calls). */
+  pcToolServers: MessageTools[] = [],
 ): Promise<void> {
   let res: Response;
   try {
     res = await fetch(`${GATEWAY}/api/chats/${chatId}/messages`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ content, images, ...clock(), pc_folders: pcFolderIds }),
+      body: JSON.stringify({
+        content,
+        images,
+        ...clock(),
+        pc_folders: pcFolderIds,
+        pc_tools: pcToolServers
+          .filter((s) => s.tools.length > 0)
+          .map((s) => ({ id: s.id, name: s.name, tools: s.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) })),
+      }),
       signal,
     });
   } catch {

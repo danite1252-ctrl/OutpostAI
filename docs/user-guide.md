@@ -86,6 +86,35 @@ PC>**, and chats with it run on that card, with a longer memory of the conversat
 lending while gaming and those models are unavailable until you carry on. See
 [the server guide](linux-server.md#helper-pcs-bigger-pictures-and-smarter-chat-than-the-servers-card-can-run).
 
+### The + menu
+
+Everything that goes with a message is under **+** beside the message box (hover or click):
+pictures from this PC or your gallery, documents, files and folders, and tools. What's on for
+the chat shows beside it (a folder's name, the tools in use); click one to change it.
+
+### Tools (MCP) on your PC
+
+Chats can use tools that run on your PC through the desktop app: web search, reading pages,
+GitHub, a hidden web browser, Wikipedia, Home Assistant, Todoist, Notion and more. They're
+[MCP](https://modelcontextprotocol.io) servers, so any MCP server works.
+
+- **+ › Tools › Tool library** lists ones that are known to work, grouped (Search & the web,
+  Coding, Knowledge, Home & tasks, Helpers), each saying what it costs (most are free; some need
+  a key, with a link to get one). **Add and test** starts it and lists its tools. Good first
+  ones: DuckDuckGo Search, Fetch, Wikipedia, Context7 and GitHub.
+- Tools that run with `npx` or `uvx` need Node.js or Python: if your PC hasn't got them, the
+  library offers to download them into Outpost's own folder (nothing is installed system-wide).
+- **Add your own**: any MCP server's command (or address and headers) from its instructions.
+  Servers that need a sign-in page (OAuth) aren't supported yet; use ones that take a key.
+- **Which chats use which**: a persona's tools are set in **Personas** (new chats with it start
+  with those); a chat can be given its own set from **+ › Tools**. **On this PC › Test** shows a
+  tool server's tools; switch off any you don't want used.
+- The chat's model needs the **tools** badge. Under each reply, **Used tools** lists what it
+  did. Tools run only while the desktop app is open on that PC: keys stay on the PC, and the
+  server only sees each tool's name and description. Chats from the phone don't use them.
+- Tools act straight away (unlike a chat's folders, they don't ask first), so give keys only
+  the access you're happy for the model to use (e.g. GitHub's read-only switch).
+
 ### Files in chats
 
 A chat can work with folders: the model lists, reads and searches the files, and can write

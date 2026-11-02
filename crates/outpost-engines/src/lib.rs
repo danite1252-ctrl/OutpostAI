@@ -6,13 +6,13 @@
 //! installed Ollama themselves), Outpost uses that one and marks it `external`.
 
 mod ai_toolkit;
-mod archive;
+pub mod archive;
 pub mod assets;
 pub mod catalog;
 pub mod comfy;
 mod comfyui;
 mod voice;
-mod download;
+pub mod download;
 pub mod gpu;
 pub mod hardware;
 mod manager;
@@ -21,6 +21,7 @@ mod ollama;
 pub mod packs;
 mod process;
 pub mod rate;
+pub mod runtimes;
 pub mod trainer;
 pub mod types;
 pub mod versions;
