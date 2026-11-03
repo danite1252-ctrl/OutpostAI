@@ -375,6 +375,8 @@ struct ToolFunction {
 
 /// Most rounds of tool use in one reply.
 const MAX_TOOL_ROUNDS: usize = 12;
+/// Rounds when the chat can run commands in a folder (coding).
+const MAX_CODING_ROUNDS: usize = 30;
 
 /// One streamed request to Ollama: text and thinking go to the app as they come; the
 /// reply's tool calls are returned. `Err` when it failed before finishing.
@@ -674,23 +676,29 @@ pub async fn send_message(
         // This reply's tool calls and (shortened) results, kept for the history next time.
         let mut trace: Vec<serde_json::Value> = Vec::new();
         let mut tools: Vec<serde_json::Value> = Vec::new();
-        if workspace.is_some() {
-            tools.extend(crate::workspace::Workspace::tools().as_array().cloned().unwrap_or_default());
+        if let Some(w) = &workspace {
+            tools.extend(w.tools().as_array().cloned().unwrap_or_default());
         }
+        // Coding (commands in a folder) takes more rounds: build, read errors, fix, build again.
+        let max_rounds = if workspace.as_ref().is_some_and(|w| w.folders.iter().any(|f| f.kind == "pc")) {
+            MAX_CODING_ROUNDS
+        } else {
+            MAX_TOOL_ROUNDS
+        };
         if let Some(t) = &pc_tools {
             tools.extend(t.tools());
         }
         if !tools.is_empty() {
             body["tools"] = serde_json::Value::Array(tools);
         }
-        for round in 0..=MAX_TOOL_ROUNDS {
+        for round in 0..=max_rounds {
             let before = content.len();
             let (calls, failed) = stream_round(&round_state, &body, &tx, &mut content, &mut thinking).await;
             failure = failed;
             if failure.is_some() || calls.is_empty() || (workspace.is_none() && pc_tools.is_none()) {
                 break;
             }
-            if round == MAX_TOOL_ROUNDS {
+            if round == max_rounds {
                 failure = Some("Stopped after many rounds of tool use; ask it to carry on.".into());
                 break;
             }

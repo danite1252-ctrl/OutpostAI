@@ -1,9 +1,10 @@
-// Tools on this PC for chats from the phone: while the app is open (even in the tray), it
-// tells Outpost which tool servers it runs and which chats and personas use them, and runs
-// the tool calls those chats' replies make.
+// This PC for chats from elsewhere (the phone, another PC): while the app is open (even in
+// the tray), it tells Outpost which tool servers it runs (and which chats and personas use
+// them) and which chat folders are here, then runs those chats' tool calls and their work in
+// the folders (reading, writing, and commands like builds).
 
 import { useEffect } from "react";
-import { GATEWAY, pcTools, type MessageTools } from "../api";
+import { GATEWAY, pcFolders, pcTools, type FolderRequest, type MessageTools } from "../api";
 import { toolsAvailable } from "./tools";
 
 const EVERY_MS = 20_000;
@@ -36,7 +37,7 @@ export function useDeviceTools(token: string) {
 
     async function register() {
       try {
-        const [servers, sel, name] = await Promise.all([pcTools.list(), pcTools.allSelections(), pcName()]);
+        const [servers, sel, name, folders] = await Promise.all([pcTools.list(), pcTools.allSelections(), pcName(), pcFolders.list()]);
         // Only servers some chat or persona uses get started and offered.
         const used = new Set([...Object.values(sel.chats).flat(), ...Object.values(sel.personas).flat()]);
         const ids = servers.filter((s) => s.enabled && used.has(s.id)).map((s) => s.id);
@@ -48,8 +49,13 @@ export function useDeviceTools(token: string) {
             name: s.name,
             tools: s.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, read_only: t.read_only })),
           }));
-        const r = await post(token, "/api/pc-tools/register", { name, servers: offer, chats: sel.chats, personas: sel.personas }, stop.signal);
-        offered = r.ok && offer.length > 0;
+        const r = await post(
+          token,
+          "/api/pc-tools/register",
+          { name, servers: offer, chats: sel.chats, personas: sel.personas, folders: folders.map((f) => f.id) },
+          stop.signal,
+        );
+        offered = r.ok && (offer.length > 0 || folders.length > 0);
       } catch {
         offered = false;
       }
@@ -64,10 +70,13 @@ export function useDeviceTools(token: string) {
         try {
           const r = await post(token, "/api/pc-tools/next", undefined, stop.signal);
           if (r.status === 200) {
-            const req = (await r.json()) as { id: string; server: string; tool: string; arguments: unknown };
-            void pcTools
-              .call(req.server, req.tool, req.arguments ?? {})
-              .catch((e) => ({ error: typeof e === "string" ? e : "The tool couldn't run on this PC." }))
+            const req = (await r.json()) as FolderRequest & { kind?: string };
+            const work =
+              req.kind === "folder"
+                ? pcFolders.op(req.folder, req.op, req.path, { text: req.text, content: req.content, command: req.command, timeout: req.timeout })
+                : pcTools.call(req.server ?? "", req.tool ?? "", req.arguments ?? {});
+            void work
+              .catch((e) => ({ error: typeof e === "string" ? e : "That couldn't be done on this PC." }))
               .then((answer) => post(token, `/api/pc-tools/answers/${req.id}`, answer).catch(() => undefined));
           } else if (r.status !== 204) {
             // An older Outpost, or signed out: try again later.

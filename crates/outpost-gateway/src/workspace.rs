@@ -2,9 +2,13 @@
 //! search, write, edit), and running them.
 //!
 //! Server folders are read and written here. A PC folder is read and written by the desktop
-//! app on that PC, while it streams the reply: a `file_request` event goes to the app, which
-//! does it and posts the answer back (see [`Relay`]). In `ask` mode a change is only proposed
-//! (the person applies or skips it later); in `auto` it's made at once, with Undo.
+//! app on that PC: while it streams the reply, a `file_request` event goes to the app, which
+//! does it and posts the answer back (see [`Relay`]); a reply streamed elsewhere (the phone)
+//! reaches it through the PC's open app (see [`crate::device_tools`]). In `ask` mode a change
+//! is only proposed (the person applies or skips it later); in `auto` it's made at once, with Undo.
+//!
+//! Commands (`run_command`, e.g. `gradlew build`) run in a PC folder, on that PC. Ones the
+//! person hasn't allowed for the folder ask them first (Allow, Always allow, Skip).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -26,6 +30,14 @@ const WRITE_LIMIT: usize = 1024 * 1024;
 const LIST_LIMIT: usize = 250;
 /// Most search hits.
 const SEARCH_LIMIT: usize = 40;
+/// Longest a command may run (the model can ask for less).
+const COMMAND_MAX_SECS: u64 = 30 * 60;
+/// What a command gets unless the model says.
+const COMMAND_SECS: u64 = 10 * 60;
+/// Longest to wait for the person to allow a command.
+const CONFIRM_WITHIN: Duration = Duration::from_secs(5 * 60);
+/// Most of a command's output the model is shown.
+const OUTPUT_LIMIT: usize = 6_000;
 /// Folders not worth looking in.
 pub const SKIP_DIRS: [&str; 11] =
     [".git", "node_modules", "target", "dist", "build", ".next", ".venv", "venv", "__pycache__", ".idea", ".vs"];
@@ -122,8 +134,8 @@ impl Workspace {
             .folders
             .iter()
             .map(|f| match f.kind.as_str() {
-                "pc" if !self.reachable.contains(&f.id) => format!(
-                    "- {} (on {}; not reachable now: it can only be used from the Outpost desktop app on that PC)",
+                "pc" if !self.can_reach(f) => format!(
+                    "- {} (on {}; not reachable now: that PC needs to be on, with the Outpost app open)",
                     f.name,
                     f.device.as_deref().unwrap_or("another PC")
                 ),
@@ -142,13 +154,40 @@ impl Workspace {
              name, e.g. `{example}/src/main.ts`. Look before you change anything: list_files to see what's there, \
              read_file to read, search_files to find text. Change files with edit_file (replace an exact piece of text) \
              or write_file (a new file, or a whole new version). Keep changes to what was asked. {changes} Never say a \
-             change was made unless a tool said so.",
-            list.join("\n")
+             change was made unless a tool said so.{commands}",
+            list.join("\n"),
+            commands = if self.has_commands() {
+                "\n\nYou can run commands in a folder on a PC with run_command (path = the folder, or a sub-folder to run \
+                 in), e.g. `gradlew build`, `mvn package` or `npm test`. Use it to build and test your changes: read the \
+                 errors it shows, fix the code, and run it again until it works (say so if you can't get it working). \
+                 Only run commands that finish by themselves (no servers or programs that keep running). The user may be \
+                 asked to allow a command first; if they skip it, don't run it again. Never say a build passed unless \
+                 run_command showed it."
+            } else {
+                ""
+            }
         )
     }
 
-    /// The tool definitions for Ollama.
-    pub fn tools() -> Value {
+    /// The tool definitions for Ollama (with run_command when a folder is on a PC).
+    pub fn tools(&self) -> Value {
+        let mut all = Self::file_tools();
+        if self.has_commands() {
+            if let Some(a) = all.as_array_mut() {
+                a.push(json!({ "type": "function", "function": {
+                    "name": "run_command",
+                    "description": "Run a command in a folder on the user's PC and get its exit code and output (errors first when it's long). For builds and tests, e.g. gradlew build. It must finish by itself.",
+                    "parameters": { "type": "object", "properties": {
+                        "path": { "type": "string", "description": "The folder to run in (its name, or name/sub-folder), e.g. MyPlugin" },
+                        "command": { "type": "string", "description": "The command line, e.g. gradlew build" },
+                        "timeout_minutes": { "type": "integer", "description": "Stop it after this many minutes (default 10, at most 30)." } },
+                        "required": ["path", "command"] } } }));
+            }
+        }
+        all
+    }
+
+    fn file_tools() -> Value {
         let path = json!({ "type": "string", "description": "Path starting with the folder's name, e.g. Shop/src/app.ts" });
         json!([
             { "type": "function", "function": {
@@ -193,6 +232,7 @@ impl Workspace {
             "search_files" => "search",
             "write_file" => "write",
             "edit_file" => "edit",
+            "run_command" => "run",
             _ => {
                 return fail("tool", &full, format!("There's no tool called {name}."));
             }
@@ -202,16 +242,19 @@ impl Workspace {
             Err(e) => return fail(op, &full, e),
         };
         let shown = join(&folder.name, &inner);
-        if folder.kind == "pc" && !self.reachable.contains(&folder.id) {
+        if !self.can_reach(folder) {
             return fail(
                 op,
                 &shown,
                 format!(
-                    "{} is on {}: it can only be used from the Outpost desktop app there.",
+                    "{} is on {}, which isn't reachable now: it needs that PC on, with the Outpost app open.",
                     folder.name,
                     folder.device.as_deref().unwrap_or("another PC")
                 ),
             );
+        }
+        if op == "run" {
+            return self.run_command(folder, &inner, &shown, args).await;
         }
         let result = match op {
             "list" => self.list(folder, &inner).await.map(|(text, n)| (text, format!("{n} entries"), None)),
@@ -267,18 +310,47 @@ impl Workspace {
         Ok((folder, inner))
     }
 
+    /// A PC folder is usable when the app streaming this reply is on that PC, or that PC's
+    /// app is open (it's reached through it).
+    fn can_reach(&self, folder: &ChatFolder) -> bool {
+        folder.kind != "pc" || self.reachable.contains(&folder.id) || self.state.device_tools.for_folder(&self.account_id, &folder.id).is_some()
+    }
+
+    /// Commands can run here: a folder on a PC.
+    fn has_commands(&self) -> bool {
+        self.folders.iter().any(|f| f.kind == "pc")
+    }
+
     fn server_root(&self, folder: &ChatFolder) -> PathBuf {
         chat_files::folder_dir(&self.state.config.files_dir(), &self.account_id, &folder.id)
     }
 
     async fn pc(&self, folder: &ChatFolder, op: &str, inner: &Path, extra: Value) -> Result<Value, String> {
+        self.pc_within(folder, op, inner, extra, Duration::from_secs(60)).await
+    }
+
+    async fn pc_within(&self, folder: &ChatFolder, op: &str, inner: &Path, extra: Value, within: Duration) -> Result<Value, String> {
         let mut req = json!({ "folder": folder.id, "op": op, "path": slash(inner) });
         if let (Some(o), Some(e)) = (req.as_object_mut(), extra.as_object()) {
             for (k, v) in e {
                 o.insert(k.clone(), v.clone());
             }
         }
-        self.state.file_relay.ask(&self.events, &self.chat_id, req).await
+        if self.reachable.contains(&folder.id) {
+            return self.state.file_relay.ask_within(&self.events, &self.chat_id, req, within, "file_request").await;
+        }
+        // From elsewhere: through that PC's open app.
+        match self.state.device_tools.for_folder(&self.account_id, &folder.id) {
+            Some((session, _)) => {
+                req["kind"] = json!("folder");
+                self.state.device_tools.call(&session, req, within).await
+            }
+            None => Err(format!(
+                "{} is on {}, which isn't reachable now (is it on, with the Outpost app open?).",
+                folder.name,
+                folder.device.as_deref().unwrap_or("another PC")
+            )),
+        }
     }
 
     async fn list(&self, folder: &ChatFolder, inner: &Path) -> Result<(String, usize), String> {
@@ -414,6 +486,197 @@ impl Workspace {
             ))
         }
     }
+}
+
+impl Workspace {
+    /// Run a command in a PC folder, asking first unless it's allowed there.
+    async fn run_command(&self, folder: &ChatFolder, inner: &Path, shown: &str, args: &Value) -> Outcome {
+        let command = args.get("command").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+        let note = |n: String| FileAction { op: "run".into(), path: shown.to_string(), note: Some(n), change_id: None, failed: false };
+        if command.is_empty() {
+            return fail("run", shown, "Say which command to run.".into());
+        }
+        if folder.kind != "pc" {
+            return fail("run", shown, "Commands run in folders on a PC for now (server folders are coming).".into());
+        }
+        if let Some(why) = refused(&command) {
+            return fail("run", shown, format!("That command isn't allowed ({why})."));
+        }
+        let mins = args.get("timeout_minutes").and_then(Value::as_u64).unwrap_or(COMMAND_SECS / 60).clamp(1, COMMAND_MAX_SECS / 60);
+        let rules = CommandRules::load(&self.state, &folder.id).await;
+        if !rules.allows(&command) {
+            let always = always_label(&command);
+            let question = format!("Run `{command}` in {shown}?");
+            let asked = json!({ "kind": "command", "question": question, "always": always, "command": command, "folder": folder.name });
+            let answer = self.state.file_relay.ask_within(&self.events, &self.chat_id, asked, CONFIRM_WITHIN, "confirm").await;
+            let ok = answer.as_ref().is_ok_and(|v| v.get("ok").and_then(Value::as_bool) == Some(true));
+            if !ok {
+                return Outcome {
+                    reply: format!("The user didn't allow `{command}`, so it didn't run. Don't run it again unless they ask."),
+                    action: FileAction { failed: true, ..note("not allowed".into()) },
+                };
+            }
+            if answer.is_ok_and(|v| v.get("always").and_then(Value::as_bool) == Some(true)) {
+                if let Some(program) = always {
+                    let _ = rules.with(&program).save(&self.state, &folder.id).await;
+                }
+            }
+        }
+        let secs = mins * 60;
+        let started = std::time::Instant::now();
+        let got = self
+            .pc_within(folder, "run", inner, json!({ "command": command, "timeout": secs }), Duration::from_secs(secs + 30))
+            .await;
+        let took = started.elapsed().as_secs();
+        match got {
+            Err(e) => fail("run", shown, e),
+            Ok(v) => {
+                let output = v.get("output").and_then(Value::as_str).unwrap_or_default();
+                let timed_out = v.get("timed_out").and_then(Value::as_bool) == Some(true);
+                let code = v.get("exit_code").and_then(Value::as_i64);
+                let how = match (timed_out, code) {
+                    (true, _) => format!("was stopped after {mins} minutes (still running)"),
+                    (false, Some(0)) => format!("finished OK in {}", seconds(took)),
+                    (false, Some(c)) => format!("failed with exit code {c} after {}", seconds(took)),
+                    (false, None) => format!("ended after {}", seconds(took)),
+                };
+                let ok = !timed_out && code == Some(0);
+                Outcome {
+                    reply: format!("`{command}` in {shown} {how}.\n{}", summarise_output(output)),
+                    action: FileAction { failed: !ok, ..note(format!("`{command}` {}", if ok { "passed".to_string() } else { how })) },
+                }
+            }
+        }
+    }
+}
+
+fn seconds(s: u64) -> String {
+    if s < 90 {
+        format!("{s} s")
+    } else {
+        format!("{} min {} s", s / 60, s % 60)
+    }
+}
+
+/// Which commands run without asking, per folder (kept on the server, so it's the same from
+/// every device): the programs the person said "Always allow" to.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct CommandRules {
+    #[serde(default)]
+    pub allow: Vec<String>,
+}
+
+impl CommandRules {
+    fn key(folder_id: &str) -> String {
+        format!("commands.{folder_id}")
+    }
+
+    pub async fn load(state: &AppState, folder_id: &str) -> Self {
+        outpost_core::settings::get(&state.pool, &Self::key(folder_id))
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default()
+    }
+
+    pub async fn save(&self, state: &AppState, folder_id: &str) -> Result<(), String> {
+        let v = serde_json::to_string(self).map_err(|e| e.to_string())?;
+        outpost_core::settings::set(&state.pool, &Self::key(folder_id), &v).await.map_err(|e| e.to_string())
+    }
+
+    fn with(mut self, program: &str) -> Self {
+        if !self.allow.iter().any(|p| p == program) {
+            self.allow.push(program.to_string());
+        }
+        self
+    }
+
+    /// Runs without asking: one plain command whose program is allowed.
+    pub fn allows(&self, command: &str) -> bool {
+        !chained(command) && program_of(command).is_some_and(|p| self.allow.iter().any(|a| a == &p))
+    }
+}
+
+/// The program a command runs, as "Always allow" remembers it: `./gradlew build` → `gradlew`.
+pub fn program_of(command: &str) -> Option<String> {
+    let first = command.split_whitespace().next()?;
+    let name = first.trim_matches(['"', '\'']).rsplit(['/', '\\']).next()?.to_lowercase();
+    let name = name
+        .strip_suffix(".bat")
+        .or_else(|| name.strip_suffix(".cmd"))
+        .or_else(|| name.strip_suffix(".exe"))
+        .unwrap_or(&name)
+        .to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+/// More than one command, or output sent somewhere: always asks.
+fn chained(command: &str) -> bool {
+    ["&&", "||", ";", "|", ">", "<", "`", "$(", "&", "\n"].iter().any(|c| command.contains(c))
+}
+
+/// Programs that can do anything: never "always allowed".
+const NEVER_ALWAYS: [&str; 16] = [
+    "cmd", "powershell", "pwsh", "bash", "sh", "zsh", "start", "del", "erase", "rm", "rmdir", "rd", "format", "curl", "wget", "reg",
+];
+
+/// What "Always allow" would allow for this command (`None`: it always asks).
+pub fn always_label(command: &str) -> Option<String> {
+    if chained(command) {
+        return None;
+    }
+    program_of(command).filter(|p| !NEVER_ALWAYS.contains(&p.as_str()))
+}
+
+/// Commands never run, whatever the person says: ones that wipe disks or the system.
+pub fn refused(command: &str) -> Option<&'static str> {
+    let c = command.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
+    let bad: [(&str, &str); 11] = [
+        ("format ", "formats a drive"),
+        ("diskpart", "changes disks"),
+        ("rm -rf /", "deletes everything"),
+        ("rm -rf ~", "deletes everything"),
+        ("del /s", "deletes folders of files"),
+        ("rd /s", "deletes folders"),
+        ("rmdir /s", "deletes folders"),
+        ("shutdown", "turns the PC off"),
+        ("reg delete", "changes the registry"),
+        ("cipher /w", "wipes a drive"),
+        ("mkfs", "formats a drive"),
+    ];
+    bad.iter().find(|(p, _)| c.contains(p)).map(|(_, why)| *why)
+}
+
+/// A command's output for the model: all of it when short; else the lines that look like
+/// problems, then the end.
+pub fn summarise_output(output: &str) -> String {
+    let output = output.trim();
+    if output.is_empty() {
+        return "(No output.)".into();
+    }
+    if output.chars().count() <= OUTPUT_LIMIT {
+        return output.to_string();
+    }
+    let lines: Vec<&str> = output.lines().collect();
+    let problem = |l: &&&str| {
+        let l = l.to_lowercase();
+        l.contains("error") || l.contains("exception") || l.contains("failed") || l.contains("warning:") || l.starts_with("e: ")
+            || l.contains("cannot find symbol") || l.contains("caused by")
+    };
+    let problems: Vec<&str> = lines.iter().filter(problem).take(60).copied().collect();
+    let tail: Vec<&str> = lines.iter().rev().take(40).rev().copied().collect();
+    let mut out = format!("(Long output, {} lines: the problem lines, then the end.)\n", lines.len());
+    if !problems.is_empty() {
+        out.push_str(&problems.join("\n"));
+        out.push_str("\n...\n");
+    }
+    out.push_str(&tail.join("\n"));
+    if out.chars().count() > OUTPUT_LIMIT {
+        let keep: String = out.chars().rev().take(OUTPUT_LIMIT).collect::<Vec<_>>().into_iter().rev().collect();
+        out = format!("(trimmed)\n{keep}");
+    }
+    out
 }
 
 pub(crate) fn fail(op: &str, path: &str, why: String) -> Outcome {
@@ -612,6 +875,42 @@ pub fn search_dir(start: &Path, needle: &str, limit: usize) -> Vec<(String, usiz
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn commands_ask_unless_allowed_and_some_never_run() {
+        assert_eq!(program_of("./gradlew build").as_deref(), Some("gradlew"));
+        assert_eq!(program_of("gradlew.bat build --info").as_deref(), Some("gradlew"));
+        assert_eq!(program_of(".\\gradlew clean build").as_deref(), Some("gradlew"));
+        let rules = CommandRules { allow: vec!["gradlew".into()] };
+        assert!(rules.allows("gradlew build"));
+        assert!(rules.allows("./gradlew test --info"));
+        assert!(!rules.allows("mvn package"));
+        // Chained or redirected: always asks, and can't be "always allowed".
+        assert!(!rules.allows("gradlew build && del x"));
+        assert_eq!(always_label("gradlew build > log.txt"), None);
+        assert_eq!(always_label("powershell -c x"), None);
+        assert_eq!(always_label("npm test").as_deref(), Some("npm"));
+        assert!(refused("format C: /q").is_some());
+        assert!(refused("rd  /S /Q build").is_some());
+        assert!(refused("gradlew build").is_none());
+    }
+
+    #[test]
+    fn long_output_keeps_the_problems_and_the_end() {
+        let mut log = String::new();
+        for i in 0..3000 {
+            log.push_str(&format!("line {i} compiling\n"));
+            if i == 1500 {
+                log.push_str("Main.java:12: error: cannot find symbol\n");
+            }
+        }
+        log.push_str("BUILD FAILED in 4s\n");
+        let s = summarise_output(&log);
+        assert!(s.contains("cannot find symbol"));
+        assert!(s.ends_with("BUILD FAILED in 4s"));
+        assert!(s.chars().count() <= OUTPUT_LIMIT + 20);
+        assert_eq!(summarise_output("ok"), "ok");
+    }
+
     use super::*;
 
     #[test]

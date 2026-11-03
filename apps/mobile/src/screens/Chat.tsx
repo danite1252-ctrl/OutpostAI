@@ -267,6 +267,16 @@ function Conversation({
   const [personaModel, setPersonaModel] = useState<string | null>(persona?.model ?? null);
   const [modelOpen, setModelOpen] = useState(false);
   const [docsOpen, setDocsOpen] = useState(false);
+  // A command the reply wants to run, waiting for Allow or Skip.
+  const [asking, setAsking] = useState<{ id: string; command: string; folder: string; always: string | null } | null>(null);
+  async function answerAsk(id: string, answer: { ok: boolean; always?: boolean }) {
+    setAsking(null);
+    try {
+      await api.json("POST", `/api/chats/${chat.id}/file-answers/${id}`, answer);
+    } catch {
+      // The reply stopped waiting (it skips it).
+    }
+  }
   useEffect(() => {
     api.get<{ installed: { model: string; badges: string[] }[] }>("/api/models").then(
       (o) => setChatModels(o.installed.filter((m) => !m.badges.includes("embedding")).map((m) => m.model)),
@@ -409,10 +419,17 @@ function Conversation({
           setDraft((x) => (x ? { ...x, files: [...x.files, f] } : x));
           if (f.change_id) void chatFiles.reload();
         }
+        else if (name === "confirm") {
+          // A command the reply wants to run in a folder (asks here; other asks are skipped).
+          const c = data as { id: string; kind?: string; command?: string; folder?: string; always?: string | null };
+          if (c.kind === "command") setAsking({ id: c.id, command: c.command ?? "", folder: c.folder ?? "", always: c.always ?? null });
+          else void answerAsk(c.id, { ok: false });
+        }
         else if (name === "error") setError(String((d as { message?: string }).message ?? "The reply failed."));
       },
       done: () => {
         setDraft(null);
+        setAsking(null);
         stop.current = null;
         void reload();
         void chatFiles.reload();
@@ -497,6 +514,17 @@ function Conversation({
               {(chatModels ?? []).slice(0, 6).map((m) => (
                 <Chip key={m} label={m} onPress={() => void pickModel(m)} />
               ))}
+            </View>
+          </View>
+        )}
+        {asking && (
+          <View accessibilityRole="alert" style={[s.card, { gap: 8, borderColor: C.amber }]}>
+            <Text style={{ color: C.ink }}>Run this in {asking.folder}?</Text>
+            <Text style={{ color: C.soft, fontFamily: "monospace", backgroundColor: C.raised, padding: 8, borderRadius: 8 }}>{asking.command}</Text>
+            <View style={[s.row, { flexWrap: "wrap" }]}>
+              <Chip label="Allow" active onPress={() => void answerAsk(asking.id, { ok: true })} />
+              {asking.always && <Chip label={`Always allow ${asking.always} here`} onPress={() => void answerAsk(asking.id, { ok: true, always: true })} />}
+              <Chip label="Skip" onPress={() => void answerAsk(asking.id, { ok: false })} />
             </View>
           </View>
         )}

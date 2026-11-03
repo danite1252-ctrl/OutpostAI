@@ -42,6 +42,9 @@ pub struct Register {
     /// Persona id → its tool servers (chats without their own choice).
     #[serde(default)]
     pub personas: HashMap<String, Vec<String>>,
+    /// The chat folders on this PC (their ids): replies from elsewhere reach them through it.
+    #[serde(default)]
+    pub folders: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +93,16 @@ impl DeviceTools {
             }
         }
         None
+    }
+
+    /// Your PC that has this chat folder and is on now (its session and name).
+    pub fn for_folder(&self, account_id: &str, folder_id: &str) -> Option<(String, String)> {
+        let devices = self.devices.lock().unwrap_or_else(|p| p.into_inner());
+        devices
+            .iter()
+            .filter(|(_, d)| d.account_id == account_id && d.seen.elapsed() < ONLINE_FOR && d.has.folders.iter().any(|f| f == folder_id))
+            .max_by_key(|(_, d)| d.seen)
+            .map(|(s, d)| (s.clone(), d.has.name.clone()))
     }
 
     /// Ask a PC to run something (`request` is `{server, tool, arguments}`); its answer.
@@ -215,8 +228,13 @@ mod tests {
                 servers: vec![server("ha"), server("google")],
                 chats: HashMap::from([("c1".to_string(), vec!["google".to_string()])]),
                 personas: HashMap::from([("p1".to_string(), vec!["ha".to_string()])]),
+                folders: vec!["pc-abc".into()],
             },
         );
+        // Its folders are reachable through it, for its owner only.
+        assert_eq!(dt.for_folder("dan", "pc-abc"), Some(("pc1".to_string(), "DESKTOP".to_string())));
+        assert!(dt.for_folder("sj", "pc-abc").is_none());
+        assert!(dt.for_folder("dan", "pc-other").is_none());
         // The chat's own choice, else its persona's; nobody else's PC.
         assert_eq!(dt.for_chat("dan", "c1", Some("p1")).unwrap().servers[0].id, "google");
         assert_eq!(dt.for_chat("dan", "c2", Some("p1")).unwrap().servers[0].id, "ha");

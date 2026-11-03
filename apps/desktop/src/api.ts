@@ -344,7 +344,7 @@ export interface ChatFolder {
 /** One thing a reply did with files. */
 export interface FileAction {
   /** `mcp`: a tool on this PC ("GitHub › search_issues"). */
-  op: "list" | "read" | "search" | "write" | "edit" | "tool" | "mcp";
+  op: "list" | "read" | "search" | "write" | "edit" | "tool" | "mcp" | "run";
   path: string;
   note?: string | null;
   change_id?: string | null;
@@ -416,24 +416,52 @@ export const pcFolders = {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("pc_folder_forget", { id });
   },
-  async op(id: string, op: string, path: string, extra: { text?: string; content?: string } = {}): Promise<Record<string, unknown>> {
+  async op(
+    id: string,
+    op: string,
+    path: string,
+    extra: { text?: string; content?: string; command?: string; timeout?: number } = {},
+  ): Promise<Record<string, unknown>> {
     const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<Record<string, unknown>>("pc_folder_op", { id, op, path, text: extra.text ?? null, content: extra.content ?? null });
+    return invoke<Record<string, unknown>>("pc_folder_op", {
+      id,
+      op,
+      path,
+      text: extra.text ?? null,
+      content: extra.content ?? null,
+      command: extra.command ?? null,
+      timeout: extra.timeout ?? null,
+    });
   },
 };
+
+/** What a reply asks this PC to do: something in one of its folders, or a tool call. */
+export interface FolderRequest {
+  id: string;
+  folder: string;
+  op: string;
+  path: string;
+  text?: string;
+  content?: string;
+  command?: string;
+  timeout?: number;
+  server?: string;
+  tool?: string;
+  arguments?: unknown;
+}
 
 /** A reply asked for something in one of this PC's folders: do it and send the answer. */
 async function answerFileRequest(
   token: string,
   chatId: string,
-  req: { id: string; folder: string; op: string; path: string; text?: string; content?: string; server?: string; tool?: string; arguments?: unknown },
+  req: FolderRequest,
 ) {
   let answer: Record<string, unknown>;
   try {
     answer =
       req.op === "mcp"
         ? await pcTools.call(req.server ?? "", req.tool ?? "", req.arguments ?? {})
-        : await pcFolders.op(req.folder, req.op, req.path, { text: req.text, content: req.content });
+        : await pcFolders.op(req.folder, req.op, req.path, { text: req.text, content: req.content, command: req.command, timeout: req.timeout });
   } catch (e) {
     answer = { error: typeof e === "string" ? e : "The desktop app couldn't do that." };
   }
@@ -1001,6 +1029,17 @@ export interface StreamHandlers {
   file?: (action: FileAction) => void;
   /** Asked before a tool runs (hands-free): resolve true to go ahead. */
   confirm?: (question: string) => Promise<boolean>;
+  /** Asked before a command runs in a folder (`always`: what "Always allow" would allow). */
+  approve?: (ask: CommandAsk) => Promise<{ ok: boolean; always?: boolean }>;
+}
+
+/** A reply wants to run a command in a folder the person hasn't allowed it for. */
+export interface CommandAsk {
+  question: string;
+  command: string;
+  folder: string;
+  /** The program "Always allow" would allow in this folder, or null (it always asks). */
+  always: string | null;
 }
 
 /** Send a chat message and follow the streamed reply (Server-Sent Events over POST). */
@@ -1072,12 +1111,18 @@ export async function streamMessage(
       else if (name === "file") on.file?.(payload);
       else if (name === "file_request") void answerFileRequest(token, chatId, payload);
       else if (name === "confirm") {
-        const ask = on.confirm ? on.confirm(String(payload.question ?? "Go ahead?")).catch(() => false) : Promise.resolve(false);
-        void ask.then((ok) =>
+        const question = String(payload.question ?? "Go ahead?");
+        const ask: Promise<{ ok: boolean; always?: boolean }> =
+          payload.kind === "command" && on.approve
+            ? on.approve(payload as CommandAsk).catch(() => ({ ok: false }))
+            : on.confirm
+              ? on.confirm(question).then((ok) => ({ ok }), () => ({ ok: false }))
+              : Promise.resolve({ ok: false });
+        void ask.then((answer) =>
           fetch(`${GATEWAY}/api/chats/${chatId}/file-answers/${payload.id}`, {
             method: "POST",
             headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ ok }),
+            body: JSON.stringify(answer),
           }).catch(() => undefined),
         );
       }

@@ -365,6 +365,7 @@ const VERB: Record<FileAction["op"], string> = {
   edit: "Changed",
   tool: "Tried",
   mcp: "Used",
+  run: "Ran in",
 };
 
 /** Under a reply: what it did with files, and its changes to apply, skip or undo. */

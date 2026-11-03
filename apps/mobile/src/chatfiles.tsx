@@ -134,7 +134,7 @@ export function FilesSheet({
   );
 }
 
-const VERB: Record<string, string> = { list: "Looked in", read: "Read", search: "Searched", write: "Wrote", edit: "Changed", tool: "Tried", mcp: "Used" };
+const VERB: Record<string, string> = { list: "Looked in", read: "Read", search: "Searched", write: "Wrote", edit: "Changed", tool: "Tried", mcp: "Used", run: "Ran in" };
 
 /** Under a reply: what it did with files, and its changes. */
 export function FileActions({ api, chatId, actions, files, live }: { api: Outpost; chatId: string; actions: FileAction[]; files: ChatFiles; live?: boolean }) {

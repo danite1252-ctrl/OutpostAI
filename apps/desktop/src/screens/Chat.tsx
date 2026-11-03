@@ -24,7 +24,7 @@ import { ChatDocuments, SourcesLine } from "../components/documents";
 import { FileActions, FilesPanel, useChatFiles } from "../components/chatfiles";
 import { PlusMenu } from "../components/plusmenu";
 import { ToolsPanel, useChatTools } from "../components/tools";
-import type { MessageTools } from "../api";
+import type { CommandAsk, MessageTools } from "../api";
 import { GalleryPicker, mediaAsInput } from "../components/gallery";
 import { Avatar, Button, ErrorNote, areYouSure } from "../components/ui";
 import { hasModel } from "./Personas";
@@ -148,6 +148,8 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
   // Every tool the chat uses: on the server, and on this PC.
   const toolNames = [...chatTools.serverActive.map((s) => s.name), ...chatTools.active.map((s) => s.name)];
   const [panel, setPanel] = useState<"files" | "tools" | null>(null);
+  // A command the reply wants to run, waiting for Allow or Skip.
+  const [asking, setAsking] = useState<{ ask: CommandAsk; answer: (a: { ok: boolean; always?: boolean }) => void } | null>(null);
   const modelName =
     active?.model ?? persona?.model ?? installed.find((m) => !m.badges.includes("embedding"))?.model ?? null;
   const modelInfo = installed.find((m) => m.model === modelName);
@@ -307,6 +309,16 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
           },
           error: (message) => setError(message),
           file: (a) => setDraft((d) => (d ? { ...d, files: [...d.files, a] } : d)),
+          approve: (ask) =>
+            new Promise((resolve) =>
+              setAsking({
+                ask,
+                answer: (a) => {
+                  setAsking(null);
+                  resolve(a);
+                },
+              }),
+            ),
         },
         controller.signal,
         chatFiles.reachable,
@@ -319,6 +331,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
         fail(err);
       }
     } finally {
+      setAsking(null);
       setDraft(null);
       setStreamingId(null);
       abort.current = null;
@@ -546,6 +559,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
 
         <div className="mx-auto w-full max-w-3xl px-6 pb-6">
           <ErrorNote>{error}</ErrorNote>
+          {asking && <CommandApproval ask={asking.ask} onAnswer={asking.answer} />}
           <div className="mt-2 flex flex-col gap-2 rounded-2xl border border-line bg-surface p-3">
             {images.length > 0 && (
               <ul className="flex flex-wrap gap-2" aria-label="Images to send">
@@ -885,6 +899,30 @@ function MissingModel({
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** The reply wants to run a command in a folder: Allow (once), Always allow (that program, in
+ *  that folder), or Skip. */
+function CommandApproval({ ask, onAnswer }: { ask: CommandAsk; onAnswer: (a: { ok: boolean; always?: boolean }) => void }) {
+  return (
+    <div role="alertdialog" aria-label="Run a command?" className="mt-2 flex flex-col gap-2 rounded-2xl border border-amber/60 bg-surface p-3">
+      <p className="text-sm">
+        Run this in <span className="font-medium">{ask.folder}</span>?
+      </p>
+      <code className="rounded-lg bg-raised px-3 py-2 font-mono text-sm break-all">{ask.command}</code>
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => onAnswer({ ok: true })}>Allow</Button>
+        {ask.always && (
+          <Button variant="ghost" onClick={() => onAnswer({ ok: true, always: true })}>
+            Always allow {ask.always} here
+          </Button>
+        )}
+        <Button variant="ghost" onClick={() => onAnswer({ ok: false })}>
+          Skip
+        </Button>
+      </div>
     </div>
   );
 }

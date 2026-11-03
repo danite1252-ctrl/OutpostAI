@@ -176,6 +176,23 @@ or change them. It needs a model with the **tools** badge (Qwen 3, Llama 3.1 and
 - The model only reaches inside the chat's folders; paths that leave them (`..`, links out)
   are refused. Folders like `.git` and `node_modules` are skipped when listing and searching.
 
+#### Building and running commands (coding)
+
+In a chat with a **folder on a PC**, the model can also run commands there, such as
+`gradlew build`, `mvn package` or `npm test`, then read the errors, fix the code and build
+again until it works (up to 30 rounds in one reply).
+
+- A command runs on the PC that has the folder, in that folder, as you (Java, Gradle and the
+  rest come from that PC). Carry on the chat from your phone or another PC and it still runs
+  there, as long as that PC is on with the Outpost app open.
+- **Asking first**: a command shows **Allow**, **Always allow … here** (that program, in that
+  folder, from then on) and **Skip**. Commands chained together (`&&`, `|`, `>`) always ask,
+  and shells like `cmd` and `powershell` can't be always allowed. A few commands never run
+  (formatting drives, deleting folders of files, shutting down).
+- A command is stopped after 10 minutes (the model can ask for up to 30), with everything it
+  started. Only commands that finish by themselves work: not servers.
+- Long output comes back to the model as the error lines and the end, so it fits.
+
 ## Create, Gallery and the queue
 
 - **Create** has a tab per task: **Picture**, **Character**, **Edit**, **Video** and
