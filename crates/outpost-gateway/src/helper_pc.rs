@@ -302,6 +302,16 @@ impl HelperPc {
         self.local.models.pull(model).map_err(|e| anyhow::anyhow!("{e}"))
     }
 
+    /// Stop a chat model downloading here.
+    pub fn cancel_chat_pull(&self, model: &str) -> bool {
+        self.local.models.cancel(model)
+    }
+
+    /// Stop a workflow's model files downloading here.
+    pub fn cancel_pack(&self, id: &str) -> bool {
+        self.local.assets.cancel(id)
+    }
+
     /// Delete a chat model from Ollama here.
     pub async fn remove_chat_model(&self, model: &str) -> anyhow::Result<()> {
         self.local.models.remove(model).await.map_err(|e| anyhow::anyhow!("{e}"))

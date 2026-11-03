@@ -181,10 +181,102 @@ pub fn merge(mut out: Vec<InstalledModel>, mut helpers: Vec<Helper>, server_vram
     out
 }
 
+/// Models whose chat template refused Outpost's extra system notes, and how far they need
+/// them folded: 1 = one system message, at the start; 2 = none (into the first user message).
+static STRICT_ROLES: Mutex<Option<HashMap<String, u8>>> = Mutex::new(None);
+
+fn strictness(model: &str) -> u8 {
+    STRICT_ROLES.lock().unwrap_or_else(|p| p.into_inner()).as_ref().and_then(|m| m.get(model).copied()).unwrap_or(0)
+}
+
+fn remember_strictness(model: &str, level: u8) {
+    STRICT_ROLES.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(HashMap::new).insert(model.to_string(), level);
+}
+
+/// Ollama's error when a model's template won't take a system message where it was (Mistral's
+/// and Devstral's take one, first; some take none): "Only user, assistant and tool roles are
+/// supported, got system."
+fn refuses_system(error: &str) -> bool {
+    let e = error.to_lowercase();
+    e.contains("system") && (e.contains("role") || e.contains("raise_exception") || e.contains("jinja"))
+}
+
+/// The body with its system messages folded, for a strict template. Level 1: all of them in
+/// one at the start, except notes placed later in the chat (the clock), which go in front of
+/// the user message they preceded. Level 2: no system message at all; the lot goes in front
+/// of the first user message.
+pub fn fold_system(body: &Value, level: u8) -> Value {
+    let Some(messages) = body["messages"].as_array() else { return body.clone() };
+    let mut out: Vec<Value> = Vec::with_capacity(messages.len());
+    let mut leading: Vec<String> = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+    for m in messages {
+        let content = m["content"].as_str().unwrap_or_default().to_string();
+        if m["role"] == "system" {
+            if out.is_empty() {
+                leading.push(content);
+            } else {
+                pending.push(content);
+            }
+            continue;
+        }
+        let mut m = m.clone();
+        if m["role"] == "user" {
+            let mut notes = std::mem::take(&mut pending);
+            if level >= 2 && !leading.is_empty() && !out.iter().any(|x: &Value| x["role"] == "user") {
+                notes.splice(0..0, std::mem::take(&mut leading));
+            }
+            if !notes.is_empty() {
+                let text = m["content"].as_str().unwrap_or_default();
+                m["content"] = Value::String(format!("{}\n\n{text}", notes.join("\n\n")));
+            }
+        }
+        out.push(m);
+    }
+    // Notes after the last user message, or a system prompt with nothing to go in front of.
+    leading.extend(pending);
+    if !leading.is_empty() {
+        if level >= 2 {
+            out.insert(0, serde_json::json!({ "role": "user", "content": leading.join("\n\n") }));
+        } else {
+            out.insert(0, serde_json::json!({ "role": "system", "content": leading.join("\n\n") }));
+        }
+    }
+    let mut body = body.clone();
+    body["messages"] = Value::Array(out);
+    body
+}
+
+/// Any system message: a strict template might refuse it.
+fn has_system(body: &Value) -> bool {
+    body["messages"].as_array().is_some_and(|m| m.iter().any(|x| x["role"] == "system"))
+}
+
 /// POST to Ollama (`path` like `/api/chat`), on the lent PC that runs the body's model if
 /// there is one, else here. If the lent PC doesn't pick it up, it's tried here (when the
-/// model is here too).
+/// model is here too). A model whose template refuses Outpost's system notes is asked again
+/// with them folded in (and from then on, straight away).
 pub async fn post(state: &AppState, path: &str, body: &Value, timeout: Option<Duration>) -> Result<Reply, String> {
+    let model = body["model"].as_str().unwrap_or_default().to_string();
+    let mut level = strictness(&model);
+    loop {
+        let sent = if level > 0 { fold_system(body, level) } else { body.clone() };
+        let reply = post_once(state, path, &sent, timeout).await?;
+        if reply.ok() || level >= 2 || !has_system(&sent) {
+            return Ok(reply);
+        }
+        let status = reply.status;
+        let bytes = reply.bytes().await.unwrap_or_default();
+        if !refuses_system(&String::from_utf8_lossy(&bytes)) {
+            return Ok(Reply { status, stream: futures_util::stream::once(async move { Ok(Bytes::from(bytes)) }).boxed() });
+        }
+        level += 1;
+        tracing::info!(model = %model, level, "the model's template refused a system message; folding them in");
+        remember_strictness(&model, level);
+    }
+}
+
+async fn post_once(state: &AppState, path: &str, body: &Value, timeout: Option<Duration>) -> Result<Reply, String> {
     let model = body["model"].as_str().unwrap_or_default().to_string();
     if let Some(helper) = runs_on(state, &model).await {
         match through(state, &helper, path, body).await {
@@ -339,6 +431,29 @@ mod tests {
     use super::*;
     use outpost_engines::catalog::Badge;
     use std::time::Instant;
+
+    #[test]
+    fn strict_templates_get_their_system_notes_folded_in() {
+        let body = serde_json::json!({ "model": "devstral", "messages": [
+            { "role": "system", "content": "Be terse." },
+            { "role": "system", "content": "Summary: Dan." },
+            { "role": "user", "content": "hi" },
+            { "role": "assistant", "content": "hello" },
+            { "role": "system", "content": "It is 8 pm." },
+            { "role": "user", "content": "lamp off" },
+        ]});
+        let roles = |b: &Value| b["messages"].as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let one = fold_system(&body, 1);
+        assert_eq!(roles(&one), ["system", "user", "assistant", "user"]);
+        assert_eq!(one["messages"][0]["content"], "Be terse.\n\nSummary: Dan.");
+        assert_eq!(one["messages"][3]["content"], "It is 8 pm.\n\nlamp off");
+        let none = fold_system(&body, 2);
+        assert_eq!(roles(&none), ["user", "assistant", "user"]);
+        assert_eq!(none["messages"][0]["content"], "Be terse.\n\nSummary: Dan.\n\nhi");
+        assert!(refuses_system("Jinja Exception: Only user, assistant and tool roles are supported, got system."));
+        assert!(!refuses_system("model 'x' not found"));
+        assert_eq!(fold_system(&serde_json::json!({ "x": 1 }), 1), serde_json::json!({ "x": 1 }));
+    }
 
     fn model(name: &str, badges: Vec<Badge>) -> InstalledModel {
         InstalledModel {

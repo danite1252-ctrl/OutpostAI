@@ -12,6 +12,7 @@ import type { Chat as ChatT, Message, Outpost, Persona } from "../outpost";
 import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
 import { FileActions, FilesSheet, useChatFiles, type FileAction } from "../chatfiles";
 import { ToolsSheet, useChatToolNames } from "../tools";
+import { ModelSheet } from "../models";
 
 const MAX_IMAGES = 4;
 
@@ -260,24 +261,28 @@ function Conversation({
   }
   // The model this chat needs, if it isn't downloaded (a persona copied from another PC).
   const [chatModels, setChatModels] = useState<string[] | null>(null);
-  const [chosen, setChosen] = useState<string | null>(null);
+  // The chat's own model (over the persona's) and the persona's, as changed here.
+  const [chatModel, setChatModel] = useState<string | null>(chat.model ?? null);
+  const [personaModel, setPersonaModel] = useState<string | null>(persona?.model ?? null);
+  const [modelOpen, setModelOpen] = useState(false);
   useEffect(() => {
     api.get<{ installed: { model: string; badges: string[] }[] }>("/api/models").then(
       (o) => setChatModels(o.installed.filter((m) => !m.badges.includes("embedding")).map((m) => m.model)),
       () => undefined,
     );
   }, [api]);
-  const wanted = chosen ?? chat.model ?? persona?.model ?? null;
+  const wanted = chatModel ?? personaModel ?? null;
   const missingModel =
     wanted && chatModels && !chatModels.some((m) => m.toLowerCase() === wanted.toLowerCase()) ? wanted : null;
   async function pickModel(m: string) {
     try {
-      if (!chat.model && persona && !persona.owner_name) {
+      if (!chatModel && persona && !persona.owner_name) {
         await api.json("PATCH", `/api/personas/${persona.id}`, { model: m });
+        setPersonaModel(m);
       } else {
         await api.json("PATCH", `/api/chats/${chat.id}`, { model: m });
+        setChatModel(m);
       }
-      setChosen(m);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't change the model.");
     }
@@ -482,7 +487,7 @@ function Conversation({
         {missingModel && (
           <View accessibilityRole="alert" style={[s.card, { gap: 8, borderColor: C.amber }]}>
             <Text style={{ color: C.ink }}>
-              {!chat.model && persona ? `${persona.name} uses ` : "This chat uses "}
+              {!chatModel && persona ? `${persona.name} uses ` : "This chat uses "}
               {missingModel}, which isn't downloaded on your Outpost.{" "}
               {chatModels?.length ? "Pick another:" : "Get a chat model in Models on the PC first."}
             </Text>
@@ -494,6 +499,11 @@ function Conversation({
           </View>
         )}
         <ErrorText>{error}</ErrorText>
+        {error && !draft && (
+          <View style={s.row}>
+            <Chip label={`Try another model${wanted ? ` (now ${wanted})` : ""}`} onPress={() => setModelOpen(true)} />
+          </View>
+        )}
         {attach && (
           <View style={[s.row, { flexWrap: "wrap" }]}>
             <Chip
@@ -504,6 +514,13 @@ function Conversation({
               }}
             />
             <Chip label="Phone photos" onPress={() => void pick()} />
+            <Chip
+              label={wanted ? `Model: ${wanted.length > 22 ? `${wanted.slice(0, 21)}…` : wanted}` : "Model"}
+              onPress={() => {
+                setAttach(false);
+                setModelOpen(true);
+              }}
+            />
             <Chip
               label={chatTools.names.length ? `Tools (${chatTools.names.length})` : "Tools"}
               onPress={() => {
@@ -573,6 +590,21 @@ function Conversation({
           )}
         </View>
       </View>
+      {modelOpen && (
+        <ModelSheet
+          api={api}
+          chatId={chat.id}
+          chatModel={chatModel}
+          persona={persona}
+          personaModel={personaModel}
+          onChanged={(c) => {
+            setChatModel(c.chat);
+            setPersonaModel(c.persona);
+            setError(null);
+          }}
+          onClose={() => setModelOpen(false)}
+        />
+      )}
       {toolsOpen && (
         <ToolsSheet
           api={api}

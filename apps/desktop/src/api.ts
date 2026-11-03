@@ -1253,6 +1253,7 @@ export interface Job {
 
 export const downloadsApi = {
   list: (token: string) => request<{ items: Download[]; running: number }>("GET", "/api/downloads", { token }),
+  cancel: (token: string, id: string) => request<void>("POST", "/api/downloads/cancel", { token, body: { id } }),
 };
 
 /** One job in the shared line for the GPU. Other people's show only whose and how far. */

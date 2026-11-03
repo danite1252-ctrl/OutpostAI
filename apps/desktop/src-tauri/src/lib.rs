@@ -184,6 +184,20 @@ fn helper_pull_chat_model(model: String) -> Result<(), String> {
     helper()?.pull_chat_model(&model).map_err(|e| format!("{e:#}"))
 }
 
+/// Stop a chat model downloading onto this PC.
+#[tauri::command]
+fn helper_cancel_chat_pull(model: String) -> Result<(), String> {
+    helper()?.cancel_chat_pull(&model);
+    Ok(())
+}
+
+/// Stop a workflow's model files downloading onto this PC.
+#[tauri::command]
+fn helper_cancel_pack(id: String) -> Result<(), String> {
+    helper()?.cancel_pack(&id);
+    Ok(())
+}
+
 /// Delete a chat model from this PC.
 #[tauri::command]
 async fn helper_remove_chat_model(model: String) -> Result<(), String> {
@@ -873,6 +887,8 @@ pub fn run() {
             set_helper_chat,
             helper_chat_models,
             helper_pull_chat_model,
+            helper_cancel_chat_pull,
+            helper_cancel_pack,
             helper_remove_chat_model,
             helper_install_ollama,
             save_download,

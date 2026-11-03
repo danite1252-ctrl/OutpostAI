@@ -7,6 +7,9 @@ use outpost_engines::packs;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use axum::http::StatusCode;
+
+use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::Auth;
 use crate::AppState;
 
@@ -53,6 +56,35 @@ pub struct Downloads {
     responses((status = 200, description = "Downloads", body = Downloads)))]
 pub async fn list(State(state): State<AppState>, _auth: Auth) -> Json<Downloads> {
     Json(collect(&state))
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CancelRequest {
+    /// The download's `id` from the list: `model:<name>` or `workflow:<pack id>`.
+    pub id: String,
+}
+
+/// Stop a running download (owner only). It leaves the list; what was fetched so far
+/// is kept, so getting it again later carries on from there.
+#[utoipa::path(post, path = "/api/downloads/cancel", tag = "models", security(("bearer" = [])),
+    request_body = CancelRequest,
+    responses(
+        (status = 204, description = "Cancelled"),
+        (status = 403, description = "Not allowed", body = ErrorBody),
+        (status = 404, description = "Not downloading", body = ErrorBody),
+    ))]
+pub async fn cancel(State(state): State<AppState>, auth: Auth, Json(req): Json<CancelRequest>) -> ApiResult<StatusCode> {
+    auth.require_owner()?;
+    let stopped = match req.id.split_once(':') {
+        Some(("model", name)) => state.models.cancel(name),
+        Some(("workflow", pack)) => state.assets.cancel(pack),
+        _ => false,
+    };
+    if !stopped {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "not_found", "That isn't downloading any more."));
+    }
+    outpost_core::audit::log_quiet(&state.pool, Some(&auth.account.id), Some(&auth.session.id), "download_cancel", Some(&req.id)).await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) fn collect(state: &AppState) -> Downloads {

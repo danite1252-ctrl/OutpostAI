@@ -122,6 +122,8 @@ pub struct ModelStore {
     /// No overall timeout: pulls run for many minutes.
     long: reqwest::Client,
     pulls: Mutex<HashMap<String, PullState>>,
+    /// Running downloads, so one can be cancelled.
+    running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     /// Capabilities by model digest, so we ask Ollama once per model version.
     caps: Mutex<HashMap<String, Vec<Badge>>>,
 }
@@ -165,6 +167,7 @@ impl ModelStore {
                 .build()
                 .expect("HTTP client"),
             pulls: Mutex::new(HashMap::new()),
+            running: Mutex::new(HashMap::new()),
             caps: Mutex::new(HashMap::new()),
         })
     }
@@ -262,8 +265,25 @@ impl ModelStore {
         }
         let me = self.clone();
         let model = model.to_string();
+        let work = {
+            let me = self.clone();
+            let model = model.clone();
+            tokio::spawn(async move { me.run_pull(&model).await })
+        };
+        self.running.lock().unwrap_or_else(|p| p.into_inner()).insert(model.clone(), work.abort_handle());
         tokio::spawn(async move {
-            let result = me.run_pull(&model).await;
+            let result = match work.await {
+                Ok(r) => r,
+                // Cancelled: it leaves the list. (Ollama keeps what it fetched, so getting
+                // it again later carries on from there.)
+                Err(e) if e.is_cancelled() => {
+                    me.running.lock().unwrap_or_else(|p| p.into_inner()).remove(&model);
+                    me.pulls().remove(&model);
+                    return;
+                }
+                Err(e) => Err(format!("The download stopped: {e}")),
+            };
+            me.running.lock().unwrap_or_else(|p| p.into_inner()).remove(&model);
             let mut pulls = me.pulls();
             if let Some(p) = pulls.get_mut(&model) {
                 p.done = true;
@@ -283,6 +303,17 @@ impl ModelStore {
             }
         });
         Ok(())
+    }
+
+    /// Stop a running download. `false` when it isn't downloading.
+    pub fn cancel(&self, model: &str) -> bool {
+        match self.running.lock().unwrap_or_else(|p| p.into_inner()).get(model) {
+            Some(h) => {
+                h.abort();
+                true
+            }
+            None => false,
+        }
     }
 
     async fn run_pull(&self, model: &str) -> Result<(), String> {

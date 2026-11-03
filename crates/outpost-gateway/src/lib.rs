@@ -281,6 +281,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/media/{id}", get(create::get_media).delete(create::delete_media).patch(create::name_media))
         .route("/api/media/{id}/print", get(create::get_media_print))
         .route("/api/downloads", get(downloads::list))
+        .route("/api/downloads/cancel", post(downloads::cancel))
         .route("/api/pairing", post(pairing::create_code))
         .route("/api/pairing/{id}", get(pairing::code_status))
         .route("/api/invites", post(pairing::create_invite))

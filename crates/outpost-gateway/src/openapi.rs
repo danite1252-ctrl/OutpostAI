@@ -82,6 +82,7 @@ use crate::routes::{
         create::get_media_print,
         create::delete_media,
         downloads::list,
+        downloads::cancel,
         pairing::create_code,
         pairing::code_status,
         pairing::hello,

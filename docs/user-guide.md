@@ -177,7 +177,8 @@ or change them. It needs a model with the **tools** badge (Qwen 3, Llama 3.1 and
 
 - **Create** has a tab per task: **Picture**, **Character**, **Edit**, **Video** and
   **Animate**. Outpost picks workflows that suit your graphics card and downloads their
-  model files the first time (the **Downloads** button shows progress).
+  model files the first time (the **Downloads** button shows progress; **Cancel** there stops one you started by mistake,
+  and getting it again later carries on from where it stopped).
 - Jobs wait their turn in the **queue** (top bar), one at a time on the graphics card. Chat
   pauses image work automatically and the other way round, so they don't fight over memory.
 - **3D**: a 3D model from a picture of one thing (its background is removed for you).

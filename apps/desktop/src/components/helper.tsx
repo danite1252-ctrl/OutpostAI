@@ -260,6 +260,10 @@ function ChatHere({ status, onError, onChanged }: { status: HelperStatus; onErro
     void invoke("helper_pull_chat_model", { model })
       .then(load)
       .catch((e) => onError(message(e)));
+  const cancelPull = (model: string) =>
+    void invoke("helper_cancel_chat_pull", { model })
+      .then(load)
+      .catch((e) => onError(message(e)));
   const remove = (model: string) =>
     void invoke("helper_remove_chat_model", { model })
       .then(() => {
@@ -336,9 +340,14 @@ function ChatHere({ status, onError, onChanged }: { status: HelperStatus; onErro
             </ul>
           )}
           {pulling.map((p) => (
-            <p key={p.model} className="text-sm">
-              Downloading {p.model}
-              {p.percent != null ? `: ${Math.round(p.percent)}%` : `: ${p.status}`}
+            <p key={p.model} className="flex items-center gap-3 text-sm">
+              <span className="flex-1">
+                Downloading {p.model}
+                {p.percent != null ? `: ${Math.round(p.percent)}%` : `: ${p.status}`}
+              </span>
+              <Button variant="ghost" onClick={() => cancelPull(p.model)}>
+                Cancel
+              </Button>
             </p>
           ))}
           {failed.map((p) => (
@@ -451,6 +460,18 @@ function OfferRow({ pack, onError, onStarted }: { pack: LocalPack; onError: (e: 
           {setup?.error ? ` · ${setup.error}` : ""}
         </span>
       </span>
+      {running && (
+        <Button
+          variant="ghost"
+          onClick={() =>
+            void invoke("helper_cancel_pack", { id: pack.id })
+              .then(onStarted)
+              .catch((e) => onError(message(e)))
+          }
+        >
+          Cancel
+        </Button>
+      )}
       {!running && (
         <Button
           variant="ghost"

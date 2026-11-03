@@ -130,7 +130,7 @@ export default function Shell({
             onOpenCreate={() => setSection("create")}
             onOpenGallery={() => setSection("gallery")}
           />
-          <DownloadsButton token={auth.token} />
+          <DownloadsButton token={auth.token} canCancel={auth.account.role === "owner"} />
           <div className="flex items-center gap-2.5 rounded-xl border border-line bg-surface py-1.5 pr-3 pl-1.5">
             <Avatar name={auth.account.name} color={auth.account.avatar_color} size={32} />
             <span className="flex flex-col leading-tight">

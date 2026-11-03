@@ -346,6 +346,7 @@ async fn openapi_lists_every_route() {
         "/api/gallery",
         "/api/media/{id}",
         "/api/downloads",
+        "/api/downloads/cancel",
         "/api/gallery/shared",
         "/api/media/{id}/share",
         "/api/queue",
@@ -511,6 +512,15 @@ async fn models_overview_and_permissions() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Cancelling: owners only, and only something that's downloading.
+    let cancel = |id: &str| json!({ "id": id });
+    let (status, _) = call(&app, "POST", "/api/downloads/cancel", Some(&sarah_token), Some(cancel("model:qwen3.5:4b"))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    for id in ["model:qwen3.5:4b", "workflow:z_image_turbo", "nonsense"] {
+        let (status, _) = call(&app, "POST", "/api/downloads/cancel", Some(&owner_token), Some(cancel(id))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{id}");
+    }
 }
 
 #[tokio::test]

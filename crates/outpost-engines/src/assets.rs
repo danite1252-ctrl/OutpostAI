@@ -79,6 +79,8 @@ pub struct AssetStore {
     setups: Mutex<HashMap<String, Setup>>,
     /// One download per file at a time, even when two packs share it.
     file_locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
+    /// Running pack downloads, so one can be cancelled.
+    running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
 }
 
 impl AssetStore {
@@ -95,6 +97,7 @@ impl AssetStore {
                 .expect("HTTP client"),
             setups: Mutex::new(HashMap::new()),
             file_locks: Mutex::new(HashMap::new()),
+            running: Mutex::new(HashMap::new()),
         })
     }
 
@@ -237,8 +240,25 @@ impl AssetStore {
         }
         let me = self.clone();
         let id = pack.id.clone();
+        let work = {
+            let me = self.clone();
+            let id = id.clone();
+            tokio::spawn(async move { me.download_all(&id, &missing).await })
+        };
+        self.running.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone(), work.abort_handle());
         tokio::spawn(async move {
-            let result = me.download_all(&id, &missing).await;
+            let result = match work.await {
+                Ok(r) => r,
+                // Cancelled: it leaves the list. Finished files stay, and the file under
+                // way keeps its .part, so installing again later carries on from there.
+                Err(e) if e.is_cancelled() => {
+                    me.running.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+                    me.setups().remove(&id);
+                    return;
+                }
+                Err(e) => Err(anyhow!("the download stopped: {e}")),
+            };
+            me.running.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
             let mut setups = me.setups();
             if let Some(s) = setups.get_mut(&id) {
                 s.running = false;
@@ -256,6 +276,17 @@ impl AssetStore {
             }
         });
         Ok(())
+    }
+
+    /// Stop a pack's running download. `false` when it isn't downloading.
+    pub fn cancel(&self, pack_id: &str) -> bool {
+        match self.running.lock().unwrap_or_else(|p| p.into_inner()).get(pack_id) {
+            Some(h) => {
+                h.abort();
+                true
+            }
+            None => false,
+        }
     }
 
     fn file_lock(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {

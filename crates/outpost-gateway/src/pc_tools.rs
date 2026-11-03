@@ -163,6 +163,14 @@ fn slug(s: &str) -> String {
     }
 }
 
+/// Smart-home calls go wrong when a model guesses a name or sends only a room (which acts on
+/// everything in it: the lamp *and* the air conditioner).
+const HOME_ASSISTANT_NOTE: &str = "\n\nHome Assistant: to switch or change a device, pass its exact name as Home \
+    Assistant lists it (call GetLiveContext first to see the devices, their names and areas, unless this chat already \
+    did). Pass the device's name, not just a room or area: a room alone acts on every device in it. Only send an area \
+    (with no name) when the user asked for everything in that room. If two devices could match (\"kitchen light\" and \
+    \"kitchen lamp\"), ask which.";
+
 impl PcTools {
     /// `None` when there are no tools to offer.
     pub fn new(relay: Relay, chat_id: &str, events: mpsc::Sender<Event>, servers: Vec<(PcToolServer, Via)>, confirm: bool) -> Option<Self> {
@@ -196,9 +204,17 @@ impl PcTools {
              act for the user), and say what you found or did. Don't make up a tool's results; if one fails, say so. \
              Each time the user asks for something to be done (even the same thing again, or undoing it: \"turn it back \
              on\"), call the tool again in this reply: earlier calls don't carry over, and nothing happens unless you call \
-             a tool now. Never say something was done unless a tool call in this reply did it.",
-            names.join(", ")
+             a tool now. Never say something was done unless a tool call in this reply did it. When acting on \
+             something (a device, a file, a message), name exactly that one thing; if you aren't sure which one the user \
+             means, look it up with a tool or ask, rather than guessing.{}",
+            names.join(", "),
+            if self.has_home_assistant() { HOME_ASSISTANT_NOTE } else { "" }
         )
+    }
+
+    /// Home Assistant's tools are here (their names start "Hass", plus GetLiveContext).
+    fn has_home_assistant(&self) -> bool {
+        self.servers.iter().any(|s| s.tools.iter().any(|t| t.name.starts_with("Hass") || t.name == "GetLiveContext"))
     }
 
     /// The tool definitions for Ollama.
@@ -317,6 +333,11 @@ mod tests {
         assert_eq!(tools[0]["function"]["parameters"]["type"], "object");
         assert!(tools[2]["function"]["description"].as_str().unwrap().starts_with("(GitHub) "));
         assert!(t.instructions().contains("Brave Search, GitHub"));
+        assert!(!t.instructions().contains("GetLiveContext"));
+        // Home Assistant gets told to use exact device names, not just a room.
+        let (tx, _rx) = mpsc::channel(1);
+        let ha = PcTools::new(Relay::default(), "c", tx, vec![(server("Home Assistant", &["HassTurnOff", "GetLiveContext"]), Via::App)], false).unwrap();
+        assert!(ha.instructions().contains("call GetLiveContext first"));
     }
 
     #[tokio::test]

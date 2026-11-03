@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { downloadsApi, type Download } from "../api";
+import { ApiError, downloadsApi, type Download } from "../api";
 import { Icon, icons } from "./ui";
+
+function message(e: unknown) {
+  if (e instanceof ApiError) return e.message;
+  return e instanceof Error ? e.message : "Couldn't cancel that.";
+}
 
 /** Tell the Downloads button to look again (after starting a download). */
 export function downloadsChanged() {
@@ -94,13 +99,28 @@ export function useDownloads(token: string, open: boolean) {
     saveDismissed(next);
     setDismissed(next);
   };
-  return { items: visible, running, clearFinished };
+  return { items: visible, running, clearFinished, refresh };
 }
 
 /** The header's Downloads button: a ring while something downloads, and a panel listing them. */
-export function DownloadsButton({ token }: { token: string }) {
+export function DownloadsButton({ token, canCancel }: { token: string; canCancel: boolean }) {
   const [open, setOpen] = useState(false);
-  const { items, running, clearFinished } = useDownloads(token, open);
+  const { items, running, clearFinished, refresh } = useDownloads(token, open);
+  const [cancelling, setCancelling] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
+  async function cancel(d: Download) {
+    setCancelling(d.id);
+    setCancelError(null);
+    try {
+      await downloadsApi.cancel(token, d.id);
+    } catch (e) {
+      setCancelError(message(e));
+    } finally {
+      await refresh();
+      setCancelling(null);
+    }
+  }
   const box = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -185,6 +205,7 @@ export function DownloadsButton({ token }: { token: string }) {
               <Icon d={icons.close} size={16} />
             </button>
           </div>
+          {cancelError && <p className="border-b border-line px-4 py-2 text-xs text-danger">{cancelError}</p>}
           {items.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-muted">Nothing downloading.</p>
           ) : (
@@ -196,6 +217,17 @@ export function DownloadsButton({ token }: { token: string }) {
                       {d.name}
                     </span>
                     <span className="shrink-0 text-xs text-muted">{d.kind === "model" ? "Chat model" : "Create"}</span>
+                    {d.running && canCancel && (
+                      <button
+                        type="button"
+                        onClick={() => void cancel(d)}
+                        disabled={cancelling === d.id}
+                        aria-label={`Cancel downloading ${d.name}`}
+                        className="shrink-0 rounded-lg px-2 py-0.5 text-xs text-muted hover:bg-raised hover:text-danger disabled:opacity-50"
+                      >
+                        {cancelling === d.id ? "Cancelling…" : "Cancel"}
+                      </button>
+                    )}
                   </div>
                   {d.running && (
                     <div className="h-1.5 overflow-hidden rounded-full bg-raised">
