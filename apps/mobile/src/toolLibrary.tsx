@@ -83,11 +83,19 @@ const SIGN_IN_PORT = 33418;
 export async function signInOnPhone(api: Outpost, id: string, client?: { id?: string; secret?: string }): Promise<ServerTool> {
   if (!OutpostNet.signInListen(SIGN_IN_PORT)) throw new Error("Another sign-in is still open. Wait a moment and try again.");
   try {
-    const { url } = await api.json<{ url: string }>("POST", `/api/tools/${id}/sign-in/start`, {
-      port: SIGN_IN_PORT,
-      client_id: client?.id?.trim() || undefined,
-      client_secret: client?.secret?.trim() || undefined,
-    });
+    const { url } = await api
+      .json<{ url: string }>("POST", `/api/tools/${id}/sign-in/start`, {
+        port: SIGN_IN_PORT,
+        client_id: client?.id?.trim() || undefined,
+        client_secret: client?.secret?.trim() || undefined,
+      })
+      .catch((e: unknown) => {
+        // An Outpost server from before phones could sign in.
+        if (e instanceof ApiError && e.status === 404 && e.code === "unknown") {
+          throw new Error("The Outpost server needs updating first (Settings › Updates on the PC), then try again.");
+        }
+        throw e;
+      });
     await Linking.openURL(url);
     const back = await OutpostNet.signInWait(5 * 60 * 1000);
     return await api.json<ServerTool>("POST", `/api/tools/${id}/sign-in/finish`, { callback: back });

@@ -14,10 +14,22 @@ import java.net.SocketTimeoutException
 object SignInCatcher {
   @Volatile private var socket: ServerSocket? = null
 
-  private const val DONE =
-    "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>Signed in</title>" +
+  /**
+   * The page the browser lands on. Android won't let an app in the background bring itself
+   * forward, so the page opens Outpost itself: straight away, and with a button if the browser
+   * wants a tap first.
+   */
+  private fun page(context: Context): String {
+    val open = "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;" +
+      "package=${context.packageName};end"
+    return "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>" +
+      "<title>Signed in</title>" +
       "<body style=\"font-family:system-ui;background:#16110f;color:#f3eee8;display:grid;place-items:center;height:100vh;margin:0;text-align:center\">" +
-      "<div><h1>Back to Outpost</h1><p>Outpost is finishing the sign-in. You can close this tab.</p></div>"
+      "<div style='padding:24px'><h1>Signed in</h1><p>Outpost is finishing it now.</p>" +
+      "<p><a href='$open' style='display:inline-block;margin-top:12px;padding:14px 28px;border-radius:14px;background:#ff6a3d;color:#1e0c05;font-weight:700;text-decoration:none'>Back to Outpost</a></p>" +
+      "<p style='color:#a9a09a;font-size:14px'>You can close this tab.</p></div>" +
+      "<script>setTimeout(function(){location.href='$open'},300)</script>"
+  }
 
   /** Start listening on 127.0.0.1:port. False when the port is taken. */
   fun listen(port: Int): Boolean {
@@ -56,7 +68,7 @@ object SignInCatcher {
             out.flush()
             return@use
           }
-          val body = DONE.toByteArray()
+          val body = page(context).toByteArray()
           out.write(
             ("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${body.size}\r\n" +
               "Connection: close\r\n\r\n").toByteArray()
