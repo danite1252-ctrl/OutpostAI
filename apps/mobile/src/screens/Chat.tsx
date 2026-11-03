@@ -13,6 +13,7 @@ import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
 import { FileActions, FilesSheet, useChatFiles, type FileAction } from "../chatfiles";
 import { ToolsSheet, useChatToolNames } from "../tools";
 import { ModelSheet } from "../models";
+import { ChatDocsSheet } from "../docsMemory";
 
 const MAX_IMAGES = 4;
 
@@ -265,6 +266,7 @@ function Conversation({
   const [chatModel, setChatModel] = useState<string | null>(chat.model ?? null);
   const [personaModel, setPersonaModel] = useState<string | null>(persona?.model ?? null);
   const [modelOpen, setModelOpen] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
   useEffect(() => {
     api.get<{ installed: { model: string; badges: string[] }[] }>("/api/models").then(
       (o) => setChatModels(o.installed.filter((m) => !m.badges.includes("embedding")).map((m) => m.model)),
@@ -522,6 +524,13 @@ function Conversation({
               }}
             />
             <Chip
+              label="Documents"
+              onPress={() => {
+                setAttach(false);
+                setDocsOpen(true);
+              }}
+            />
+            <Chip
               label={chatTools.names.length ? `Tools (${chatTools.names.length})` : "Tools"}
               onPress={() => {
                 setAttach(false);
@@ -590,6 +599,7 @@ function Conversation({
           )}
         </View>
       </View>
+      {docsOpen && <ChatDocsSheet api={api} chatId={chat.id} onClose={() => setDocsOpen(false)} />}
       {modelOpen && (
         <ModelSheet
           api={api}

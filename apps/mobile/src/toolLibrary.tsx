@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, AppState, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import OutpostNet from "../modules/outpost-net";
 import { ApiError, type Outpost } from "./outpost";
 import { Button, C, Chip, ErrorText, Field, P, s } from "./ui";
@@ -153,6 +154,7 @@ function toRequest(e: CatalogEntry, values: Record<string, string>) {
 }
 
 export function ToolsScreen({ api, isOwner, canAdd, onClose }: { api: Outpost; isOwner: boolean; canAdd: boolean; onClose: () => void }) {
+  const insets = useSafeAreaInsets();
   const [tools, setTools] = useState<ServerTool[] | null>(null);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -166,7 +168,7 @@ export function ToolsScreen({ api, isOwner, canAdd, onClose }: { api: Outpost; i
 
   return (
     <Modal visible animationType="slide" onRequestClose={adding ? () => setAdding(false) : onClose}>
-      <View style={[s.screen, { paddingTop: 12 }]}>
+      <View style={[s.screen, { paddingTop: insets.top + 8, paddingBottom: insets.bottom }]}>
         <View style={[s.row, { paddingHorizontal: 16, paddingBottom: 8, alignItems: "center" }]}>
           <Text style={{ color: C.ink, fontSize: 20, fontWeight: "700", flex: 1 }}>{adding ? "Add a tool" : "Tools"}</Text>
           <Chip label={adding ? "‹ Your tools" : "Close"} onPress={adding ? () => setAdding(false) : onClose} />

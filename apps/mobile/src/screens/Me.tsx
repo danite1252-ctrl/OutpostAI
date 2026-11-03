@@ -8,6 +8,11 @@ import { setNotify } from "../notify";
 import type { usePhoneUpdate } from "../updater";
 import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
 import { ToolsScreen } from "../toolLibrary";
+import { PersonasScreen } from "../personas";
+import { ModelsScreen } from "../modelsScreen";
+import { PeopleScreen } from "../people";
+import { ServerCard } from "../server";
+import { DocsMemoryScreen } from "../docsMemory";
 
 export default function Me({
   api,
@@ -36,6 +41,7 @@ export default function Me({
   }, []);
   const u = update.state;
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [page, setPage] = useState<"personas" | "models" | "people" | "docs" | null>(null);
   const [checked, setChecked] = useState<{ host: string; ok: boolean; problem?: string }[] | null>(null);
   const [checking, setChecking] = useState(false);
   async function checkConnection() {
@@ -103,12 +109,22 @@ export default function Me({
         changing accounts) ask for your PIN again.
       </P>
       <View style={s.card}>
-        <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Tools</Text>
-        <P muted>Search, Google, Home Assistant and more, for your chats. Add them here; they work on every device.</P>
-        <Button kind="ghost" title="Your tools" onPress={() => setToolsOpen(true)} />
+        <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Your Outpost</Text>
+        <Button kind="ghost" title="Personas" onPress={() => setPage("personas")} />
+        <Button kind="ghost" title="Tools" onPress={() => setToolsOpen(true)} />
+        <Button kind="ghost" title="Documents and memory" onPress={() => setPage("docs")} />
+        <Button kind="ghost" title="Models" onPress={() => setPage("models")} />
+        <Button kind="ghost" title={role === "owner" ? "People and devices" : "Your devices"} onPress={() => setPage("people")} />
       </View>
+      {role === "owner" && <ServerCard api={api} />}
       {toolsOpen && (
         <ToolsScreen api={api} isOwner={role === "owner"} canAdd={role !== "restricted"} onClose={() => setToolsOpen(false)} />
+      )}
+      {page === "personas" && <PersonasScreen api={api} onClose={() => setPage(null)} />}
+      {page === "models" && <ModelsScreen api={api} isOwner={role === "owner"} onClose={() => setPage(null)} />}
+      {page === "docs" && <DocsMemoryScreen api={api} onClose={() => setPage(null)} />}
+      {page === "people" && (
+        <PeopleScreen api={api} isOwner={role === "owner"} myAccountId={saved.account.id} onClose={() => setPage(null)} />
       )}
       <View style={s.card}>
         <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Updates</Text>

@@ -250,6 +250,22 @@ The phone talks only to your PC, over an encrypted connection checked against th
 certificate. Away from home it works over **Tailscale** (Connections › Allow my Tailscale devices). It has
 chat (with voice), Create, the Gallery and the queue.
 
+**You › Your Outpost** on the phone covers the day-to-day running of it, with no PC needed:
+
+- **Personas**: make and change them (instructions, model, tools, documents, voice, sharing),
+  send someone a copy, or make your own copy of one shared with you.
+- **Tools**: add, sign in to, test and share tools (see Tools above).
+- **Documents and memory**: your documents (add one by sharing a file to Outpost from any
+  app) and what your personas remember. A chat's documents are in its + menu.
+- **Models**: what's downloaded (and on a lent PC); owners download, cancel and remove.
+- **People and devices**: everyone sees and unpairs their own phones, and can pair another.
+  Owners invite people (a QR code, or a link sent with any app), send a new-PIN link, and
+  remove accounts.
+- **Outpost server** (owners): its version, installing an update, automatic updates, a
+  restart, and crash reports.
+
+Risky actions (removing models, inviting, restarting) ask for your PIN again on the phone.
+
 **Phone app updates** download by themselves (about 90 MB, from the GitHub release) and
 install when you press **Restart to update**. The first time, Android asks you to allow
 Outpost to install apps and to confirm. After that, updates install by themselves the next
