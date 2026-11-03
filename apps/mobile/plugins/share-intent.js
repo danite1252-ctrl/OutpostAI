@@ -43,7 +43,11 @@ module.exports = function withShareIntent(config) {
           { $: { "android:name": "android.intent.category.DEFAULT" } },
           { $: { "android:name": "android.intent.category.BROWSABLE" } },
         ],
-        data: [{ $: { "android:scheme": "outpost", "android:host": "pair" } }],
+        // pair: a pairing QR scanned with the camera; signed-in: back from signing in to a tool.
+        data: [
+          { $: { "android:scheme": "outpost", "android:host": "pair" } },
+          { $: { "android:scheme": "outpost", "android:host": "signed-in" } },
+        ],
       },
     );
     return cfg;

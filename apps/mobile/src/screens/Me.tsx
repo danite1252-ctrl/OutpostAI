@@ -36,6 +36,16 @@ export default function Me({
   }, []);
   const u = update.state;
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [checked, setChecked] = useState<{ host: string; ok: boolean; problem?: string }[] | null>(null);
+  const [checking, setChecking] = useState(false);
+  async function checkConnection() {
+    setChecking(true);
+    try {
+      setChecked(await api.checkEach());
+    } finally {
+      setChecking(false);
+    }
+  }
   const role = saved.account.role;
 
   function unpair() {
@@ -73,6 +83,20 @@ export default function Me({
         <P muted>
           {api.conn.hosts[0]}:{saved.port} · encrypted · check words {checkWords(saved.fingerprint).join(" · ")}
         </P>
+        <Button kind="ghost" title={checking ? "Checking…" : "Check each address"} busy={checking} onPress={() => void checkConnection()} />
+        {checked && (
+          <View style={{ gap: 4 }}>
+            {checked.map((c) => (
+              <Text key={c.host} style={{ color: c.ok ? C.ok : C.danger, fontSize: 13 }}>
+                {c.host}: {c.ok ? "answers" : c.problem}
+              </Text>
+            ))}
+            <P muted>
+              At home, the Wi-Fi address (like 192.168.x.x) should answer. If only the Tailscale ones do, check that the phone is
+              on the same Wi-Fi and that Settings › Network on the PC lets devices on your network in.
+            </P>
+          </View>
+        )}
       </View>
       <P muted>
         This phone only talks to that PC, checked by its certificate. Risky things (deleting models, making app keys,

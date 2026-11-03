@@ -81,6 +81,28 @@ export class Outpost {
     return h;
   }
 
+  /** Try each known address on its own: which ones answer from here, now. */
+  async checkEach(): Promise<{ host: string; ok: boolean; problem?: string }[]> {
+    return Promise.all(
+      this.conn.hosts.map(async (host) => {
+        try {
+          const r = await OutpostNet.request({
+            url: this.base(host) + "/api/health",
+            method: "GET",
+            headers: this.headers(),
+            body: null,
+            fingerprint: this.conn.fingerprint,
+            timeoutMs: 5000,
+          });
+          return { host, ok: r.status < 500 };
+        } catch (e) {
+          const m = e instanceof Error ? e.message : "";
+          return { host, ok: false, problem: /certificate/i.test(m) ? "a different Outpost answers there" : "no answer" };
+        }
+      }),
+    );
+  }
+
   /** One request, trying each known address until one answers. */
   private async send(
     method: string,
@@ -89,7 +111,9 @@ export class Outpost {
     opts: { headers?: Record<string, string>; base64?: boolean; timeoutMs?: number } = {},
   ): Promise<NativeResponse> {
     let last: unknown;
-    for (const host of this.conn.hosts) {
+    // Twice round: a connection kept open from before the phone slept (or left the app for
+    // the browser) can fail once, and a fresh one then works.
+    for (const host of [...this.conn.hosts, ...this.conn.hosts]) {
       try {
         const r = await OutpostNet.request({
           url: this.base(host) + path,

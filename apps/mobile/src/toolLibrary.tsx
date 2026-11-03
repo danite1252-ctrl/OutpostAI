@@ -4,7 +4,7 @@
 // in, and comes back to Outpost on this phone (127.0.0.1), which hands it to the server.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, AppState, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import OutpostNet from "../modules/outpost-net";
 import { ApiError, type Outpost } from "./outpost";
 import { Button, C, Chip, ErrorText, Field, P, s } from "./ui";
@@ -98,10 +98,39 @@ export async function signInOnPhone(api: Outpost, id: string, client?: { id?: st
       });
     await Linking.openURL(url);
     const back = await OutpostNet.signInWait(5 * 60 * 1000);
-    return await api.json<ServerTool>("POST", `/api/tools/${id}/sign-in/finish`, { callback: back });
+    // Finish once Outpost is back in front: Android may hold back a background app's network.
+    await inFront();
+    let last: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await api.json<ServerTool>("POST", `/api/tools/${id}/sign-in/finish`, { callback: back });
+      } catch (e) {
+        last = e;
+        if (!(e instanceof ApiError && e.code === "offline")) throw e;
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
+    throw last;
   } finally {
     OutpostNet.signInStop();
   }
+}
+
+/** Resolves when Outpost is the app in front (at once if it is; within 5 minutes regardless). */
+function inFront(): Promise<void> {
+  if (AppState.currentState === "active") return Promise.resolve();
+  return new Promise((done) => {
+    const sub = AppState.addEventListener("change", (st) => {
+      if (st === "active") finish();
+    });
+    const t = setTimeout(finish, 5 * 60 * 1000);
+    function finish() {
+      clearTimeout(t);
+      sub.remove();
+      // A moment for the Wi-Fi to wake up with it.
+      setTimeout(done, 400);
+    }
+  });
 }
 
 const needsClient = (e: unknown) => e instanceof ApiError && e.code === "needs_client";

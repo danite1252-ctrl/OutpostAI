@@ -20,8 +20,8 @@ object SignInCatcher {
    * wants a tap first.
    */
   private fun page(context: Context): String {
-    val open = "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;" +
-      "package=${context.packageName};end"
+    // Outpost's own link (its manifest takes outpost://signed-in): the browser hands it over.
+    val open = "outpost://signed-in"
     return "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>" +
       "<title>Signed in</title>" +
       "<body style=\"font-family:system-ui;background:#16110f;color:#f3eee8;display:grid;place-items:center;height:100vh;margin:0;text-align:center\">" +
