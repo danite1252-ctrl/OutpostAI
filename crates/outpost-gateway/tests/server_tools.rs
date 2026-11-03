@@ -168,4 +168,14 @@ async fn tools_on_the_server_are_per_person_and_shared_ones_reach_everyone() {
     // Not signed in yet: its tools say so.
     let (s, _) = call(&app, "GET", &format!("/api/tools/{}/tools", g["id"].as_str().unwrap()), Some(&sj), None).await;
     assert_eq!(s, StatusCode::CONFLICT);
+    // The library the phone shows: the same entries as the desktop's, with what each needs.
+    let (s, lib) = call(&app, "GET", "/api/tools/catalog", Some(&noah), None).await;
+    assert_eq!(s, StatusCode::OK);
+    let lib = lib.as_array().unwrap();
+    assert!(lib.len() >= 30);
+    let ddg = lib.iter().find(|e| e["id"] == "duckduckgo").unwrap();
+    assert_eq!(ddg["command"], "uvx");
+    assert!(lib.iter().all(|e| e["name"].is_string() && e["inputs"].is_array() && e["transport"].is_string()));
+    let (s, _) = call(&app, "GET", "/api/tools/catalog", None, None).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
 }

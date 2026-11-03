@@ -7,6 +7,7 @@ import { loadAutoUpdate, loadNotify, loadVoiceCheck, saveAutoUpdate, saveVoiceCh
 import { setNotify } from "../notify";
 import type { usePhoneUpdate } from "../updater";
 import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
+import { ToolsScreen } from "../toolLibrary";
 
 export default function Me({
   api,
@@ -34,6 +35,8 @@ export default function Me({
     void loadNotify().then(setNotifyOn);
   }, []);
   const u = update.state;
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const role = saved.account.role;
 
   function unpair() {
     Alert.alert("Unpair this phone?", "It signs out of Outpost. You can pair it again from the PC.", [
@@ -75,6 +78,14 @@ export default function Me({
         This phone only talks to that PC, checked by its certificate. Risky things (deleting models, making app keys,
         changing accounts) ask for your PIN again.
       </P>
+      <View style={s.card}>
+        <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Tools</Text>
+        <P muted>Search, Google, Home Assistant and more, for your chats. Add them here; they work on every device.</P>
+        <Button kind="ghost" title="Your tools" onPress={() => setToolsOpen(true)} />
+      </View>
+      {toolsOpen && (
+        <ToolsScreen api={api} isOwner={role === "owner"} canAdd={role !== "restricted"} onClose={() => setToolsOpen(false)} />
+      )}
       <View style={s.card}>
         <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Updates</Text>
         <P muted>

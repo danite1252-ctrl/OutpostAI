@@ -375,6 +375,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/helpers/chat/next", post(lent::next))
         .route("/api/tools", get(server_tools::list).post(server_tools::create))
         .route("/api/tools/google-client", get(server_tools::google_client_get).put(server_tools::google_client_set))
+        .route("/api/tools/catalog", get(server_tools::catalog))
         .route("/api/tools/runtimes", get(server_tools::runtimes))
         .route("/api/tools/runtimes/{which}", post(server_tools::install_runtime))
         .route("/api/tools/{id}", patch(server_tools::update).delete(server_tools::remove))

@@ -1,6 +1,5 @@
 // Tools for a chat, on the phone: the tools on your Outpost server (yours and the household's
-// shared ones) that this chat uses. Adding tools and signing in to them is done in the
-// desktop app (Tool library); once there, they work here too.
+// shared ones) that this chat uses. Adding them is under You › Tools (toolLibrary.tsx).
 
 import { useCallback, useEffect, useState } from "react";
 import { Modal, ScrollView, Text, View } from "react-native";
@@ -62,7 +61,7 @@ export function ToolsSheet({ api, chatId, onClose }: { api: Outpost; chatId: str
               Tools on your Outpost: search, Google, Home Assistant and more. The chat's model needs the tools badge. Hands-free asks
               before each one runs.
             </P>
-            {tools.length === 0 && <P muted>No tools yet. Add them in the Outpost desktop app (+ › Tools › Tool library).</P>}
+            {tools.length === 0 && <P muted>No tools yet. Add them under You › Tools.</P>}
             {tools.map((t) => {
               const active = on.includes(t.id);
               return (

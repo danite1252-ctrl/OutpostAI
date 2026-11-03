@@ -138,6 +138,7 @@ use crate::routes::{
         helpers::leave,
         crate::lent::next,
         crate::server_tools::list,
+        crate::server_tools::catalog,
         crate::server_tools::create,
         crate::server_tools::update,
         crate::server_tools::remove,

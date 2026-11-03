@@ -482,6 +482,18 @@ fn edit_runtimes(f: impl FnOnce(&mut Runtimes)) {
     f(g.get_or_insert_with(Default::default));
 }
 
+/// The tool library both apps show (the desktop builds it in too): MCP servers that work with
+/// Outpost's chats, with what each needs to be added.
+const CATALOG: &str = include_str!("../tool-catalog.json");
+
+/// The tool library, for the phone (and anything else adding tools here).
+#[utoipa::path(get, path = "/api/tools/catalog", tag = "tools", security(("bearer" = [])),
+    responses((status = 200, description = "Library entries", body = [Object])))]
+pub async fn catalog(_auth: Auth) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    ([(axum::http::header::CONTENT_TYPE, "application/json")], CATALOG).into_response()
+}
+
 #[utoipa::path(get, path = "/api/tools/runtimes", tag = "tools", security(("bearer" = [])),
     responses((status = 200, description = "Node and uv here", body = Runtimes)))]
 pub async fn runtimes(State(state): State<AppState>, _auth: Auth) -> Json<Runtimes> {
