@@ -179,3 +179,80 @@ async fn tools_on_the_server_are_per_person_and_shared_ones_reach_everyone() {
     let (s, _) = call(&app, "GET", "/api/tools/catalog", None, None).await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
 }
+
+/// A stand-in service that signs people in itself: its MCP address answers 401, and it
+/// registers apps and hands out tokens at the usual places.
+async fn fake_sign_in_service(tokens: Arc<Mutex<Vec<String>>>) -> String {
+    let app = Router::new()
+        .route("/mcp", post(|| async { StatusCode::UNAUTHORIZED }))
+        .route(
+            "/register",
+            post(|Json(body): Json<Value>| async move {
+                assert_eq!(body["redirect_uris"][0], "http://127.0.0.1:33418/callback");
+                Json(json!({ "client_id": "phone-client" }))
+            }),
+        )
+        .route(
+            "/token",
+            post(move |body: String| {
+                let tokens = tokens.clone();
+                async move {
+                    tokens.lock().unwrap().push(body.clone());
+                    assert!(body.contains("code=c-123") && body.contains("code_verifier="), "{body}");
+                    Json(json!({ "access_token": "tok-9", "refresh_token": "r-1", "expires_in": 3600 }))
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    url
+}
+
+#[tokio::test]
+async fn the_phone_signs_in_through_the_server() {
+    let (app, _state) = app().await;
+    let (dan, sj, _) = people(&app).await;
+    let tokens: Arc<Mutex<Vec<String>>> = Default::default();
+    let url = fake_sign_in_service(tokens.clone()).await;
+    let (_, tool) = call(&app, "POST", "/api/tools", Some(&dan), Some(json!({ "name": "Notes", "transport": "http", "url": url }))).await;
+    let id = tool["id"].as_str().unwrap().to_string();
+
+    // Start: the server registers for the phone's address and hands back where to sign in.
+    let (s, begun) = call(&app, "POST", &format!("/api/tools/{id}/sign-in/start"), Some(&dan), Some(json!({ "port": 33418 }))).await;
+    assert_eq!(s, StatusCode::OK, "{begun}");
+    let open = reqwest::Url::parse(begun["url"].as_str().unwrap()).unwrap();
+    let q: std::collections::HashMap<String, String> = open.query_pairs().map(|(k, v)| (k.into(), v.into())).collect();
+    assert!(open.path().ends_with("/authorize"));
+    assert_eq!(q["client_id"], "phone-client");
+    assert_eq!(q["redirect_uri"], "http://127.0.0.1:33418/callback");
+
+    // Someone else can't finish it, and a made-up state is refused.
+    let back = format!("/callback?code=c-123&state={}", q["state"]);
+    let (s, _) = call(&app, "POST", &format!("/api/tools/{id}/sign-in/finish"), Some(&sj), Some(json!({ "callback": back }))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (s, _) = call(&app, "POST", &format!("/api/tools/{id}/sign-in/finish"), Some(&dan), Some(json!({ "callback": "/callback?code=c-123&state=nope" }))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // The browser's answer: swapped for tokens and kept.
+    let (s, done) = call(&app, "POST", &format!("/api/tools/{id}/sign-in/finish"), Some(&dan), Some(json!({ "callback": back }))).await;
+    assert_eq!(s, StatusCode::OK, "{done}");
+    assert_eq!(done["signed_in"], true);
+    assert_eq!(tokens.lock().unwrap().len(), 1);
+    // Once only.
+    let (s, _) = call(&app, "POST", &format!("/api/tools/{id}/sign-in/finish"), Some(&dan), Some(json!({ "callback": back }))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // Google with no household client: it asks for one.
+    let (_, g) = call(&app, "POST", "/api/tools", Some(&sj), Some(json!({ "name": "Google", "transport": "builtin", "command": "google", "args": ["drive"] }))).await;
+    let (s, e) = call(&app, "POST", &format!("/api/tools/{}/sign-in/start", g["id"].as_str().unwrap()), Some(&sj), Some(json!({ "port": 33418 }))).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(e["error"]["code"], "needs_client");
+    // An owner's client is kept for the household, and the address is Google's.
+    let (_, g2) = call(&app, "POST", "/api/tools", Some(&dan), Some(json!({ "name": "Google", "transport": "builtin", "command": "google", "args": ["drive"] }))).await;
+    let (s, b) = call(&app, "POST", &format!("/api/tools/{}/sign-in/start", g2["id"].as_str().unwrap()), Some(&dan), Some(json!({ "port": 33418, "client_id": "abc.apps.googleusercontent.com" }))).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert!(b["url"].as_str().unwrap().starts_with("https://accounts.google.com/"));
+    let (_, gc) = call(&app, "GET", "/api/tools/google-client", Some(&sj), None).await;
+    assert_eq!(gc["client_id"], "abc.apps.googleusercontent.com");
+}

@@ -111,8 +111,11 @@ servers, so any MCP server works.
 - **Signing in** happens on the PC you're using (the browser comes back to it), and the sign-in
   is then kept on the server, renewed automatically. **Google**: the household's Google client
   (made once, below) is saved by the owner who adds it first; everyone else just signs in.
-- **On the phone**: + › Tools turns the chat's server tools on and off. Add tools and sign in to
-  them from the desktop app.
+- **On the phone**: + › Tools turns the chat's server tools on and off. **You › Tools** lists your
+  tools and the household's, and **Add a tool** opens the library. Signing in opens the phone's
+  browser and comes back to Outpost; the sign-in is kept on the server like one made on a PC.
+  Members can add any tool at an address; tools that run a program on the server are added by
+  an owner (and shared), and ones that use a computer's own files from the desktop app.
 
 - **+ › Tools › Tool library** lists ones that are known to work, grouped (Search & the web,
   Coding, Knowledge, Home & tasks, Helpers), each saying what it costs (most are free; some need

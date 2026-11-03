@@ -145,6 +145,8 @@ use crate::routes::{
         crate::server_tools::test,
         crate::server_tools::sign_in_info,
         crate::server_tools::sign_in_save,
+        crate::server_tools::sign_in_start,
+        crate::server_tools::sign_in_finish,
         crate::server_tools::sign_out,
         crate::server_tools::google_client_get,
         crate::server_tools::google_client_set,

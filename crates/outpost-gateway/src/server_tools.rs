@@ -8,8 +8,10 @@
 //!   `<data>/engines`). Owners only: it runs with this server's access.
 //! - **Built in (Google)**: [`crate::google_tools`] with the person's Google sign-in.
 //!
-//! Signing in happens on the person's device (the browser has to come back to it); the app
-//! hands the result here (`PUT /api/tools/{id}/sign-in`), and this server renews it.
+//! Signing in happens in the person's browser, which has to come back to their own device:
+//! the desktop app signs in itself and hands the result here (`PUT /api/tools/{id}/sign-in`);
+//! the phone has this server do the OAuth work (`sign-in/start`, then `sign-in/finish` with
+//! what its browser brought back to it). This server renews sign-ins either way.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -386,13 +388,120 @@ pub async fn sign_in_info(State(state): State<AppState>, auth: Auth, Path(id): P
     params(("id" = String, Path, description = "The tool")), responses((status = 200, description = "Signed in", body = ToolView)))]
 pub async fn sign_in_save(State(state): State<AppState>, auth: Auth, Path(id): Path<String>, Json(st): Json<OAuthState>) -> ApiResult<Json<ToolView>> {
     let mut t = tools::get_own(&state.pool, &auth.account.id, &id).await?;
+    keep_sign_in(&state, &mut t, st).await?;
+    Ok(Json(view(&state, &t, &auth.account.id, None)))
+}
+
+async fn keep_sign_in(state: &AppState, t: &mut Tool, st: OAuthState) -> ApiResult<()> {
     if st.access_token.is_none() {
         return Err(ApiError::bad_request("That sign-in has no token."));
     }
-    t.signed_in_as = if is_google(&t) { google_tools::account_email(&http(), st.access_token.as_deref().unwrap_or("")).await } else { None };
+    t.signed_in_as = if is_google(t) { google_tools::account_email(&http(), st.access_token.as_deref().unwrap_or("")).await } else { None };
     t.oauth = Some(state.vault.seal(&serde_json::to_string(&st).unwrap_or_default()));
     tools::save_oauth(&state.pool, &t.id, t.oauth.as_deref(), t.signed_in_as.as_deref()).await?;
     state.tool_pool.close(&t.id).await;
+    Ok(())
+}
+
+/// Sign-ins started for a browser on the phone, waiting for it to come back (by their state).
+static STARTED: std::sync::Mutex<Option<std::collections::HashMap<String, (String, String, mcp_oauth::Started, std::time::Instant)>>> =
+    std::sync::Mutex::new(None);
+
+fn started() -> std::sync::MutexGuard<'static, Option<std::collections::HashMap<String, (String, String, mcp_oauth::Started, std::time::Instant)>>> {
+    STARTED.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SignInStart {
+    /// The port the phone listens on: the browser comes back to http://127.0.0.1:<port>/callback.
+    pub port: u16,
+    /// An OAuth client of your own, for a service that doesn't let apps register (or Google's,
+    /// when the household hasn't one yet).
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SignInFinish {
+    /// The browser's callback: its path and query (`/callback?code=…&state=…`).
+    pub callback: String,
+}
+
+fn sign_in_error(e: String) -> ApiError {
+    if e.starts_with("needs client:") {
+        ApiError::new(StatusCode::CONFLICT, "needs_client", e)
+    } else {
+        ApiError::new(StatusCode::BAD_GATEWAY, "sign_in_failed", e)
+    }
+}
+
+/// Start signing in to one of your tools from a device whose browser comes back to itself
+/// (the phone): the server does the OAuth work and hands back the address to open.
+#[utoipa::path(post, path = "/api/tools/{id}/sign-in/start", tag = "tools", security(("bearer" = [])),
+    params(("id" = String, Path, description = "The tool")), request_body = SignInStart,
+    responses((status = 200, description = "The address to open"), (status = 409, description = "Needs an OAuth client", body = ErrorBody)))]
+pub async fn sign_in_start(State(state): State<AppState>, auth: Auth, Path(id): Path<String>, Json(req): Json<SignInStart>) -> ApiResult<Json<Value>> {
+    let t = tools::get_own(&state.pool, &auth.account.id, &id).await?;
+    let previous = oauth(&state, &t);
+    let given = req.client_id.as_deref().map(str::trim).filter(|c| !c.is_empty()).map(|c| (c.to_string(), req.client_secret.clone().filter(|s| !s.trim().is_empty())));
+    let begun = (if is_google(&t) {
+        let (client_id, secret) = match google_client(&state).await {
+            Some(c) => (c.client_id, c.client_secret),
+            None => {
+                let Some((id, secret)) = given else {
+                    return Err(sign_in_error("needs client: an owner needs to set up the household's Google client first.".into()));
+                };
+                // An owner's client is kept for the household.
+                if auth.account.role == Role::Owner {
+                    let c = GoogleClient { client_id: id.clone(), client_secret: secret.clone() };
+                    let sealed = state.vault.seal(&serde_json::to_string(&c).unwrap_or_default());
+                    outpost_core::settings::set(&state.pool, GOOGLE_CLIENT, &sealed).await?;
+                }
+                (id, secret)
+            }
+        };
+        mcp_oauth::start_known(mcp_oauth::google_state(&client_id, secret, &google_tools::scopes(&t.args())), req.port)
+    } else if t.transport == "http" {
+        mcp_oauth::start(&http(), &t.url, given, None, previous.as_ref(), req.port).await
+    } else {
+        return Err(ApiError::bad_request("Only tools at an address sign in this way."));
+    })
+    .map_err(sign_in_error)?;
+    let url = begun.url.clone();
+    let mut g = started();
+    let map = g.get_or_insert_with(Default::default);
+    map.retain(|_, (_, _, _, at)| at.elapsed() < mcp_oauth::SIGN_IN_WITHIN * 2);
+    map.insert(begun.state.clone(), (auth.account.id.clone(), t.id.clone(), begun, std::time::Instant::now()));
+    Ok(Json(json!({ "url": url })))
+}
+
+/// Finish a sign-in started with `sign-in/start`, with what the browser brought back.
+#[utoipa::path(post, path = "/api/tools/{id}/sign-in/finish", tag = "tools", security(("bearer" = [])),
+    params(("id" = String, Path, description = "The tool")), request_body = SignInFinish,
+    responses((status = 200, description = "Signed in", body = ToolView), (status = 400, description = "Not one we started", body = ErrorBody)))]
+pub async fn sign_in_finish(State(state): State<AppState>, auth: Auth, Path(id): Path<String>, Json(req): Json<SignInFinish>) -> ApiResult<Json<ToolView>> {
+    let mut t = tools::get_own(&state.pool, &auth.account.id, &id).await?;
+    let wanted = reqwest::Url::parse(&format!("http://127.0.0.1/{}", req.callback.trim_start_matches('/')))
+        .ok()
+        .and_then(|u| u.query_pairs().find(|(k, _)| k == "state").map(|(_, v)| v.to_string()))
+        .unwrap_or_default();
+    let begun = {
+        let mut g = started();
+        let map = g.get_or_insert_with(Default::default);
+        match map.get(&wanted) {
+            Some((account, tool, _, at)) if account == &auth.account.id && tool == &t.id && at.elapsed() < mcp_oauth::SIGN_IN_WITHIN * 2 => {
+                map.remove(&wanted).map(|(_, _, b, _)| b)
+            }
+            _ => None,
+        }
+    };
+    let Some(begun) = begun else {
+        return Err(ApiError::bad_request("That sign-in wasn't started here, or took too long. Try again."));
+    };
+    let st = mcp_oauth::exchange(&http(), begun, &req.callback).await.map_err(sign_in_error)?;
+    keep_sign_in(&state, &mut t, st).await?;
     Ok(Json(view(&state, &t, &auth.account.id, None)))
 }
 

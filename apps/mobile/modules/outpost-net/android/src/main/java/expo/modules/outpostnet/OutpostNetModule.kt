@@ -155,6 +155,17 @@ class OutpostNetModule : Module() {
     /** Delete the copies of shared files. */
     Function("clearShared") { ShareReceiver.clear(context) }
 
+    // ------------------------------------------------------------ signing in to a service (see SignInCatcher)
+
+    /** Listen for the browser coming back from a sign-in at 127.0.0.1:port; false if the port is taken. */
+    Function("signInListen") { port: Int -> SignInCatcher.listen(port) }
+
+    /** Wait for the browser's callback (path and query); brings Outpost back to the front. */
+    AsyncFunction("signInWait") { timeoutMs: Int -> SignInCatcher.await(context, timeoutMs) }
+
+    /** Stop waiting for a sign-in. */
+    Function("signInStop") { SignInCatcher.stop() }
+
     // ------------------------------------------------------------ "it's ready" notifications (see JobNotifier)
 
     /** Check for finished jobs in the background with this connection, or stop (on = false). */

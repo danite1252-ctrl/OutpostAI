@@ -384,6 +384,8 @@ pub fn router(state: AppState) -> Router {
             "/api/tools/{id}/sign-in",
             get(server_tools::sign_in_info).put(server_tools::sign_in_save).delete(server_tools::sign_out),
         )
+        .route("/api/tools/{id}/sign-in/start", post(server_tools::sign_in_start))
+        .route("/api/tools/{id}/sign-in/finish", post(server_tools::sign_in_finish))
         .route("/api/personas/{id}/tools", get(server_tools::persona_get).put(server_tools::persona_set))
         .route("/api/chats/{id}/tools", get(server_tools::chat_get).put(server_tools::chat_set).delete(server_tools::chat_reset))
         .route("/api/pc-tools", get(device_tools::list))

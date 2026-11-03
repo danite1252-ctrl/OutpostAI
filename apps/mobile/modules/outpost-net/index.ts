@@ -142,6 +142,12 @@ declare class OutpostNetModule extends NativeModule<Events> {
   takeShared(): Promise<Shared | null>;
   /** Delete the copies of shared files. */
   clearShared(): void;
+  /** Listen for a sign-in's browser callback at http://127.0.0.1:port/callback; false if taken. */
+  signInListen(port: number): boolean;
+  /** The callback's path and query once the browser comes back (brings Outpost to the front). */
+  signInWait(timeoutMs: number): Promise<string>;
+  /** Stop waiting for a sign-in. */
+  signInStop(): void;
   /** Copy a downloaded file (file:// or path) into Pictures, Movies or Download, in an Outpost
    * folder; resolves with its content:// URI. Android 10 or newer. */
   saveToPhone(path: string, name: string, mime: string): Promise<string>;

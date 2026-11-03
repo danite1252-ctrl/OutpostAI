@@ -1,9 +1,11 @@
 // Tools on the phone: your tools on the Outpost server (and the household's shared ones),
 // and the library to add more. Tools added here live on the server, so they work in every
-// chat, on every device. Signing in to a service still happens on a PC for now.
+// chat, on every device. Signing in: the server does the OAuth work, the phone's browser signs
+// in, and comes back to Outpost on this phone (127.0.0.1), which hands it to the server.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import OutpostNet from "../modules/outpost-net";
 import { ApiError, type Outpost } from "./outpost";
 import { Button, C, Chip, ErrorText, Field, P, s } from "./ui";
 
@@ -71,6 +73,30 @@ const needsRuntime = (e: unknown): "node" | "uv" | null => {
   const m = e instanceof Error ? e.message : "";
   return m.startsWith("needs node:") ? "node" : m.startsWith("needs uv:") ? "uv" : null;
 };
+
+/** Where the phone catches the browser coming back from a sign-in (the same port the desktop
+ *  uses for OAuth clients people make themselves, so one client works for both). */
+const SIGN_IN_PORT = 33418;
+
+/** Sign in to one of your server tools in the phone's browser. `client`: an OAuth client of
+ *  your own (a service that won't let apps register, or Google's before the household has one). */
+export async function signInOnPhone(api: Outpost, id: string, client?: { id?: string; secret?: string }): Promise<ServerTool> {
+  if (!OutpostNet.signInListen(SIGN_IN_PORT)) throw new Error("Another sign-in is still open. Wait a moment and try again.");
+  try {
+    const { url } = await api.json<{ url: string }>("POST", `/api/tools/${id}/sign-in/start`, {
+      port: SIGN_IN_PORT,
+      client_id: client?.id?.trim() || undefined,
+      client_secret: client?.secret?.trim() || undefined,
+    });
+    await Linking.openURL(url);
+    const back = await OutpostNet.signInWait(5 * 60 * 1000);
+    return await api.json<ServerTool>("POST", `/api/tools/${id}/sign-in/finish`, { callback: back });
+  } finally {
+    OutpostNet.signInStop();
+  }
+}
+
+const needsClient = (e: unknown) => e instanceof ApiError && e.code === "needs_client";
 
 /** A library entry filled in, as the server's add request. */
 function toRequest(e: CatalogEntry, values: Record<string, string>) {
@@ -140,7 +166,32 @@ function ToolCard({ api, tool, isOwner, onChanged }: { api: Outpost; tool: Serve
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [runtime, setRuntime] = useState<"node" | "uv" | null>(null);
+  const [wantsSignIn, setWantsSignIn] = useState(false);
+  const [askClient, setAskClient] = useState(false);
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
   const google = tool.transport === "builtin" && tool.command === "google";
+
+  async function signIn() {
+    setBusy("Signing in…");
+    setError(null);
+    setResult(null);
+    try {
+      await signInOnPhone(api, tool.id, askClient ? { id: clientId, secret: clientSecret } : undefined);
+      setAskClient(false);
+      setWantsSignIn(false);
+      onChanged();
+      setResult("Signed in.");
+    } catch (e) {
+      if (needsClient(e)) setAskClient(true);
+      setError(message(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+  function signOut() {
+    void api.json("DELETE", `/api/tools/${tool.id}/sign-in`).then(onChanged, (e) => setError(message(e)));
+  }
 
   async function change(body: Record<string, unknown>) {
     setError(null);
@@ -161,6 +212,7 @@ function ToolCard({ api, tool, isOwner, onChanged }: { api: Outpost; tool: Serve
       setResult(`Working: ${list.length} tools.`);
     } catch (e) {
       setRuntime(needsRuntime(e));
+      if (e instanceof Error && e.message.startsWith("needs sign-in:")) setWantsSignIn(true);
       setError(message(e));
     } finally {
       setBusy(null);
@@ -203,7 +255,7 @@ function ToolCard({ api, tool, isOwner, onChanged }: { api: Outpost; tool: Serve
         ? "Yours · shared with everyone"
         : "Yours"
       : `Shared by ${tool.owner_name ?? "an owner"}`;
-  const signInTool = google || tool.transport === "http";
+  const showSignIn = tool.mine && (google || tool.signed_in || wantsSignIn || askClient);
   return (
     <View style={[s.card, { gap: 8 }]}>
       <View style={[s.row, { alignItems: "center" }]}>
@@ -213,14 +265,33 @@ function ToolCard({ api, tool, isOwner, onChanged }: { api: Outpost; tool: Serve
         </View>
         {tool.mine && <Chip label={tool.enabled ? "On" : "Off"} active={tool.enabled} onPress={() => void change({ enabled: !tool.enabled })} />}
       </View>
-      {tool.mine && signInTool && (
-        <Text style={{ color: tool.signed_in ? C.ok : C.muted, fontSize: 13 }}>
-          {tool.signed_in
-            ? `Signed in${tool.signed_in_as ? ` as ${tool.signed_in_as}` : ""}`
-            : google
-              ? "Not signed in yet: sign in from the desktop app (+ › Tools › Tool library). Signing in on the phone is coming next."
-              : ""}
-        </Text>
+      {showSignIn && (
+        <View style={{ gap: 8 }}>
+          <Text style={{ color: tool.signed_in ? C.ok : C.muted, fontSize: 13 }}>
+            {tool.signed_in
+              ? `Signed in${tool.signed_in_as ? ` as ${tool.signed_in_as}` : ""}`
+              : `Sign in to ${tool.name}: the phone's browser opens, then comes back here. The sign-in is kept on your Outpost, for all your devices.`}
+          </Text>
+          {askClient && (
+            <>
+              <Text style={{ color: C.soft, fontSize: 13 }}>
+                {google
+                  ? "Enter the household's Google OAuth client (made once, as the Google tool's steps say)."
+                  : "This service doesn't let apps register themselves: make an OAuth client for it (its instructions say how), with the redirect address http://127.0.0.1:33418/callback."}
+              </Text>
+              <Field label="OAuth client ID" value={clientId} onChangeText={setClientId} autoCapitalize="none" autoCorrect={false} />
+              <Field label="Client secret (if it gave one)" value={clientSecret} onChangeText={setClientSecret} secureTextEntry autoCapitalize="none" autoCorrect={false} />
+            </>
+          )}
+          <View style={[s.row, { flexWrap: "wrap" }]}>
+            <Chip
+              label={busy === "Signing in…" ? "Waiting for the browser…" : tool.signed_in ? "Sign in again" : "Sign in"}
+              active={!tool.signed_in}
+              onPress={() => void signIn()}
+            />
+            {tool.signed_in && <Chip label="Sign out" onPress={signOut} />}
+          </View>
+        </View>
       )}
       <View style={[s.row, { flexWrap: "wrap" }]}>
         <Chip label={busy === "Starting…" ? busy : "Test"} onPress={() => void test()} />
@@ -231,12 +302,7 @@ function ToolCard({ api, tool, isOwner, onChanged }: { api: Outpost; tool: Serve
         {tool.mine && <Chip label="Remove" color={C.danger} onPress={remove} />}
       </View>
       {result && <Text style={{ color: C.ok, fontSize: 13 }}>{result}</Text>}
-      {error && (
-        <Text style={{ color: C.danger, fontSize: 13 }}>
-          {error}
-          {error.toLowerCase().includes("sign") ? " Sign in from the desktop app for now." : ""}
-        </Text>
-      )}
+      {error && <Text style={{ color: C.danger, fontSize: 13 }}>{error}</Text>}
       {runtime && isOwner && (
         <Button
           kind="ghost"
@@ -345,7 +411,14 @@ function AddEntry({
       }
       const tool = await api.json<ServerTool>("POST", "/api/tools", toRequest(entry, values));
       if (entry.signIn || google) {
-        setDone(`${entry.name} is added. Sign in to it from the desktop app for now (+ › Tools › Tool library): signing in on the phone is coming next.`);
+        // Straight on to signing in (the client typed here, for services that need one).
+        const client = { id: values.client_id, secret: values.client_secret };
+        try {
+          await signInOnPhone(api, tool.id, client.id ? client : undefined);
+          setDone(`${entry.name} is added and signed in. Turn it on in a chat from its + menu › Tools.`);
+        } catch (e) {
+          setDone(`${entry.name} is added, but not signed in: ${message(e)} Sign in under Your tools.`);
+        }
         return;
       }
       try {

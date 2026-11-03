@@ -494,6 +494,104 @@ pub async fn sign_in(
     finish(client, st, listener, open).await
 }
 
+/// A sign-in whose browser runs somewhere else (the phone, which catches the callback at
+/// 127.0.0.1:`port` itself): the address to open, and what's needed to finish it.
+#[derive(Debug, Clone)]
+pub struct Started {
+    pub st: OAuthState,
+    pub url: String,
+    pub verifier: String,
+    pub state: String,
+    pub redirect: String,
+}
+
+/// Start a sign-in to the MCP server at `mcp_url` for a browser that comes back to
+/// 127.0.0.1:`port` (see [`sign_in`] for `manual`, `scope` and `previous`).
+pub async fn start(
+    client: &reqwest::Client,
+    mcp_url: &str,
+    manual: Option<(String, Option<String>)>,
+    scope: Option<String>,
+    previous: Option<&OAuthState>,
+    port: u16,
+) -> Result<Started, String> {
+    let mut found = discover(client, mcp_url).await?;
+    if let Some(s) = scope.filter(|s| !s.trim().is_empty()) {
+        found.scope = Some(s);
+    }
+    let redirect = format!("http://127.0.0.1:{port}/callback");
+    let mut st = OAuthState {
+        authorization_endpoint: found.authorization_endpoint.clone(),
+        token_endpoint: found.token_endpoint.clone(),
+        registration_endpoint: found.registration_endpoint.clone(),
+        resource: found.resource.clone(),
+        scope: found.scope.clone(),
+        redirect_port: port,
+        ..Default::default()
+    };
+    // A registration made for this same address is reused.
+    let reuse = previous.filter(|p| p.registered && p.redirect_port == port && p.registration_endpoint == found.registration_endpoint);
+    match (manual, reuse) {
+        (Some((id, secret)), _) => {
+            st.client_id = id;
+            st.client_secret = secret.filter(|s| !s.is_empty());
+        }
+        (None, Some(p)) => {
+            st.client_id = p.client_id.clone();
+            st.client_secret = p.client_secret.clone();
+            st.registered = true;
+        }
+        (None, None) => {
+            let endpoint = found.registration_endpoint.clone().ok_or(
+                "needs client: this service doesn't let apps register themselves. Make an OAuth client for it (its instructions say how) and enter its client ID.",
+            )?;
+            let (id, secret) = register(client, &endpoint, &redirect, found.scope.as_deref()).await?;
+            st.client_id = id;
+            st.client_secret = secret;
+            st.registered = true;
+        }
+    }
+    start_known(st, port)
+}
+
+/// Start a sign-in where the endpoints and client are known (Google), for 127.0.0.1:`port`.
+pub fn start_known(st: OAuthState, port: u16) -> Result<Started, String> {
+    let st = OAuthState { redirect_port: port, ..st };
+    let redirect = format!("http://127.0.0.1:{port}/callback");
+    let (verifier, challenge) = pkce();
+    let state = uuid::Uuid::new_v4().simple().to_string();
+    let url = authorize_url(&st, &redirect, &challenge, &state)?;
+    Ok(Started { st, url, verifier, state, redirect })
+}
+
+/// Finish a [`Started`] sign-in with the browser's callback (its path and query).
+pub async fn exchange(client: &reqwest::Client, started: Started, callback: &str) -> Result<OAuthState, String> {
+    let url = reqwest::Url::parse(&format!("http://127.0.0.1{}", if callback.starts_with('/') { callback.to_string() } else { format!("/{callback}") }))
+        .map_err(|_| "The sign-in came back garbled. Try again.".to_string())?;
+    let get = |k: &str| url.query_pairs().find(|(x, _)| x == k).map(|(_, v)| v.to_string());
+    if let Some(e) = get("error") {
+        return Err(format!("The sign-in was refused: {}", get("error_description").unwrap_or(e)));
+    }
+    let code = match (get("code"), get("state")) {
+        (Some(code), Some(s)) if s == started.state => code,
+        _ => return Err("The sign-in came back without what Outpost asked for. Try again.".into()),
+    };
+    let mut st = started.st;
+    let answer = token_request(
+        client,
+        &st,
+        vec![
+            ("grant_type", "authorization_code".into()),
+            ("code", code),
+            ("redirect_uri", started.redirect),
+            ("code_verifier", started.verifier),
+        ],
+    )
+    .await?;
+    keep_tokens(&mut st, answer);
+    Ok(st)
+}
+
 /// Google's sign-in, for an OAuth client of the "Desktop app" kind (any loopback port works).
 pub fn google_state(client_id: &str, client_secret: Option<String>, scope: &str) -> OAuthState {
     OAuthState {
