@@ -519,6 +519,30 @@ pub const CATALOG: &[Entry] = &[
         page: "https://ollama.com/library/qwen3.6",
     },
     Entry {
+        model: "hf.co/unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF:IQ4_XS",
+        name: "Devstral Small 2 24B (16 GB cards)",
+        category: Category::Coding,
+        size_gb: 12.8,
+        context_k: 384,
+        badges: &[Code, Tools, LongContext],
+        license: Some("Apache-2.0"),
+        rank: 91,
+        description: "Mistral's coding agent: reads your project, edits several files, uses tools. Squeezed to fit 16 GB cards (Unsloth's IQ4_XS from Hugging Face).",
+        page: "https://huggingface.co/unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF",
+    },
+    Entry {
+        model: "devstral-small-2:24b",
+        name: "Devstral Small 2 24B",
+        category: Category::Coding,
+        size_gb: 15.0,
+        context_k: 384,
+        badges: &[Code, Vision, Tools, LongContext],
+        license: Some("Apache-2.0"),
+        rank: 89,
+        description: "Mistral's coding agent, Ollama's own build: also reads screenshots. Best on 20 GB+ cards.",
+        page: "https://ollama.com/library/devstral-small-2",
+    },
+    Entry {
         model: "qwen3-embedding:4b",
         name: "Qwen3 Embedding 4B",
         category: Category::Embedding,
@@ -761,6 +785,20 @@ mod tests {
         assert!(big
             .iter()
             .any(|e| e.recommended && e.model == "huihui_ai/gemma-4-abliterated:48b"));
+    }
+
+    #[test]
+    fn devstral_is_the_coding_pick_on_a_16gb_card() {
+        let pick = |vram| {
+            build(&hw(vram, 64))
+                .into_iter()
+                .find(|e| e.category == Category::Coding && e.recommended)
+                .unwrap()
+        };
+        let p = pick(16);
+        assert!(p.model.starts_with("hf.co/unsloth/Devstral-Small-2"), "{}", p.model);
+        assert!(crate::models::valid_name(&p.model));
+        assert_eq!(pick(24).fit, Fit::Fits);
     }
 
     #[test]

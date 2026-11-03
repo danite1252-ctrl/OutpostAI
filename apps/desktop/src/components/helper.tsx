@@ -273,7 +273,8 @@ function ChatHere({ status, onError, onChanged }: { status: HelperStatus; onErro
   const pulling = (models?.pulls ?? []).filter((p) => !p.done);
   const failed = (models?.pulls ?? []).filter((p) => p.done && p.error);
   const suggested = (models?.catalog ?? [])
-    .filter((c) => c.fit === "fits" && !have.has(c.model.toLowerCase()) && !pulling.some((p) => p.model === c.model))
+    // What fits this card, plus each kind's best pick (a coding pick may run partly on the processor).
+    .filter((c) => (c.fit === "fits" || (c.recommended && c.fit === "partial")) && !have.has(c.model.toLowerCase()) && !pulling.some((p) => p.model === c.model))
     .sort((a, b) => Number(b.recommended) - Number(a.recommended) || b.size_gb - a.size_gb)
     .slice(0, 5);
 
@@ -351,7 +352,11 @@ function ChatHere({ status, onError, onChanged }: { status: HelperStatus; onErro
                   <li key={c.model} className="flex items-center gap-3 rounded-xl border border-line px-3 py-2 text-sm">
                     <span className="flex-1">
                       {c.name} <span className="text-muted">({c.size_gb.toFixed(1)} GB)</span>
-                      {c.recommended && <span className="ml-2 text-xs text-ember">Best fit</span>}
+                      {c.recommended && (
+                        <span className="ml-2 text-xs text-ember">
+                          {c.fit === "partial" ? `Best for ${c.category === "coding" ? "code" : "this card"} · partly on the processor, a bit slower` : c.category === "coding" ? "Best for code" : "Best fit"}
+                        </span>
+                      )}
                     </span>
                     <Button onClick={() => pull(c.model)}>Get</Button>
                   </li>

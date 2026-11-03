@@ -51,7 +51,7 @@ const SECTION: Record<Category, { title: string; blurb: string }> = {
     blurb: "Models with refusals removed (abliterated or fine-tuned). Qwen first, plus Gemma 4, GLM, gpt-oss, Granite and Dolphin.",
   },
   general: { title: "General", blurb: "Mainstream chat models, for comparison or when you want a filtered model." },
-  coding: { title: "Coding", blurb: "For the coding agent later on." },
+  coding: { title: "Coding", blurb: "For writing code: give a chat your project folder and these read, edit and look things up." },
   embedding: { title: "Memory & search", blurb: "Not chat models. One of these powers memory and document search." },
 };
 
