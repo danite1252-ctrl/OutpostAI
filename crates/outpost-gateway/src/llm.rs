@@ -369,6 +369,29 @@ pub async fn fit_history(
     (summary, recent)
 }
 
+/// Back-to-back user messages (or plain assistant replies) joined into one, images and all.
+/// Tool calls and their results are left as they are.
+pub fn merge_runs(messages: Vec<Value>) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::with_capacity(messages.len());
+    for m in messages {
+        let role = m["role"].as_str().unwrap_or_default();
+        let plain = |x: &Value| x.get("tool_calls").is_none() && (x["role"] == "user" || x["role"] == "assistant");
+        match out.last_mut() {
+            Some(prev) if plain(prev) && plain(&m) && prev["role"] == role => {
+                let joined = format!("{}\n\n{}", prev["content"].as_str().unwrap_or_default(), m["content"].as_str().unwrap_or_default());
+                prev["content"] = Value::String(joined.trim().to_string());
+                if let Some(imgs) = m.get("images").and_then(Value::as_array) {
+                    let mut all = prev.get("images").and_then(Value::as_array).cloned().unwrap_or_default();
+                    all.extend(imgs.iter().cloned());
+                    prev["images"] = Value::Array(all);
+                }
+            }
+            _ => out.push(m),
+        }
+    }
+    out
+}
+
 /// Body for Ollama's native `/api/chat`, streaming.
 /// A chat message that started a picture (`/draw`) carries a card marker for the
 /// apps, `[[outpost-job:<id>]]`; the model sees the words only.
@@ -427,6 +450,9 @@ pub fn ollama_chat_body(
             messages.push(msg);
         }
     }
+    // Two messages in a row from the same side (a message whose reply failed, then another)
+    // become one: some models' templates refuse anything but user and assistant taking turns.
+    let mut messages = merge_runs(messages);
     if let Some(clock) = clock {
         let note = format!(
             "{clock} Earlier messages in this chat may give other dates or times; they are out of date or wrong."
@@ -534,6 +560,21 @@ mod tests {
         // The newest two always stay, however big.
         let huge = chat(3, 30_000);
         assert_eq!(plan_fold(&huge, 9000), Some(1));
+    }
+
+    #[test]
+    fn back_to_back_messages_are_joined() {
+        let history = vec![
+            msg(1, "user", "hi"),
+            msg(2, "assistant", "hello"),
+            msg(3, "user", "rebuild the file"),
+            msg(4, "user", "add more numbers and run it"),
+        ];
+        let b = ollama_chat_body("m", "", None, &history, &HashMap::new(), &HashMap::new(), false, None);
+        let m = b["messages"].as_array().unwrap();
+        let roles: Vec<&str> = m.iter().map(|x| x["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "user"]);
+        assert_eq!(m[2]["content"], "rebuild the file\n\nadd more numbers and run it");
     }
 
     #[test]
