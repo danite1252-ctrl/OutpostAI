@@ -237,6 +237,7 @@ const BUILT_IN: &[(&str, &str)] = &[
     pack!("flux2_klein_edit"),
     pack!("wan22_t2v"),
     pack!("wan22_i2v"),
+    pack!("wan21_fun_i2v_8gb"),
     pack!("trellis2"),
     pack!("hunyuan3d_21"),
     pack!("upscale_esrgan"),
@@ -1025,6 +1026,9 @@ mod tests {
         assert_eq!(pick_on(6.0, 16.0, Task::Picture).as_deref(), Some("z_image_turbo_8gb"));
         // 48 GB: still the best-ranked, not merely the biggest.
         assert_eq!(pick_on(48.0, 128.0, Task::Edit).as_deref(), Some("qwen_image_21_edit"));
+        // Animating: Wan 2.2 on 16 GB; the 8 GB server gets Wan 2.1 Fun 1.3B.
+        assert_eq!(pick_on(16.0, 64.0, Task::Animate).as_deref(), Some("wan22_i2v"));
+        assert_eq!(pick_on(8.0, 32.0, Task::Animate).as_deref(), Some("wan21_fun_i2v_8gb"));
         // No GPU and little memory: nothing.
         assert_eq!(pick_on(0.0, 8.0, Task::Edit), None);
     }

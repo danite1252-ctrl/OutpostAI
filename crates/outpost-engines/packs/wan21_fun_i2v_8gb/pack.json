@@ -1,0 +1,162 @@
+{
+  "id": "wan21_fun_i2v_8gb",
+  "name": "Wan 2.1 Fun (1.3B, 8 GB)",
+  "lane": "image_to_video",
+  "task": "animate",
+  "rank": 5,
+  "description": "Bring a picture to life on an 8 GB graphics card: a 2 to 5 second 480p clip that starts from your image. Smaller and softer than Wan 2.2, but quick.",
+  "license": "Apache-2.0",
+  "vram_gb": 7.5,
+  "output": {
+    "node": "58",
+    "kind": "video"
+  },
+  "models": [
+    {
+      "file": "wan2.1_fun_inp_1.3B_bf16.safetensors",
+      "folder": "diffusion_models",
+      "size_gb": 3.13,
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_fun_inp_1.3B_bf16.safetensors",
+      "sha256": "8495d2b1673ffb18abb548a64ff3b0e4bd367734f653096f7a8a3ad46954d511",
+      "bytes": 3128957992
+    },
+    {
+      "file": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "folder": "text_encoders",
+      "size_gb": 6.74,
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "sha256": "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68",
+      "bytes": 6735906897
+    },
+    {
+      "file": "wan_2.1_vae.safetensors",
+      "folder": "vae",
+      "size_gb": 0.25,
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors",
+      "sha256": "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b",
+      "bytes": 253815318
+    },
+    {
+      "file": "clip_vision_h.safetensors",
+      "folder": "clip_vision",
+      "size_gb": 1.26,
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors",
+      "sha256": "64a7ef761bfccbadbaa3da77366aac4185a6c58fa5de5f589b42a65bcc21f161",
+      "bytes": 1264219396
+    }
+  ],
+  "inputs": [
+    {
+      "key": "image",
+      "label": "Start picture",
+      "kind": "image",
+      "required": true,
+      "default": null,
+      "help": "The first frame. The video moves on from it.",
+      "targets": [
+        [
+          "56",
+          "image"
+        ]
+      ]
+    },
+    {
+      "key": "prompt",
+      "label": "What happens",
+      "kind": "text",
+      "help": "Describe the motion and camera, e.g. \"she turns and smiles, slow push-in\".",
+      "default": "",
+      "required": true,
+      "targets": [
+        [
+          "6",
+          "text"
+        ]
+      ]
+    },
+    {
+      "key": "size",
+      "label": "Size",
+      "kind": "size",
+      "default": "832x480",
+      "options": [
+        "832x480",
+        "480x832"
+      ],
+      "targets": [
+        [
+          "55",
+          "width"
+        ],
+        [
+          "55",
+          "height"
+        ]
+      ]
+    },
+    {
+      "key": "length",
+      "label": "Length",
+      "kind": "choice",
+      "default": "5 seconds",
+      "options": [
+        "2 seconds",
+        "3 seconds",
+        "5 seconds"
+      ],
+      "presets": {
+        "2 seconds": [
+          [
+            "55",
+            "length",
+            33
+          ]
+        ],
+        "3 seconds": [
+          [
+            "55",
+            "length",
+            49
+          ]
+        ],
+        "5 seconds": [
+          [
+            "55",
+            "length",
+            81
+          ]
+        ]
+      },
+      "targets": []
+    },
+    {
+      "key": "steps",
+      "label": "Steps",
+      "kind": "integer",
+      "default": 20,
+      "min": 10,
+      "max": 40,
+      "advanced": true,
+      "targets": [
+        [
+          "3",
+          "steps"
+        ]
+      ]
+    },
+    {
+      "key": "seed",
+      "label": "Seed",
+      "kind": "seed",
+      "help": "Leave empty for a new picture each time; reuse a seed to repeat one.",
+      "default": null,
+      "advanced": true,
+      "targets": [
+        [
+          "3",
+          "seed"
+        ]
+      ]
+    }
+  ]
+}
