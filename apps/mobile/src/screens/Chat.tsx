@@ -269,7 +269,7 @@ function Conversation({
   const [docsOpen, setDocsOpen] = useState(false);
   // A command the reply wants to run, waiting for Allow or Skip.
   const [asking, setAsking] = useState<{ id: string; command: string; folder: string; always: string | null } | null>(null);
-  async function answerAsk(id: string, answer: { ok: boolean; always?: boolean }) {
+  async function answerAsk(id: string, answer: { ok: boolean; always?: boolean; cannot_ask?: boolean }) {
     setAsking(null);
     try {
       await api.json("POST", `/api/chats/${chat.id}/file-answers/${id}`, answer);
@@ -423,7 +423,7 @@ function Conversation({
           // A command the reply wants to run in a folder (asks here; other asks are skipped).
           const c = data as { id: string; kind?: string; command?: string; folder?: string; always?: string | null };
           if (c.kind === "command") setAsking({ id: c.id, command: c.command ?? "", folder: c.folder ?? "", always: c.always ?? null });
-          else void answerAsk(c.id, { ok: false });
+          else void answerAsk(c.id, { ok: false, cannot_ask: true });
         }
         else if (name === "error") setError(String((d as { message?: string }).message ?? "The reply failed."));
       },

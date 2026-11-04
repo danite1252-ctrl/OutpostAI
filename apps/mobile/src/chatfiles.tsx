@@ -139,10 +139,17 @@ const VERB: Record<string, string> = { list: "Looked in", read: "Read", search: 
 /** Under a reply: what it did with files, and its changes. */
 export function FileActions({ api, chatId, actions, files, live }: { api: Outpost; chatId: string; actions: FileAction[]; files: ChatFiles; live?: boolean }) {
   const [open, setOpen] = useState(false);
-  const looked = actions.filter((a) => !a.change_id);
+  const looked = actions.filter((a) => !a.change_id && a.op !== "run");
+  const runs = actions.filter((a) => a.op === "run");
   const changed = actions.filter((a) => a.change_id);
   return (
     <View style={[s.card, { gap: 8, paddingVertical: 10 }]}>
+      {runs.map((a, i) => (
+        <Text key={`run-${i}`} style={{ color: a.failed ? C.danger : C.ok, fontSize: 12, fontFamily: "monospace" }}>
+          Ran in {a.path}
+          {a.note ? ` · ${a.note}` : ""}
+        </Text>
+      ))}
       {looked.length > 0 && (
         <Pressable accessibilityRole="button" onPress={() => setOpen((o) => !o)}>
           <Text style={{ color: C.muted }}>

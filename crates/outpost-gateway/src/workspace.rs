@@ -160,8 +160,9 @@ impl Workspace {
                 "\n\nYou can run commands in a folder on a PC with run_command (path = the folder, or a sub-folder to run \
                  in), e.g. `gradlew build`, `mvn package` or `npm test`. Use it to build and test your changes: read the \
                  errors it shows, fix the code, and run it again until it works (say so if you can't get it working). \
-                 Only run commands that finish by themselves (no servers or programs that keep running). The user may be \
-                 asked to allow a command first; if they skip it, don't run it again. Never say a build passed unless \
+                 Only run commands that finish by themselves (no servers or programs that keep running). Run one command \
+                 per call, without && or | (chained commands always need the user's OK each time). The user may be asked \
+                 to allow a command first; if they skip it, don't run it again. Never say a build passed unless \
                  run_command showed it."
             } else {
                 ""
@@ -511,10 +512,22 @@ impl Workspace {
             let answer = self.state.file_relay.ask_within(&self.events, &self.chat_id, asked, CONFIRM_WITHIN, "confirm").await;
             let ok = answer.as_ref().is_ok_and(|v| v.get("ok").and_then(Value::as_bool) == Some(true));
             if !ok {
-                return Outcome {
-                    reply: format!("The user didn't allow `{command}`, so it didn't run. Don't run it again unless they ask."),
-                    action: FileAction { failed: true, ..note("not allowed".into()) },
+                let cannot = answer.as_ref().is_ok_and(|v| v.get("cannot_ask").and_then(Value::as_bool) == Some(true));
+                let (reply, why) = match (&answer, cannot) {
+                    (_, true) => (
+                        format!("`{command}` didn't run: the app the user is chatting in can't show the request to run commands (it may need updating). Tell the user."),
+                        "couldn't ask (update the app)",
+                    ),
+                    (Err(_), _) => (
+                        format!("`{command}` didn't run: nobody answered the request to run it. Tell the user it's waiting for their OK."),
+                        "no answer",
+                    ),
+                    _ => (
+                        format!("The user chose Skip for `{command}`, so it didn't run. Don't run it again unless they ask."),
+                        "skipped",
+                    ),
                 };
+                return Outcome { reply, action: FileAction { failed: true, ..note(why.into()) } };
             }
             if answer.is_ok_and(|v| v.get("always").and_then(Value::as_bool) == Some(true)) {
                 if let Some(program) = always {

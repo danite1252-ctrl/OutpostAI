@@ -1112,12 +1112,12 @@ export async function streamMessage(
       else if (name === "file_request") void answerFileRequest(token, chatId, payload);
       else if (name === "confirm") {
         const question = String(payload.question ?? "Go ahead?");
-        const ask: Promise<{ ok: boolean; always?: boolean }> =
+        const ask: Promise<{ ok: boolean; always?: boolean; cannot_ask?: boolean }> =
           payload.kind === "command" && on.approve
             ? on.approve(payload as CommandAsk).catch(() => ({ ok: false }))
             : on.confirm
               ? on.confirm(question).then((ok) => ({ ok }), () => ({ ok: false }))
-              : Promise.resolve({ ok: false });
+              : Promise.resolve({ ok: false, cannot_ask: true });
         void ask.then((answer) =>
           fetch(`${GATEWAY}/api/chats/${chatId}/file-answers/${payload.id}`, {
             method: "POST",

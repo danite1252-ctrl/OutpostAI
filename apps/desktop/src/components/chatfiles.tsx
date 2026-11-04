@@ -382,10 +382,17 @@ export function FileActions({
   files: ChatFiles;
   live?: boolean;
 }) {
-  const looked = actions.filter((a) => !a.change_id);
+  const looked = actions.filter((a) => !a.change_id && a.op !== "run");
+  const runs = actions.filter((a) => a.op === "run");
   const changed = actions.filter((a) => a.change_id);
   return (
     <div className="mt-2 flex flex-col gap-2 rounded-xl border border-line bg-surface px-3 py-2 text-sm">
+      {runs.map((a, i) => (
+        <p key={`run-${i}`} className={`font-mono text-xs break-all ${a.failed ? "text-danger" : "text-ok"}`}>
+          Ran in {a.path}
+          {a.note ? ` · ${a.note}` : ""}
+        </p>
+      ))}
       {looked.length > 0 && (
         <details open={live}>
           <summary className="cursor-pointer text-muted">
