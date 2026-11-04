@@ -21,6 +21,8 @@ export interface FullPersona {
   use_memory: boolean;
   voice: string | null;
   speak_replies: boolean;
+  /** Tokens of the chat it keeps in mind; null = as much as the card allows. */
+  context_length?: number | null;
   shared: boolean;
   /** Someone else's, shared with me (read-only). */
   owner_name?: string | null;
@@ -155,6 +157,7 @@ function PersonaEditor({
   const [voice, setVoice] = useState(persona.voice ?? "");
   const [speak, setSpeak] = useState(persona.speak_replies);
   const [shared, setShared] = useState(persona.shared);
+  const [contextLength, setContextLength] = useState(persona.context_length ?? 0);
   const [models, setModels] = useState<ChatModel[]>([]);
   const [voices, setVoices] = useState<VoiceStatus | null>(null);
   const [tools, setTools] = useState<ServerTool[]>([]);
@@ -193,6 +196,7 @@ function PersonaEditor({
         use_memory: useMemory,
         voice,
         speak_replies: speak,
+        context_length: contextLength,
         shared,
       });
       await api.json("PUT", `/api/personas/${persona.id}/tools`, { ids: toolIds });
@@ -326,6 +330,19 @@ function PersonaEditor({
       <Section title="Behaviour">
         <Toggle title="Remember things from chats" hint="It learns facts you tell it and uses them later." on={useMemory} onChange={setUseMemory} />
         <Toggle title="Show reasoning" hint={thinks ? "For thinking models." : "This model doesn't think."} on={think} onChange={setThink} />
+        <Text style={{ color: C.ink, fontSize: 15 }}>How much of the chat it keeps in mind</Text>
+        <View style={[s.row, { flexWrap: "wrap" }]}>
+          {(
+            [
+              [0, "Large"],
+              [32768, "Medium (32K)"],
+              [16384, "Small (16K, fastest)"],
+            ] as const
+          ).map(([v, label]) => (
+            <Chip key={v} label={label} active={contextLength === v} onPress={() => setContextLength(v)} />
+          ))}
+        </View>
+        <P muted>Smaller keeps a big model on the graphics card, so it answers faster; very long chats get summarised sooner.</P>
         <Text style={{ color: C.ink, fontSize: 15 }}>Creativity (temperature)</Text>
         <View style={[s.row, { flexWrap: "wrap" }]}>
           <Chip label="Model default" active={temperature === null} onPress={() => setTemperature(null)} />

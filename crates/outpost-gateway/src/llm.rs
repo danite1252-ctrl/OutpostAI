@@ -318,6 +318,16 @@ async fn summarise(
     (!text.is_empty()).then_some(text)
 }
 
+/// The context window Ollama runs `model` with on the card that answers (a lent PC's, or
+/// this server's), in tokens.
+pub async fn card_window(state: &AppState, model: &str) -> usize {
+    let vram_mb = match crate::lent::runs_on(state, model).await {
+        Some(pc) => pc.vram_mb,
+        None => crate::routes::models::measure(state).await.vram_mb,
+    };
+    outpost_engines::versions::context_length_for(vram_mb) as usize
+}
+
 /// What of a chat goes to the model: its rolling summary (if any) and the messages after
 /// it. When those outgrow the context window, the oldest are summarised first (and the
 /// summary saved with the chat). If summarising fails, the oldest are simply left out, as
@@ -329,6 +339,8 @@ pub async fn fit_history(
     can_think: bool,
     system: &str,
     history: Vec<Message>,
+    // The persona's own (smaller) window, if it has one.
+    persona_window: Option<u32>,
 ) -> (Option<String>, Vec<Message>) {
     let (mut summary, upto) = outpost_core::chats::summary(&state.pool, chat_id).await.unwrap_or((None, 0));
     let mut recent: Vec<Message> = history.into_iter().filter(|m| m.seq > upto).collect();
@@ -336,11 +348,8 @@ pub async fn fit_history(
     // summary and room for the reply.
     // The window Ollama runs with on the card that answers: a lent PC's bigger card has room
     // for a longer chat.
-    let vram_mb = match crate::lent::runs_on(state, model).await {
-        Some(pc) => pc.vram_mb,
-        None => crate::routes::models::measure(state).await.vram_mb,
-    };
-    let window = outpost_engines::versions::context_length_for(vram_mb) as usize;
+    let card = card_window(state, model).await;
+    let window = persona_window.map_or(card, |w| card.min(w as usize));
     let budget = (window * 55 / 100).saturating_sub(system.chars().count() / 3 + summary.as_deref().map_or(0, |s| s.len() / 3));
     if let Some(n) = plan_fold(&recent, budget.max(1024)) {
         let folding = &recent[..n];
@@ -432,6 +441,16 @@ pub fn ollama_chat_body(
     }
     if let Some(t) = persona.and_then(|p| p.temperature) {
         body["options"] = json!({ "temperature": t });
+    }
+    // A persona set to a shorter memory of the chat: a smaller window keeps a big model on
+    // the graphics card, so it answers faster.
+    if let Some(n) = persona.and_then(|p| p.context_length) {
+        match body.get_mut("options").and_then(Value::as_object_mut) {
+            Some(o) => {
+                o.insert("num_ctx".into(), json!(n));
+            }
+            None => body["options"] = json!({ "num_ctx": n }),
+        }
     }
     body
 }

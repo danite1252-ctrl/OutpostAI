@@ -260,6 +260,8 @@ export interface Persona {
   voice: string | null;
   /** Read replies aloud in chat. */
   speak_replies: boolean;
+  /** How much of a chat it keeps in mind (tokens); null = as much as the card allows. */
+  context_length?: number | null;
   /** Shared with everyone on this Outpost. */
   shared?: boolean;
   /** Someone else's shared persona: whose it is (theirs to edit). */
@@ -281,6 +283,8 @@ export type PersonaInput = Partial<{
   /** Speaking voice; "" for the default. */
   voice: string;
   speak_replies: boolean;
+  /** 16384 (short), 32768 (medium), or 0 for the full window. */
+  context_length: number;
   /** Share it with everyone on this Outpost. */
   shared: boolean;
 }>;

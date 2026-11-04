@@ -164,6 +164,7 @@ function PersonaEditor({
   const [useMemory, setUseMemory] = useState(persona.use_memory);
   const [voice, setVoice] = useState(persona.voice ?? "");
   const [speakReplies, setSpeakReplies] = useState(persona.speak_replies);
+  const [contextLength, setContextLength] = useState(persona.context_length ?? 0);
   const [shared, setShared] = useState(persona.shared ?? false);
   const [voices, setVoices] = useState<VoiceStatus | null>(null);
   const [trying, setTrying] = useState(false);
@@ -210,6 +211,7 @@ function PersonaEditor({
         shared,
         voice,
         speak_replies: speakReplies,
+        context_length: contextLength,
       });
       onSaved(p);
       setSlug(p.slug);
@@ -336,6 +338,26 @@ function PersonaEditor({
           />
           <span className="text-xs">Lower is focused, higher is creative.</span>
         </div>
+      </div>
+      <div className="flex flex-col gap-1.5 text-sm">
+        <span className="font-medium">How much of the chat it keeps in mind</span>
+        <div className="flex flex-wrap gap-2">
+          {CONTEXT_SIZES.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={contextLength === value}
+              onClick={() => setContextLength(value)}
+              className={`min-h-9 rounded-full border px-3.5 ${contextLength === value ? "border-ember bg-raised text-ink" : "border-line text-muted hover:text-ink"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs text-muted">
+          Smaller keeps a big model on the graphics card, so it answers faster; it forgets the start of very long chats
+          sooner (they're summarised). Coding with big projects wants Large.
+        </span>
       </div>
       <div className="flex flex-col gap-3 text-sm">
         <label className="flex items-center gap-3">
@@ -811,3 +833,10 @@ function Templates({ token, onAdded, onClose }: { token: string; onAdded: (p: Pe
     </div>
   );
 }
+
+/** A persona's chat window: Large (the card's full window), Medium, Small. */
+const CONTEXT_SIZES: [number, string][] = [
+  [0, "Large (most the card allows)"],
+  [32768, "Medium (32K)"],
+  [16384, "Small (16K, fastest)"],
+];

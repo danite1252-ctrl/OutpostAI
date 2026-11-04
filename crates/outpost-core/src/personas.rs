@@ -28,6 +28,10 @@ pub struct Persona {
     pub voice: Option<String>,
     /// Read replies aloud in chat.
     pub speak_replies: bool,
+    /// How much of a chat its model keeps in mind, in tokens (`None`: as much as the card
+    /// allows). Smaller keeps a big model on the graphics card, so it answers faster.
+    #[serde(default)]
+    pub context_length: Option<u32>,
     /// Shared with everyone on this Outpost (they can chat with it and copy it).
     #[serde(default)]
     pub shared: bool,
@@ -51,6 +55,8 @@ pub struct PersonaInput {
     /// Speaking voice; send an empty string for the default.
     pub voice: Option<String>,
     pub speak_replies: Option<bool>,
+    /// 16384 (short), 32768 (medium), or 0 for the full window.
+    pub context_length: Option<u32>,
     /// Share it with everyone on this Outpost.
     pub shared: Option<bool>,
     pub avatar_color: Option<String>,
@@ -105,6 +111,7 @@ struct Row {
     use_memory: bool,
     voice: Option<String>,
     speak_replies: bool,
+    context_length: Option<i64>,
     shared: bool,
     created_at: i64,
     updated_at: i64,
@@ -125,6 +132,7 @@ impl From<Row> for Persona {
             use_memory: r.use_memory,
             voice: r.voice,
             speak_replies: r.speak_replies,
+            context_length: r.context_length.and_then(|c| u32::try_from(c).ok()).filter(|c| *c > 0),
             shared: r.shared,
             owner_name: None,
             created_at: r.created_at,
@@ -133,7 +141,7 @@ impl From<Row> for Persona {
     }
 }
 
-const SELECT: &str = "SELECT id, account_id, slug, name, avatar_color, system_prompt, model, temperature, think, use_memory, voice, speak_replies, shared, created_at, updated_at FROM personas";
+const SELECT: &str = "SELECT id, account_id, slug, name, avatar_color, system_prompt, model, temperature, think, use_memory, voice, speak_replies, context_length, shared, created_at, updated_at FROM personas";
 
 const COLORS: [&str; 6] = ["#FFB547", "#FF6A3D", "#9CB4FF", "#7BD88F", "#C9B8FF", "#6FD3FF"];
 
@@ -193,6 +201,11 @@ fn check(input: &PersonaInput) -> CoreResult<()> {
         let ok = v.is_empty() || (v.len() <= 40 && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
         if !ok {
             return Err(CoreError::Invalid("That isn't a voice name.".into()));
+        }
+    }
+    if let Some(c) = input.context_length {
+        if c != 0 && !(4096..=262_144).contains(&c) {
+            return Err(CoreError::Invalid("Context is 0 (full) or between 4096 and 262144 tokens.".into()));
         }
     }
     if let Some(c) = &input.avatar_color {
@@ -332,14 +345,15 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: PersonaInput) ->
         use_memory: input.use_memory.unwrap_or(true),
         voice: input.voice.filter(|v| !v.is_empty()),
         speak_replies: input.speak_replies.unwrap_or(false),
+        context_length: input.context_length.filter(|c| *c > 0),
         shared: input.shared.unwrap_or(false),
         owner_name: None,
         created_at: t,
         updated_at: t,
     };
     sqlx::query(
-        "INSERT INTO personas (id, account_id, slug, name, avatar_color, system_prompt, model, temperature, think, use_memory, voice, speak_replies, shared, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO personas (id, account_id, slug, name, avatar_color, system_prompt, model, temperature, think, use_memory, voice, speak_replies, context_length, shared, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&persona.id)
     .bind(&persona.account_id)
@@ -353,6 +367,7 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: PersonaInput) ->
     .bind(persona.use_memory)
     .bind(&persona.voice)
     .bind(persona.speak_replies)
+    .bind(persona.context_length.map(i64::from))
     .bind(persona.shared)
     .bind(t)
     .bind(t)
@@ -421,9 +436,12 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Person
     if let Some(sh) = input.shared {
         p.shared = sh;
     }
+    if let Some(c) = input.context_length {
+        p.context_length = Some(c).filter(|c| *c > 0);
+    }
     p.updated_at = now();
     sqlx::query(
-        "UPDATE personas SET name = ?, slug = ?, system_prompt = ?, model = ?, temperature = ?, think = ?, use_memory = ?, avatar_color = ?, voice = ?, speak_replies = ?, shared = ?, updated_at = ?
+        "UPDATE personas SET name = ?, slug = ?, system_prompt = ?, model = ?, temperature = ?, think = ?, use_memory = ?, avatar_color = ?, voice = ?, speak_replies = ?, context_length = ?, shared = ?, updated_at = ?
          WHERE id = ? AND account_id = ?",
     )
     .bind(&p.name)
@@ -436,6 +454,7 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Person
     .bind(&p.avatar_color)
     .bind(&p.voice)
     .bind(p.speak_replies)
+    .bind(p.context_length.map(i64::from))
     .bind(p.shared)
     .bind(p.updated_at)
     .bind(id)
@@ -511,6 +530,21 @@ mod tests {
         .unwrap();
         assert_eq!(again.slug, "assistant-2");
         assert!(get_by_slug(&pool, &dan, "assistant-2").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_persona_can_keep_less_of_the_chat_in_mind() {
+        let pool = open_in_memory().await.unwrap();
+        let dan = account(&pool, "Dan").await;
+        let p = create(&pool, &dan, PersonaInput { name: Some("Quick".into()), context_length: Some(16384), ..Default::default() })
+            .await
+            .unwrap();
+        assert_eq!(get(&pool, &dan, &p.id).await.unwrap().context_length, Some(16384));
+        // 0 goes back to the full window; odd sizes are refused.
+        let p = update(&pool, &dan, &p.id, PersonaInput { context_length: Some(0), ..Default::default() }).await.unwrap();
+        assert_eq!(p.context_length, None);
+        assert_eq!(get(&pool, &dan, &p.id).await.unwrap().context_length, None);
+        assert!(update(&pool, &dan, &p.id, PersonaInput { context_length: Some(100), ..Default::default() }).await.is_err());
     }
 
     #[tokio::test]

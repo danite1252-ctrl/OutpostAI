@@ -73,6 +73,9 @@ Whisper and Kokoro.
 - **Personas** (side bar): name, colour, model, instructions, voice, and **memory**. With
   learning on, the persona notes lasting facts you mention and recalls the relevant ones
   later. You can see, edit and forget every memory.
+- **How much of the chat it keeps in mind** (per persona): Large (the most your card allows),
+  Medium (32K) or Small (16K). Smaller keeps a big model on the graphics card, so it answers
+  faster; the start of very long chats is summarised sooner. Coding personas want Large.
 - **Ready-made personas** (Personas › Ready-made, or on the phone): Assistant, Coder,
   Researcher, Devil's Advocate (questions your plans), Writing Coach and Translator, plus fun
   ones: Rizz Coach, Roast Master, Supervillain and Mr Sarcasm. Adding one makes it yours to

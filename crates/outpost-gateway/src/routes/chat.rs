@@ -161,6 +161,7 @@ async fn copy_persona(state: &AppState, p: &Persona, account_id: &str, from: &st
             use_memory: Some(p.use_memory),
             voice: p.voice.clone(),
             speak_replies: Some(p.speak_replies),
+            context_length: p.context_length,
             shared: Some(false),
             avatar_color: Some(p.avatar_color.clone()),
             slug: None,
@@ -655,7 +656,16 @@ pub async fn send_message(
 
     tokio::spawn(async move {
         let (summary, recent) =
-            llm::fit_history(&body_state, &chat_id, &model_for_body, can_think, &system, history).await;
+            llm::fit_history(
+                &body_state,
+                &chat_id,
+                &model_for_body,
+                can_think,
+                &system,
+                history,
+                body_persona.as_ref().and_then(|p| p.context_length),
+            )
+            .await;
         // Earlier replies' tool calls and results.
         let traces = outpost_core::chat_files::traces_for_chat(&pool, &chat_id).await.unwrap_or_default();
         let body = llm::ollama_chat_body(
@@ -669,6 +679,13 @@ pub async fn send_message(
             body_persona.as_ref(),
         );
         let mut body = body;
+        // A persona's shorter window only ever shrinks the card's (never grows it).
+        if let Some(n) = body["options"]["num_ctx"].as_u64() {
+            let card = llm::card_window(&body_state, &model_for_body).await as u64;
+            if n > card {
+                body["options"]["num_ctx"] = serde_json::json!(card);
+            }
+        }
         let mut content = String::new();
         let mut thinking = String::new();
         let mut failure: Option<String> = None;
