@@ -3294,7 +3294,7 @@ dependencies = [
 
 [[package]]
 name = "outpost-core"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -3312,7 +3312,7 @@ dependencies = [
 
 [[package]]
 name = "outpost-desktop"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "futures-util",
  "outpost-core",
@@ -3335,7 +3335,7 @@ dependencies = [
 
 [[package]]
 name = "outpost-engines"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "flate2",
@@ -3358,7 +3358,7 @@ dependencies = [
 
 [[package]]
 name = "outpost-gateway"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "axum",
