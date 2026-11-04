@@ -23,6 +23,7 @@ pub mod mcp_oauth;
 pub mod memory;
 pub mod openapi;
 pub mod pc_tools;
+pub mod persona_templates;
 pub mod print3d;
 pub mod remote;
 pub mod routes;
@@ -223,6 +224,8 @@ pub fn router(state: AppState) -> Router {
             post(openai::chat_completions).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
         )
         .route("/api/personas", get(chat::list_personas).post(chat::create_persona))
+        .route("/api/personas/templates", get(persona_templates::list))
+        .route("/api/personas/templates/{id}", post(persona_templates::add))
         .route("/api/personas/{id}/send", post(chat::send_persona))
         .route("/api/personas/{id}/copy", post(chat::copy_persona_for_me))
         .route("/api/people", get(chat::people))
@@ -241,6 +244,7 @@ pub fn router(state: AppState) -> Router {
             post(chat::send_message).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
         )
         .route("/api/chats/{id}/messages/{message_id}", delete(chat::delete_message))
+        .route("/api/chats/{id}/stop", post(chat::stop_reply))
         .route("/api/files/{id}", get(chat::get_file))
         .route("/api/memory", get(chat::list_memory).post(chat::add_memory))
         .route(

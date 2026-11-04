@@ -4,6 +4,7 @@ import {
   SERVER,
   ApiError,
   docsApi,
+  request,
   voiceApi,
   type Doc,
   type DirectoryEntry,
@@ -49,6 +50,7 @@ export default function Personas({ token }: { token: string }) {
   }
 
   const selected = personas.find((p) => p.id === selectedId) ?? null;
+  const [picking, setPicking] = useState(false);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-8">
@@ -56,9 +58,23 @@ export default function Personas({ token }: { token: string }) {
         <section aria-label="Personas" className="flex w-full max-w-xs flex-col gap-3">
           <div className="flex items-center">
             <h1 className="flex-1 text-2xl font-semibold">Personas</h1>
+            <Button variant="ghost" onClick={() => setPicking(true)}>
+              Ready-made
+            </Button>
             <Button onClick={() => void add()}>New</Button>
           </div>
           <ErrorNote>{error}</ErrorNote>
+          {picking && (
+            <Templates
+              token={token}
+              onAdded={(p) => {
+                setPicking(false);
+                setPersonas((ps) => [...ps, p]);
+                setSelectedId(p.id);
+              }}
+              onClose={() => setPicking(false)}
+            />
+          )}
           {personas.map((p) => (
             <button
               key={p.id}
@@ -722,4 +738,76 @@ function PersonaDocuments({ token, personaId, shared }: { token: string; persona
 export function hasModel(models: { model: string }[], name: string) {
   const n = name.toLowerCase();
   return models.some((m) => m.model.toLowerCase() === n);
+}
+
+interface PersonaTemplate {
+  id: string;
+  name: string;
+  group: string;
+  blurb: string;
+  avatar_color: string;
+  tools: string[];
+  prompt: string;
+}
+
+/** Ready-made personas to add (each becomes yours, to change as you like). */
+function Templates({ token, onAdded, onClose }: { token: string; onAdded: (p: Persona) => void; onClose: () => void }) {
+  const [list, setList] = useState<PersonaTemplate[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [peek, setPeek] = useState<string | null>(null);
+  useEffect(() => {
+    request<PersonaTemplate[]>("GET", "/api/personas/templates", { token }).then(setList, (e) =>
+      setError(e instanceof ApiError ? e.message : "Couldn't load them."),
+    );
+  }, [token]);
+  async function pick(t: PersonaTemplate) {
+    setBusy(t.id);
+    setError(null);
+    try {
+      const r = await request<{ persona: Persona; tools: string[] }>("POST", `/api/personas/templates/${t.id}`, { token });
+      onAdded(r.persona);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Couldn't add it.");
+    } finally {
+      setBusy(null);
+    }
+  }
+  const groups = [...new Set((list ?? []).map((t) => t.group))];
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-3">
+      <div className="flex items-center">
+        <h2 className="flex-1 font-semibold">Ready-made personas</h2>
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+      <p className="text-xs text-muted">Adding one makes it yours to change. It gets the tools that suit it, if you have them.</p>
+      <ErrorNote>{error}</ErrorNote>
+      {list === null && !error && <p className="text-sm text-muted">Loading…</p>}
+      {groups.map((g) => (
+        <div key={g} className="flex flex-col gap-2">
+          <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">{g}</h3>
+          {(list ?? [])
+            .filter((t) => t.group === g)
+            .map((t) => (
+              <div key={t.id} className="flex flex-col gap-1 rounded-xl border border-line p-2">
+                <div className="flex items-center gap-2">
+                  <Avatar name={t.name} color={t.avatar_color} size={28} />
+                  <span className="flex-1 text-sm font-medium">{t.name}</span>
+                  <Button variant="ghost" disabled={busy !== null} onClick={() => void pick(t)}>
+                    {busy === t.id ? "Adding…" : "Add"}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted">{t.blurb}</p>
+                <button type="button" className="self-start text-xs text-pick hover:underline" onClick={() => setPeek(peek === t.id ? null : t.id)}>
+                  {peek === t.id ? "Hide its instructions" : "See its instructions"}
+                </button>
+                {peek === t.id && <p className="text-xs whitespace-pre-wrap text-soft">{t.prompt}</p>}
+              </div>
+            ))}
+        </div>
+      ))}
+    </div>
+  );
 }

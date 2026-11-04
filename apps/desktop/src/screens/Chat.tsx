@@ -341,7 +341,8 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
   }
 
   function stop() {
-    // The reply keeps generating and is saved on the server; we just stop following it.
+    // The reply ends at its next step (a running command is stopped too); what it wrote is kept.
+    if (streamingId) void api.stopReply(token, streamingId).catch(() => undefined);
     abort.current?.abort();
     if (activeId) window.setTimeout(() => api.chat(token, activeId).then((r) => setMessages(r.messages), fail), 1500);
   }

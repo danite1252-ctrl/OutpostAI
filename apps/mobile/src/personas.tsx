@@ -52,6 +52,7 @@ export function PersonasScreen({ api, onClose }: { api: Outpost; onClose: () => 
   const [personas, setPersonas] = useState<FullPersona[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<FullPersona | null>(null);
+  const [picking, setPicking] = useState(false);
   const reload = useCallback(
     () => api.get<FullPersona[]>("/api/personas").then(setPersonas, (e) => setError(message(e))),
     [api],
@@ -70,6 +71,19 @@ export function PersonasScreen({ api, onClose }: { api: Outpost; onClose: () => 
     }
   }
 
+  if (picking) {
+    return (
+      <TemplatesScreen
+        api={api}
+        onAdded={(p) => {
+          setPicking(false);
+          void reload();
+          setOpen(p);
+        }}
+        onClose={() => setPicking(false)}
+      />
+    );
+  }
   if (open) {
     return (
       <PersonaEditor
@@ -89,6 +103,7 @@ export function PersonasScreen({ api, onClose }: { api: Outpost; onClose: () => 
     <Screen title="Personas" onClose={onClose}>
       <P muted>A persona is who you chat with: its instructions, model, tools, documents and voice.</P>
       <Button title="New persona" onPress={() => void create()} />
+      <Button kind="ghost" title="Ready-made personas" onPress={() => setPicking(true)} />
       <ListState loading={personas === null} error={error} empty={personas?.length === 0} emptyText="No personas yet." />
       {mine.map((p) => (
         <PersonaRow key={p.id} p={p} onPress={() => setOpen(p)} />
@@ -367,6 +382,65 @@ function SendCopy({ api, persona, onClose }: { api: Outpost; persona: FullPerson
       </View>
       <ErrorText>{error}</ErrorText>
       {done ? <P>{done}</P> : <Button title="Send" disabled={chosen.length === 0} busy={busy} onPress={() => void send()} />}
+    </Screen>
+  );
+}
+
+interface Template {
+  id: string;
+  name: string;
+  group: string;
+  blurb: string;
+  avatar_color: string;
+  prompt: string;
+}
+
+/** Ready-made personas to add (each becomes yours, to change as you like). */
+function TemplatesScreen({ api, onAdded, onClose }: { api: Outpost; onAdded: (p: FullPersona) => void; onClose: () => void }) {
+  const [list, setList] = useState<Template[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [peek, setPeek] = useState<string | null>(null);
+  useEffect(() => {
+    api.get<Template[]>("/api/personas/templates").then(setList, (e) => setError(message(e)));
+  }, [api]);
+  async function add(t: Template) {
+    setBusy(t.id);
+    setError(null);
+    try {
+      const r = await api.json<{ persona: FullPersona }>("POST", `/api/personas/templates/${t.id}`);
+      onAdded(r.persona);
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+  const groups = [...new Set((list ?? []).map((t) => t.group))];
+  return (
+    <Screen title="Ready-made personas" onClose={onClose} back="‹ Personas">
+      <P muted>Adding one makes it yours to change. It gets the tools that suit it, if you have them.</P>
+      <ListState loading={list === null} error={error} empty={false} emptyText="" />
+      {groups.map((g) => (
+        <Section key={g} title={g}>
+          {(list ?? [])
+            .filter((t) => t.group === g)
+            .map((t) => (
+              <View key={t.id} style={[s.card, { gap: 6 }]}>
+                <View style={s.row}>
+                  <Avatar name={t.name} color={t.avatar_color} size={32} />
+                  <Text style={{ color: C.ink, fontWeight: "600", flex: 1 }}>{t.name}</Text>
+                  <Chip label={busy === t.id ? "Adding…" : "Add"} active onPress={() => void add(t)} />
+                </View>
+                <Text style={{ color: C.soft, fontSize: 14 }}>{t.blurb}</Text>
+                <Text style={{ color: C.pick, fontSize: 13 }} onPress={() => setPeek(peek === t.id ? null : t.id)}>
+                  {peek === t.id ? "Hide its instructions" : "See its instructions"}
+                </Text>
+                {peek === t.id && <Text style={{ color: C.muted, fontSize: 13 }}>{t.prompt}</Text>}
+              </View>
+            ))}
+        </Section>
+      ))}
     </Screen>
   );
 }

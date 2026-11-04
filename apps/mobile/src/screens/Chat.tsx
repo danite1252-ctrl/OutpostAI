@@ -617,7 +617,15 @@ function Conversation({
             }}
           />
           {draft ? (
-            <RoundButton label="Stop the reply" onPress={() => stop.current?.()} size={48}>
+            <RoundButton
+              label="Stop the reply"
+              onPress={() => {
+                // The reply ends at its next step (a running build is stopped too).
+                void api.json("POST", `/api/chats/${chat.id}/stop`).catch(() => undefined);
+                stop.current?.();
+              }}
+              size={48}
+            >
               <StopIcon size={20} color={C.ink} />
             </RoundButton>
           ) : (

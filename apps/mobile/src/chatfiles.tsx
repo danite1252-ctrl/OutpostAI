@@ -168,6 +168,53 @@ export function FileActions({ api, chatId, actions, files, live }: { api: Outpos
       {changed.map((a) => (
         <ChangeRow key={a.change_id!} api={api} chatId={chatId} action={a} files={files} />
       ))}
+      {changed.length >= 2 && <AllChanges api={api} chatId={chatId} actions={changed} files={files} />}
+    </View>
+  );
+}
+
+/** A reply's changes in server folders, all at once (a PC folder's are done on that PC). */
+function AllChanges({ api, chatId, actions, files }: { api: Outpost; chatId: string; actions: FileAction[]; files: ChatFiles }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const mine = actions
+    .map((a) => files.changes.find((c) => c.id === a.change_id))
+    .filter((c): c is FileChange => !!c && c.kind !== "pc");
+  const waiting = mine.filter((c) => c.status === "proposed");
+  const applied = mine.filter((c) => c.status === "applied");
+  if (waiting.length < 2 && applied.length < 2) return null;
+  async function all(what: "apply" | "skip" | "undo") {
+    const list = what === "undo" ? [...applied].reverse() : waiting;
+    setBusy(true);
+    setNote(null);
+    let done = 0;
+    let left = 0;
+    for (const c of list) {
+      try {
+        const updated = await api.json<FileChange>("POST", `/api/chats/${chatId}/changes/${c.id}/${what}`, { force: false });
+        files.setChanges((cs) => cs.map((x) => (x.id === updated.id ? updated : x)));
+        done++;
+      } catch (e) {
+        if (e instanceof ApiError && e.code === "changed_since") left++;
+        else {
+          setNote(`${done} done, then: ${e instanceof Error ? e.message : "it stopped"}`);
+          setBusy(false);
+          return;
+        }
+      }
+    }
+    setNote(left ? `${done} done; ${left} left because the file changed since (do those one by one).` : null);
+    setBusy(false);
+  }
+  return (
+    <View style={{ gap: 6, borderTopWidth: 1, borderTopColor: C.line, paddingTop: 8 }}>
+      <Text style={{ color: C.muted, fontSize: 13 }}>All changes in this reply:</Text>
+      <View style={[s.row, { flexWrap: "wrap" }]}>
+        {waiting.length >= 2 && <Chip label={busy ? "Working…" : `Apply all (${waiting.length})`} active onPress={() => void all("apply")} />}
+        {waiting.length >= 2 && <Chip label="Skip all" onPress={() => void all("skip")} />}
+        {applied.length >= 2 && <Chip label={`Undo all (${applied.length})`} onPress={() => void all("undo")} />}
+      </View>
+      {note && <Text style={{ color: C.amber, fontSize: 13 }}>{note}</Text>}
     </View>
   );
 }

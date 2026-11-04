@@ -73,7 +73,7 @@ export function useDeviceTools(token: string) {
             const req = (await r.json()) as FolderRequest & { kind?: string };
             const work =
               req.kind === "folder"
-                ? pcFolders.op(req.folder, req.op, req.path, { text: req.text, content: req.content, command: req.command, timeout: req.timeout })
+                ? pcFolders.op(req.folder, req.op, req.path, { text: req.text, content: req.content, command: req.command, timeout: req.timeout, runId: req.run_id })
                 : pcTools.call(req.server ?? "", req.tool ?? "", req.arguments ?? {});
             void work
               .catch((e) => ({ error: typeof e === "string" ? e : "That couldn't be done on this PC." }))

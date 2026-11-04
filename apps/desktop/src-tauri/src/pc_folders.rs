@@ -93,9 +93,15 @@ pub async fn pc_folder_op(
     content: Option<String>,
     command: Option<String>,
     timeout: Option<u64>,
+    run_id: Option<String>,
 ) -> Value {
     let result = if op == "run" {
-        run_command(&id, &path, command.unwrap_or_default(), timeout.unwrap_or(600)).await
+        run_command(&id, &path, command.unwrap_or_default(), timeout.unwrap_or(600), run_id).await
+    } else if op == "cancel" {
+        // Stop a running command (the person pressed Stop).
+        let pid = run_id.and_then(|r| RUNNING.lock().unwrap_or_else(|p| p.into_inner()).remove(&r));
+        stop_tree(pid);
+        Ok(json!({ "ok": true }))
     } else {
         run(&id, &op, &path, text, content).await
     };
@@ -105,13 +111,16 @@ pub async fn pc_folder_op(
     }
 }
 
+/// Commands running now (their run id → process id), so Stop can end them.
+static RUNNING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> = std::sync::LazyLock::new(Default::default);
+
 /// Most of a command's output kept (its end).
 const OUTPUT_KEEP: usize = 256 * 1024;
 
 /// Run a command line in the folder (or a sub-folder of it), with Windows' command prompt
 /// (`sh` elsewhere), as you, with no window. Stopped (with everything it started) after
 /// `timeout` seconds. Its output and errors are kept together, in order.
-async fn run_command(id: &str, path: &str, command: String, timeout: u64) -> Result<Value, String> {
+async fn run_command(id: &str, path: &str, command: String, timeout: u64, run_id: Option<String>) -> Result<Value, String> {
     use tokio::io::AsyncReadExt;
     let folder = find(id)?;
     let root = PathBuf::from(&folder.path);
@@ -149,6 +158,9 @@ async fn run_command(id: &str, path: &str, command: String, timeout: u64) -> Res
     let started = std::time::Instant::now();
     let mut child = cmd.spawn().map_err(|e| format!("Couldn't start it: {e}"))?;
     let pid = child.id();
+    if let (Some(r), Some(p)) = (&run_id, pid) {
+        RUNNING.lock().unwrap_or_else(|p| p.into_inner()).insert(r.clone(), p);
+    }
     // Both streams into one, as they come (only the end kept if it's huge).
     let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
     let mut readers = Vec::new();
@@ -177,6 +189,9 @@ async fn run_command(id: &str, path: &str, command: String, timeout: u64) -> Res
         }));
     }
     let finished = tokio::time::timeout(std::time::Duration::from_secs(timeout.clamp(10, 3600)), child.wait()).await;
+    if let Some(r) = &run_id {
+        RUNNING.lock().unwrap_or_else(|p| p.into_inner()).remove(r);
+    }
     let (exit_code, timed_out) = match finished {
         Ok(Ok(status)) => (status.code(), false),
         Ok(Err(e)) => return Err(e.to_string()),

@@ -155,7 +155,7 @@ export function PeopleScreen({ api, isOwner, myAccountId, onClose }: { api: Outp
         </Section>
       )}
       <Section title={isOwner ? "Paired phones and devices" : "Paired with your account"}>
-        <Button kind="ghost" title="Pair another phone of mine" onPress={() => void pairMine()} />
+        <Button kind="ghost" title="Pair another device of mine" onPress={() => void pairMine()} />
         <ListState loading={devices === null} error={null} empty={devices?.length === 0} emptyText="None yet." />
         {(devices ?? []).map((d) => (
           <View key={d.id} style={[s.card, s.row]}>
@@ -227,14 +227,14 @@ function InviteScreen({
 /** A pairing code or invite: the QR to scan, and the link to send. */
 function CodeScreen({ view, onClose }: { view: PairingView; onClose: () => void }) {
   const invite = view.invite;
-  const title = invite ? (invite.kind === "reset" ? `New PIN for ${invite.name}` : `Invite for ${invite.name}`) : "Pair a phone";
+  const title = invite ? (invite.kind === "reset" ? `New PIN for ${invite.name}` : `Invite for ${invite.name}`) : "Pair a device";
   const until = new Date(view.expires_at * 1000).toLocaleString();
   return (
     <Screen title={title} onClose={onClose} back="Done">
       <P muted>
         {invite
           ? "Scan this with Outpost on their phone (Pair › Scan), or send them the link. They pick their own PIN."
-          : "On the other phone, open Outpost › Pair and scan this, or type the code."}
+          : "On another phone, open Outpost › Pair and scan this. On a PC, choose Connect to an Outpost server, type the server's address, then this code."}
       </P>
       <View style={{ alignSelf: "center", backgroundColor: "#fff", padding: 12, borderRadius: 12 }}>
         <SvgXml xml={view.qr_svg} width={240} height={240} />

@@ -42,6 +42,33 @@ const OUTPUT_LIMIT: usize = 6_000;
 pub const SKIP_DIRS: [&str; 11] =
     [".git", "node_modules", "target", "dist", "build", ".next", ".venv", "venv", "__pycache__", ".idea", ".vs"];
 
+/// Chats whose reply the person stopped (Stop): the reply ends at its next step, and a
+/// command it's running is stopped on the PC.
+static STOPPED: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
+
+/// The person pressed Stop on this chat's reply.
+pub fn request_stop(chat_id: &str) {
+    STOPPED.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(Default::default).insert(chat_id.to_string());
+}
+
+/// Was this chat's reply stopped?
+pub fn stopped(chat_id: &str) -> bool {
+    STOPPED.lock().unwrap_or_else(|p| p.into_inner()).as_ref().is_some_and(|s| s.contains(chat_id))
+}
+
+/// A new reply starts: forget an earlier Stop.
+pub fn clear_stop(chat_id: &str) {
+    if let Some(s) = STOPPED.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+        s.remove(chat_id);
+    }
+}
+
+async fn until_stopped(chat_id: &str) {
+    while !stopped(chat_id) {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+}
+
 /// Requests waiting for a desktop app to answer (PC folders).
 #[derive(Clone, Default)]
 pub struct Relay {
@@ -537,9 +564,25 @@ impl Workspace {
         }
         let secs = mins * 60;
         let started = std::time::Instant::now();
-        let got = self
-            .pc_within(folder, "run", inner, json!({ "command": command, "timeout": secs }), Duration::from_secs(secs + 30))
-            .await;
+        let run_id = uuid::Uuid::new_v4().simple().to_string();
+        let running = self.pc_within(folder, "run", inner, json!({ "command": command, "timeout": secs, "run_id": run_id }), Duration::from_secs(secs + 30));
+        let got = tokio::select! {
+            got = running => got,
+            _ = until_stopped(&self.chat_id) => {
+                // Stop it on the PC (through its open app: the reply's own stream may be gone).
+                if let Some((session, _)) = self.state.device_tools.for_folder(&self.account_id, &folder.id) {
+                    let _ = self
+                        .state
+                        .device_tools
+                        .call(&session, json!({ "kind": "folder", "folder": folder.id, "op": "cancel", "path": "", "run_id": run_id }), Duration::from_secs(15))
+                        .await;
+                }
+                return Outcome {
+                    reply: format!("The user pressed Stop, so `{command}` was stopped."),
+                    action: FileAction { failed: true, ..note("stopped".into()) },
+                };
+            }
+        };
         let took = started.elapsed().as_secs();
         match got {
             Err(e) => fail("run", shown, e),

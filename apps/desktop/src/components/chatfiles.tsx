@@ -419,6 +419,84 @@ export function FileActions({
       {changed.map((a) => (
         <ChangeRow key={a.change_id!} token={token} chatId={chatId} action={a} files={files} />
       ))}
+      {changed.length >= 2 && chatId && <AllChanges token={token} chatId={chatId} actions={changed} files={files} />}
+    </div>
+  );
+}
+
+/** A reply's changes, all at once: apply or skip the ones waiting, or undo the ones made
+ *  (newest first). Ones whose file changed since are left for you to look at. */
+function AllChanges({ token, chatId, actions, files }: { token: string; chatId: string; actions: FileAction[]; files: ChatFiles }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const mine = actions
+    .map((a) => files.changes.find((c) => c.id === a.change_id))
+    .filter((c): c is NonNullable<typeof c> => !!c && (c.kind !== "pc" || files.local.some((l) => l.id === c.folder_id)));
+  const waiting = mine.filter((c) => c.status === "proposed");
+  const applied = mine.filter((c) => c.status === "applied");
+  if (waiting.length < 2 && applied.length < 2) return null;
+
+  async function all(what: "apply" | "skip" | "undo") {
+    const list = what === "undo" ? [...applied].reverse() : waiting;
+    setBusy(true);
+    setNote(null);
+    let done = 0;
+    let left = 0;
+    try {
+      for (const c of list) {
+        if (c.kind === "pc" && what !== "skip") {
+          const expect = what === "apply" ? c.before : c.after;
+          const becomes = what === "apply" ? c.after : c.before;
+          const now = await pcFolders.op(c.folder_id, "read", c.path);
+          if (now.error) throw new Error(String(now.error));
+          if ((now.missing ? null : String(now.text ?? "")) !== expect) {
+            left++;
+            continue;
+          }
+          const r = becomes === null ? await pcFolders.op(c.folder_id, "delete", c.path) : await pcFolders.op(c.folder_id, "write", c.path, { content: becomes });
+          if (r.error) throw new Error(String(r.error));
+          const updated = await filesApi.act(token, chatId, c.id, what, { done_on_pc: true });
+          files.setChanges((cs) => cs.map((x) => (x.id === updated.id ? updated : x)));
+        } else {
+          try {
+            const updated = await filesApi.act(token, chatId, c.id, what, {});
+            files.setChanges((cs) => cs.map((x) => (x.id === updated.id ? updated : x)));
+          } catch (e) {
+            if (e instanceof ApiError && e.code === "changed_since") {
+              left++;
+              continue;
+            }
+            throw e;
+          }
+        }
+        done++;
+      }
+      setNote(left ? `${done} done; ${left} left because the file changed since (do those one by one).` : null);
+    } catch (e) {
+      setNote(`${done} done, then: ${message(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-t border-line pt-2">
+      <span className="text-xs text-muted">All changes in this reply:</span>
+      {waiting.length >= 2 && (
+        <>
+          <Button disabled={busy} onClick={() => void all("apply")}>
+            Apply all ({waiting.length})
+          </Button>
+          <Button variant="ghost" disabled={busy} onClick={() => void all("skip")}>
+            Skip all
+          </Button>
+        </>
+      )}
+      {applied.length >= 2 && (
+        <Button variant="ghost" disabled={busy} onClick={() => void all("undo")}>
+          Undo all ({applied.length})
+        </Button>
+      )}
+      {note && <span className="text-xs text-amber">{note}</span>}
     </div>
   );
 }

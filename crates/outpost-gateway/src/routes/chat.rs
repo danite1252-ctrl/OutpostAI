@@ -691,7 +691,12 @@ pub async fn send_message(
         if !tools.is_empty() {
             body["tools"] = serde_json::Value::Array(tools);
         }
+        crate::workspace::clear_stop(&chat_id);
         for round in 0..=max_rounds {
+            if round > 0 && crate::workspace::stopped(&chat_id) {
+                failure = Some("Stopped.".into());
+                break;
+            }
             let before = content.len();
             let (calls, failed) = stream_round(&round_state, &body, &tx, &mut content, &mut thinking).await;
             failure = failed;
@@ -810,6 +815,17 @@ pub struct RemovedMessages {
     pub removed: Vec<String>,
     /// Memories learned from them that were forgotten.
     pub forgotten: u64,
+}
+
+/// Stop the reply being written in one of my chats: it ends at its next step, and a command
+/// it's running (a build) is stopped. What it wrote so far is kept.
+#[utoipa::path(post, path = "/api/chats/{id}/stop", tag = "chat", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Chat id")),
+    responses((status = 204, description = "Stopping"), (status = 404, description = "Not found", body = ErrorBody)))]
+pub async fn stop_reply(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {
+    let chat = chats::get(&state.pool, &auth.account.id, &id).await?;
+    crate::workspace::request_stop(&chat.id);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Delete a message from one of my chats. A message I sent takes its reply with it,

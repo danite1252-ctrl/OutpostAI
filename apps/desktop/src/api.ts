@@ -420,7 +420,7 @@ export const pcFolders = {
     id: string,
     op: string,
     path: string,
-    extra: { text?: string; content?: string; command?: string; timeout?: number } = {},
+    extra: { text?: string; content?: string; command?: string; timeout?: number; runId?: string } = {},
   ): Promise<Record<string, unknown>> {
     const { invoke } = await import("@tauri-apps/api/core");
     return invoke<Record<string, unknown>>("pc_folder_op", {
@@ -431,6 +431,7 @@ export const pcFolders = {
       content: extra.content ?? null,
       command: extra.command ?? null,
       timeout: extra.timeout ?? null,
+      runId: extra.runId ?? null,
     });
   },
 };
@@ -445,6 +446,7 @@ export interface FolderRequest {
   content?: string;
   command?: string;
   timeout?: number;
+  run_id?: string;
   server?: string;
   tool?: string;
   arguments?: unknown;
@@ -461,7 +463,7 @@ async function answerFileRequest(
     answer =
       req.op === "mcp"
         ? await pcTools.call(req.server ?? "", req.tool ?? "", req.arguments ?? {})
-        : await pcFolders.op(req.folder, req.op, req.path, { text: req.text, content: req.content, command: req.command, timeout: req.timeout });
+        : await pcFolders.op(req.folder, req.op, req.path, { text: req.text, content: req.content, command: req.command, timeout: req.timeout, runId: req.run_id });
   } catch (e) {
     answer = { error: typeof e === "string" ? e : "The desktop app couldn't do that." };
   }
@@ -973,6 +975,8 @@ export const api = {
   updateChat: (token: string, id: string, body: { title?: string; persona_id?: string; model?: string }) =>
     request<Chat>("PATCH", `/api/chats/${id}`, { token, body }),
   deleteChat: (token: string, id: string) => request<void>("DELETE", `/api/chats/${id}`, { token }),
+  /** Stop the reply being written (and any command it's running). */
+  stopReply: (token: string, id: string) => request<void>("POST", `/api/chats/${encodeURIComponent(id)}/stop`, { token }),
   /** Deletes a message (yours take their reply too) and what was learned from it. */
   deleteMessage: (token: string, chatId: string, messageId: string) =>
     request<{ removed: string[]; forgotten: number }>(

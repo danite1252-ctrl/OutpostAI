@@ -256,3 +256,31 @@ async fn the_phone_signs_in_through_the_server() {
     let (_, gc) = call(&app, "GET", "/api/tools/google-client", Some(&sj), None).await;
     assert_eq!(gc["client_id"], "abc.apps.googleusercontent.com");
 }
+
+#[tokio::test]
+async fn ready_made_personas_come_with_the_tools_you_have() {
+    let (app, _state) = app().await;
+    let (dan, sj, _) = people(&app).await;
+    let (s, list) = call(&app, "GET", "/api/personas/templates", Some(&sj), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(list.as_array().unwrap().iter().any(|t| t["id"] == "devils-advocate"));
+
+    // Dan shares DuckDuckGo; SJ's Researcher gets it (and nothing she doesn't have).
+    let (_, ddg) = call(&app, "POST", "/api/tools", Some(&dan), Some(json!({
+        "name": "DuckDuckGo Search", "catalog_id": "duckduckgo", "transport": "stdio", "command": "uvx", "args": ["duckduckgo-mcp-server"]
+    }))).await;
+    call(&app, "PATCH", &format!("/api/tools/{}", ddg["id"].as_str().unwrap()), Some(&dan), Some(json!({ "shared": true }))).await;
+    let (s, added) = call(&app, "POST", "/api/personas/templates/researcher", Some(&sj), None).await;
+    assert_eq!(s, StatusCode::CREATED, "{added}");
+    assert_eq!(added["persona"]["name"], "Researcher");
+    assert_eq!(added["tools"], json!(["DuckDuckGo Search"]));
+    let pid = added["persona"]["id"].as_str().unwrap();
+    let (_, ids) = call(&app, "GET", &format!("/api/personas/{pid}/tools"), Some(&sj), None).await;
+    assert_eq!(ids, json!([ddg["id"]]));
+    // Twice is fine (a second one, its own id).
+    let (s, again) = call(&app, "POST", "/api/personas/templates/researcher", Some(&sj), None).await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_ne!(again["persona"]["id"], added["persona"]["id"]);
+    let (s, _) = call(&app, "POST", "/api/personas/templates/nope", Some(&sj), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}

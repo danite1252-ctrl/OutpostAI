@@ -73,6 +73,11 @@ Whisper and Kokoro.
 - **Personas** (side bar): name, colour, model, instructions, voice, and **memory**. With
   learning on, the persona notes lasting facts you mention and recalls the relevant ones
   later. You can see, edit and forget every memory.
+- **Ready-made personas** (Personas › Ready-made, or on the phone): Assistant, Coder,
+  Researcher, Devil's Advocate (questions your plans), Writing Coach and Translator, plus fun
+  ones: Rizz Coach, Roast Master, Supervillain and Mr Sarcasm. Adding one makes it yours to
+  change, and gives it the library tools that suit it (search for the Researcher, say) when
+  you have them.
 - **Draw from chat**: `/draw a lighthouse at dusk`, `draw Kat at the beach` (with a
   character's name), `4 pictures of Kat at the beach`, or several scenes separated by `;`.
   The picture appears in the chat and the Gallery.
@@ -192,6 +197,11 @@ again until it works (up to 30 rounds in one reply).
 - A command is stopped after 10 minutes (the model can ask for up to 30), with everything it
   started. Only commands that finish by themselves work: not servers.
 - Long output comes back to the model as the error lines and the end, so it fits.
+- **Stop** ends the reply at its next step and stops a command it's running (with everything
+  it started). What it wrote so far is kept.
+- A reply that changed several files has **Apply all** / **Skip all** (asking first) or
+  **Undo all** (newest first) under its changes. Files changed since are left for you to do
+  one by one.
 
 ## Create, Gallery and the queue
 
