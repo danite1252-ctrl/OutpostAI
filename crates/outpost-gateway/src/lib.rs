@@ -16,6 +16,7 @@ pub mod helper_pc;
 pub mod google_tools;
 pub mod helpers;
 pub mod lent;
+pub mod live;
 pub mod llm;
 pub mod mcp;
 pub mod mcp_client;
@@ -27,6 +28,7 @@ pub mod persona_templates;
 pub mod print3d;
 pub mod remote;
 pub mod routes;
+pub mod runner;
 pub mod server_tools;
 pub mod setup_code;
 pub mod tailscale;
@@ -245,6 +247,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/chats/{id}/messages/{message_id}", delete(chat::delete_message))
         .route("/api/chats/{id}/stop", post(chat::stop_reply))
+        .route("/api/chats/{id}/live", get(chat::live))
         .route("/api/files/{id}", get(chat::get_file))
         .route("/api/memory", get(chat::list_memory).post(chat::add_memory))
         .route(
@@ -364,6 +367,8 @@ pub fn router(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(routes::folders::MAX_UPLOAD)),
         )
         .route("/api/folders/{id}/zip", get(routes::folders::zip))
+        .route("/api/folders/{id}/processes", get(routes::folders::processes))
+        .route("/api/folders/{id}/processes/{name}/stop", post(routes::folders::stop_process))
         .route("/api/chats/{id}/folders", get(routes::folders::chat_folders).put(routes::folders::set_chat_folders))
         .route("/api/chats/{id}/file-mode", put(routes::folders::set_file_mode))
         .route("/api/chats/{id}/file-answers/{request}", post(routes::folders::answer))
@@ -414,6 +419,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/updates/check", post(system::check_updates))
         .route("/api/updates/install", post(system::install_server_update))
         .route("/api/system/restart", post(system::restart))
+        .route("/api/system/busy", get(system::busy))
         .route("/api/updates/settings", put(system::update_settings))
         .route("/api/hardware", get(models::hardware))
         .route("/api/models", get(models::overview))

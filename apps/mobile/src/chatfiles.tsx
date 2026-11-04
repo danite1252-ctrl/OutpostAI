@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Modal, Pressable, ScrollView, Text, View } from "react-native";
+import OutpostNet from "../modules/outpost-net";
 import { ApiError, type Outpost } from "./outpost";
 import { Button, C, Chip, ErrorText, P, s } from "./ui";
 
@@ -110,6 +111,7 @@ export function FilesSheet({
                   <Text style={{ color: C.muted, fontSize: 13 }}>
                     {f.kind === "server" ? "On the server" : `On ${f.device ?? "a PC"} (used from the desktop app there)`}
                   </Text>
+                  {f.kind === "server" && <Running api={api} folderId={f.id} />}
                 </View>
                 <Chip label="Remove" onPress={() => void save(files.folders.filter((x) => !(x.kind === f.kind && x.id === f.id)))} />
               </View>
@@ -134,21 +136,105 @@ export function FilesSheet({
   );
 }
 
-const VERB: Record<string, string> = { list: "Looked in", read: "Read", search: "Searched", write: "Wrote", edit: "Changed", tool: "Tried", mcp: "Used", run: "Ran in" };
+/** What the chat started in a server folder that keeps running (a test server): stop it. */
+function Running({ api, folderId }: { api: Outpost; folderId: string }) {
+  const [list, setList] = useState<{ name: string; command?: string; running: boolean }[]>([]);
+  const look = useCallback(() => {
+    api.get<{ name: string; command?: string; running: boolean }[]>(`/api/folders/${folderId}/processes`).then(setList, () => setList([]));
+  }, [api, folderId]);
+  useEffect(() => {
+    look();
+    const t = setInterval(look, 5000);
+    return () => clearInterval(t);
+  }, [look]);
+  return (
+    <>
+      {list
+        .filter((p) => p.running)
+        .map((p) => (
+          <View key={p.name} style={[s.row, { alignItems: "center", marginTop: 4 }]}>
+            <Text numberOfLines={1} style={{ color: C.ok, fontSize: 12, fontFamily: "monospace", flex: 1 }}>
+              ● {p.name}
+              {p.command ? ` · ${p.command}` : ""}
+            </Text>
+            <Chip
+              label="Stop"
+              color={C.danger}
+              onPress={() =>
+                void api
+                  .json("POST", `/api/folders/${folderId}/processes/${encodeURIComponent(p.name)}/stop`)
+                  .catch(() => undefined)
+                  .then(() => setTimeout(look, 800))
+              }
+            />
+          </View>
+        ))}
+    </>
+  );
+}
+
+const VERB: Record<string, string> = {
+  list: "Looked in",
+  read: "Read",
+  search: "Searched",
+  write: "Wrote",
+  edit: "Changed",
+  tool: "Tried",
+  mcp: "Used",
+  run: "Ran in",
+  start: "Started in",
+  output: "Read the log in",
+  input: "Typed into",
+  stop: "Stopped in",
+  download: "Built",
+};
+
+/** A file a build made in a server folder: save it to the phone's Download/Outpost. */
+function BuiltFile({ api, action, files }: { api: Outpost; action: FileAction; files: ChatFiles }) {
+  const [state, setState] = useState<string | null>(null);
+  const [folderName, ...rest] = action.path.split("/");
+  const inner = rest.join("/");
+  const folder = files.folders.find((f) => f.kind !== "pc" && f.name.toLowerCase() === folderName.toLowerCase());
+  const name = rest[rest.length - 1] ?? "build.jar";
+  async function save() {
+    if (!folder) return;
+    setState("Downloading…");
+    try {
+      const file = await api.download(`/api/folders/${folder.id}/file?path=${encodeURIComponent(inner)}`, `${Date.now()}-${name}`);
+      await OutpostNet.saveToPhone(file, name, "application/java-archive");
+      setState("Saved to Download/Outpost");
+    } catch (e) {
+      setState(e instanceof Error ? e.message : "Couldn't save it.");
+    }
+  }
+  return (
+    <View style={[s.row, { flexWrap: "wrap" }]}>
+      <Text numberOfLines={1} style={{ color: C.ok, fontSize: 12, fontFamily: "monospace", flex: 1 }}>
+        Built {action.path}
+      </Text>
+      {folder && <Chip label="Download" onPress={() => void save()} />}
+      {state && <Text style={{ color: C.muted, fontSize: 12 }}>{state}</Text>}
+    </View>
+  );
+}
 
 /** Under a reply: what it did with files, and its changes. */
 export function FileActions({ api, chatId, actions, files, live }: { api: Outpost; chatId: string; actions: FileAction[]; files: ChatFiles; live?: boolean }) {
   const [open, setOpen] = useState(false);
-  const looked = actions.filter((a) => !a.change_id && a.op !== "run");
-  const runs = actions.filter((a) => a.op === "run");
+  const looked = actions.filter((a) => !a.change_id && !["run", "start", "stop", "download"].includes(a.op));
+  const runs = actions.filter((a) => ["run", "start", "stop"].includes(a.op));
+  const built = actions.filter((a) => a.op === "download");
   const changed = actions.filter((a) => a.change_id);
   return (
     <View style={[s.card, { gap: 8, paddingVertical: 10 }]}>
       {runs.map((a, i) => (
         <Text key={`run-${i}`} style={{ color: a.failed ? C.danger : C.ok, fontSize: 12, fontFamily: "monospace" }}>
-          Ran in {a.path}
+          {VERB[a.op]} {a.path}
           {a.note ? ` · ${a.note}` : ""}
         </Text>
+      ))}
+      {built.map((a, i) => (
+        <BuiltFile key={`built-${i}`} api={api} action={a} files={files} />
       ))}
       {looked.length > 0 && (
         <Pressable accessibilityRole="button" onPress={() => setOpen((o) => !o)}>

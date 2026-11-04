@@ -163,6 +163,25 @@ pub async fn delete_file(State(state): State<AppState>, auth: Auth, Path(id): Pa
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// What's been started in one of my server folders (test servers...), running or ended.
+#[utoipa::path(get, path = "/api/folders/{id}/processes", tag = "files", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Folder id")),
+    responses((status = 200, description = "Processes: name, command, running, minutes")))]
+pub async fn processes(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<Vec<serde_json::Value>>> {
+    let f = chat_files::folder(&state.pool, &auth.account.id, &id).await?;
+    Ok(Json(crate::runner::describe(&format!("{}:", f.id))))
+}
+
+/// Stop something started in one of my server folders.
+#[utoipa::path(post, path = "/api/folders/{id}/processes/{name}/stop", tag = "files", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Folder id"), ("name" = String, Path, description = "Its name")),
+    responses((status = 204, description = "Stopped"), (status = 404, description = "Not found", body = ErrorBody)))]
+pub async fn stop_process(State(state): State<AppState>, auth: Auth, Path((id, name)): Path<(String, String)>) -> ApiResult<StatusCode> {
+    let f = chat_files::folder(&state.pool, &auth.account.id, &id).await?;
+    crate::runner::stop(&format!("{}:{name}", f.id)).map_err(|e| ApiError::new(StatusCode::NOT_FOUND, "not_found", e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// One of my server folders as a zip.
 #[utoipa::path(get, path = "/api/folders/{id}/zip", tag = "files", security(("bearer" = [])),
     params(("id" = String, Path, description = "Folder id")),

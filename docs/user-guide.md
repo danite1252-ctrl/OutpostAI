@@ -186,25 +186,43 @@ or change them. It needs a model with the **tools** badge (Qwen 3, Llama 3.1 and
 
 #### Building and running commands (coding)
 
-In a chat with a **folder on a PC**, the model can also run commands there, such as
-`gradlew build`, `mvn package` or `npm test`, then read the errors, fix the code and build
-again until it works (up to 30 rounds in one reply).
+In a chat with a folder, the model can also run commands there, such as `gradlew build`,
+`mvn package` or `npm test`, then read the errors, fix the code and build again until it
+works (up to 30 rounds in one reply).
 
-- A command runs on the PC that has the folder, in that folder, as you (Java, Gradle and the
-  rest come from that PC). Carry on the chat from your phone or another PC and it still runs
-  there, as long as that PC is on with the Outpost app open.
+- **A folder on a PC**: a command runs on that PC, in that folder, as you (Java, Gradle and
+  the rest come from that PC). Carry on the chat from your phone or another PC and it still
+  runs there, as long as that PC is on with the Outpost app open.
+- **A server folder**: a command runs on the Outpost server (Linux), so a chat started on the
+  phone can build without a PC. Outpost downloads Java for Java projects itself (Temurin 21,
+  or 25 when the build files ask for it) and runs `gradlew` as `./gradlew`; projects need their
+  wrapper (`gradlew`, `mvnw`). When a build makes a `.jar` (in `build/libs` or `target`), it's
+  shown under the reply with **Download** (on the phone it's saved in Download/Outpost).
+  - With **bubblewrap** installed on the server (`sudo apt install bubblewrap`), commands run
+    sandboxed: they see only that folder, Java and a build cache, nothing else on the server.
+    Then members can run commands too; without it, only owners can.
 - **Asking first**: a command shows **Allow**, **Always allow … here** (that program, in that
   folder, from then on) and **Skip**. Commands chained together (`&&`, `|`, `>`) always ask,
   and shells like `cmd` and `powershell` can't be always allowed. A few commands never run
   (formatting drives, deleting folders of files, shutting down).
 - A command is stopped after 10 minutes (the model can ask for up to 30), with everything it
-  started. Only commands that finish by themselves work: not servers.
+  started.
+- **Things that keep running** (a test Paper server, a dev server): the model starts them
+  in the background (asking first, like a command), reads their log, types console commands
+  into them (`plugins`, `stop`) and stops them when it's done. **Files** shows what's still
+  running in each folder, with **Stop**. Anything left running is stopped after 3 hours.
 - Long output comes back to the model as the error lines and the end, so it fits.
 - **Stop** ends the reply at its next step and stops a command it's running (with everything
   it started). What it wrote so far is kept.
 - A reply that changed several files has **Apply all** / **Skip all** (asking first) or
   **Undo all** (newest first) under its changes. Files changed since are left for you to do
   one by one.
+
+#### Following a reply on another device
+
+Open a chat on the phone (or another PC) while its reply is being written somewhere else and
+you see it as it's written, from the start, including any request to allow a command, which
+you can answer there. Stop works from there too.
 
 ## Create, Gallery and the queue
 
@@ -321,6 +339,10 @@ download is checked against Outpost's signing key first). Nothing installs witho
 pressing the button.
 
 Switch the daily check off, or check now, in **Settings › Updates**.
+
+Updating or restarting a server asks first when something is running that it would stop: a
+reply being written, a Create job, a build or a test server. Automatic updates wait until
+nothing is running.
 
 ## Privacy: what leaves your PC
 

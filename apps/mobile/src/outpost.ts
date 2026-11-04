@@ -228,7 +228,7 @@ export class Outpost {
   }
 
   /** A Server-Sent Events reply. Returns a function that stops following it. */
-  stream(path: string, body: unknown, on: StreamHandlers): () => void {
+  stream(path: string, body: unknown, on: StreamHandlers, method: "POST" | "GET" = "POST"): () => void {
     const id = `s${++streamIds}-${Date.now()}`;
     let name = "message";
     let data: string[] = [];
@@ -269,9 +269,9 @@ export class Outpost {
     ];
     OutpostNet.stream(id, {
       url: this.base() + path,
-      method: "POST",
-      headers: { ...this.headers({ Accept: "text/event-stream" }), "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      method,
+      headers: method === "GET" ? this.headers({ Accept: "text/event-stream" }) : { ...this.headers({ Accept: "text/event-stream" }), "Content-Type": "application/json" },
+      body: method === "GET" ? null : JSON.stringify(body),
       fingerprint: this.conn.fingerprint,
     });
     return () => {

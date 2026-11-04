@@ -66,8 +66,18 @@ function useAppUpdate() {
   return { version, newer, look };
 }
 
+/** Before a server restart (an update or Restart): if something's running that it would
+ *  interrupt (a reply being written, a build...), ask first. True: go ahead. */
+export async function okToRestart(token: string, what: "update" | "restart"): Promise<boolean> {
+  const busy = await systemApi.busy(token).catch(() => null);
+  if (!busy?.summary) return true;
+  const doing = what === "update" ? "Updating restarts the server, which stops it" : "Restarting stops it";
+  return areYouSure(`${busy.summary} on the server. ${doing}. ${what === "update" ? "Update" : "Restart"} anyway?`);
+}
+
 /** Update the server and wait for it to come back with the new version. */
 export async function updateServer(token: string, onProgress: (text: string) => void) {
+  if (!(await okToRestart(token, "update"))) return;
   onProgress("Downloading and checking the update…");
   const before = (await systemApi.updates(token).catch(() => null))?.current;
   await systemApi.installServer(token);

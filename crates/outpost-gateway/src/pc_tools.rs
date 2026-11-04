@@ -263,6 +263,7 @@ impl PcTools {
                             ask what they'd like instead."
                         .into(),
                     action: FileAction { op: "mcp".into(), path: shown, note: Some("Not confirmed".into()), change_id: None, failed: true },
+                    more: Vec::new(),
                 };
             }
         }
@@ -291,6 +292,7 @@ impl PcTools {
                 Outcome {
                     reply: if is_error { format!("The tool reported an error: {reply}") } else { reply },
                     action: FileAction { op: "mcp".into(), path: shown, note, change_id: None, failed: is_error },
+                    more: Vec::new(),
                 }
             }
             Err(why) => fail("mcp", &shown, why),

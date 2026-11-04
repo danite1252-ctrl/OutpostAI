@@ -348,7 +348,7 @@ export interface ChatFolder {
 /** One thing a reply did with files. */
 export interface FileAction {
   /** `mcp`: a tool on this PC ("GitHub › search_issues"). */
-  op: "list" | "read" | "search" | "write" | "edit" | "tool" | "mcp" | "run";
+  op: "list" | "read" | "search" | "write" | "edit" | "tool" | "mcp" | "run" | "start" | "output" | "input" | "stop" | "download";
   path: string;
   note?: string | null;
   change_id?: string | null;
@@ -424,7 +424,7 @@ export const pcFolders = {
     id: string,
     op: string,
     path: string,
-    extra: { text?: string; content?: string; command?: string; timeout?: number; runId?: string } = {},
+    extra: { text?: string; content?: string; command?: string; timeout?: number; runId?: string; name?: string; lines?: number } = {},
   ): Promise<Record<string, unknown>> {
     const { invoke } = await import("@tauri-apps/api/core");
     return invoke<Record<string, unknown>>("pc_folder_op", {
@@ -436,6 +436,8 @@ export const pcFolders = {
       command: extra.command ?? null,
       timeout: extra.timeout ?? null,
       runId: extra.runId ?? null,
+      name: extra.name ?? null,
+      lines: extra.lines ?? null,
     });
   },
 };
@@ -451,6 +453,8 @@ export interface FolderRequest {
   command?: string;
   timeout?: number;
   run_id?: string;
+  name?: string;
+  lines?: number;
   server?: string;
   tool?: string;
   arguments?: unknown;
@@ -467,7 +471,7 @@ async function answerFileRequest(
     answer =
       req.op === "mcp"
         ? await pcTools.call(req.server ?? "", req.tool ?? "", req.arguments ?? {})
-        : await pcFolders.op(req.folder, req.op, req.path, { text: req.text, content: req.content, command: req.command, timeout: req.timeout, runId: req.run_id });
+        : await pcFolders.op(req.folder, req.op, req.path, { text: req.text, content: req.content, command: req.command, timeout: req.timeout, runId: req.run_id, name: req.name, lines: req.lines });
   } catch (e) {
     answer = { error: typeof e === "string" ? e : "The desktop app couldn't do that." };
   }
@@ -1092,7 +1096,24 @@ export async function streamMessage(
     const e = data?.error ?? {};
     throw new ApiError(res.status, e.code ?? "unknown", e.message ?? `Request failed (${res.status}).`);
   }
-  const reader = res.body.getReader();
+  await readReply(res.body, token, chatId, on, false);
+}
+
+/**
+ * Follow a reply being written in a chat from another device (or before this app opened it):
+ * what it has written so far, then the rest, through the same handlers. False when no reply
+ * is being written.
+ */
+export async function followReply(token: string, chatId: string, on: StreamHandlers, signal?: AbortSignal): Promise<boolean> {
+  const res = await fetch(`${GATEWAY}/api/chats/${chatId}/live`, { headers: { Authorization: `Bearer ${token}` }, signal }).catch(() => null);
+  if (!res || res.status !== 200 || !res.body) return false;
+  await readReply(res.body, token, chatId, on, true);
+  return true;
+}
+
+/** Read a streamed reply's events. A follower leaves file requests to the device that asked. */
+async function readReply(stream: ReadableStream<Uint8Array>, token: string, chatId: string, on: StreamHandlers, follower: boolean) {
+  const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   for (;;) {
@@ -1117,7 +1138,9 @@ export async function streamMessage(
       else if (name === "done") on.done?.(payload);
       else if (name === "error") on.error?.(payload.message);
       else if (name === "file") on.file?.(payload);
-      else if (name === "file_request") void answerFileRequest(token, chatId, payload);
+      else if (name === "file_request") {
+        if (!follower) void answerFileRequest(token, chatId, payload);
+      }
       else if (name === "confirm") {
         const question = String(payload.question ?? "Go ahead?");
         const ask: Promise<{ ok: boolean; always?: boolean; cannot_ask?: boolean }> =
@@ -1684,6 +1707,9 @@ export const systemApi = {
     request<UpdateStatus>("PUT", "/api/updates/settings", { token, body: { enabled, auto_install: autoInstall } }),
   /** Install the newest release on the server and restart it (a server only). */
   installServer: (token: string) => request<void>("POST", "/api/updates/install", { token }),
+  /** What a restart now would interrupt (`summary` is null when nothing). */
+  busy: (token: string) =>
+    request<{ replies: number; jobs: number; commands: number; processes: number; summary: string | null }>("GET", "/api/system/busy", { token }),
   /** Restart Outpost on the server (a server only). */
   restartServer: (token: string) => request<void>("POST", "/api/system/restart", { token }),
 };

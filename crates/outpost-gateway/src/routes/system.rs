@@ -147,6 +147,14 @@ pub async fn install_server_update(
     Ok(StatusCode::ACCEPTED)
 }
 
+/// What installing an update or restarting now would interrupt (replies being written, Create
+/// jobs, builds, test servers), so the apps can ask first.
+#[utoipa::path(get, path = "/api/system/busy", tag = "system", security(("bearer" = [])),
+    responses((status = 200, description = "What's running", body = updates::Busy)))]
+pub async fn busy(State(state): State<AppState>, _auth: Auth) -> Json<updates::Busy> {
+    Json(updates::busy(&state))
+}
+
 /// Restart Outpost on this server (owner, with the PIN from a paired device), e.g. after
 /// changing network access. Only a server started with `--server`; it's back in a few seconds.
 #[utoipa::path(post, path = "/api/system/restart", tag = "system", security(("bearer" = [])),

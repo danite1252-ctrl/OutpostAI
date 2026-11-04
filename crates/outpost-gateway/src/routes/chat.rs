@@ -582,6 +582,7 @@ pub async fn send_message(
     }
     let doc_sources = docs.map(|d| d.sources).unwrap_or_default();
     let (tx, rx) = tokio::sync::mpsc::channel::<Event>(256);
+    let live_chat = chat.id.clone();
     let workspace = (!folders.is_empty()).then(|| crate::workspace::Workspace {
         state: state.clone(),
         account_id: account_id.clone(),
@@ -590,6 +591,11 @@ pub async fn send_message(
         mode: chat.file_mode.clone(),
         reachable: req.pc_folders.clone(),
         events: tx.clone(),
+        server_commands: match auth.account.role {
+            outpost_core::accounts::Role::Owner => true,
+            outpost_core::accounts::Role::Member => crate::runner::sandbox_available(),
+            _ => false,
+        },
     });
     if let Some(w) = &workspace {
         system = format!("{system}\n\n{}", w.instructions());
@@ -697,7 +703,7 @@ pub async fn send_message(
             tools.extend(w.tools().as_array().cloned().unwrap_or_default());
         }
         // Coding (commands in a folder) takes more rounds: build, read errors, fix, build again.
-        let max_rounds = if workspace.as_ref().is_some_and(|w| w.folders.iter().any(|f| f.kind == "pc")) {
+        let max_rounds = if workspace.as_ref().is_some_and(|w| w.has_commands()) {
             MAX_CODING_ROUNDS
         } else {
             MAX_TOOL_ROUNDS
@@ -745,6 +751,10 @@ pub async fn send_message(
                 };
                 let _ = tx.send(event("file", serde_json::json!(outcome.action))).await;
                 actions.push(outcome.action);
+                for more in outcome.more {
+                    let _ = tx.send(event("file", serde_json::json!(more))).await;
+                    actions.push(more);
+                }
                 if let Some(messages) = body.get_mut("messages").and_then(serde_json::Value::as_array_mut) {
                     messages.push(serde_json::json!({ "role": "tool", "tool_name": call.function.name, "content": outcome.reply }));
                 }
@@ -822,8 +832,25 @@ pub async fn send_message(
         }
     });
 
+    // Other devices can follow it (see crate::live).
+    let rx = crate::live::tee(&live_chat, rx);
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<Event, Infallible>);
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+/// Follow the reply being written in one of my chats (from another device): everything it
+/// has streamed so far, then the rest, as the same events as sending a message. 204 when no
+/// reply is being written.
+#[utoipa::path(get, path = "/api/chats/{id}/live", tag = "chat", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Chat id")),
+    responses((status = 200, description = "Server-Sent Events"), (status = 204, description = "Nothing being written"), (status = 404, description = "Not found", body = ErrorBody)))]
+pub async fn live(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    let chat = chats::get(&state.pool, &auth.account.id, &id).await?;
+    Ok(match crate::live::follow(&chat.id) {
+        Some(stream) => Sse::new(stream).keep_alive(KeepAlive::default()).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

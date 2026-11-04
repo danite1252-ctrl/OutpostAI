@@ -39,8 +39,8 @@ const CONFIRM_WITHIN: Duration = Duration::from_secs(5 * 60);
 /// Most of a command's output the model is shown.
 const OUTPUT_LIMIT: usize = 6_000;
 /// Folders not worth looking in.
-pub const SKIP_DIRS: [&str; 11] =
-    [".git", "node_modules", "target", "dist", "build", ".next", ".venv", "venv", "__pycache__", ".idea", ".vs"];
+pub const SKIP_DIRS: [&str; 12] =
+    [".git", "node_modules", "target", "dist", "build", ".next", ".venv", "venv", "__pycache__", ".idea", ".vs", ".gradle"];
 
 /// Chats whose reply the person stopped (Stop): the reply ends at its next step, and a
 /// command it's running is stopped on the PC.
@@ -95,10 +95,6 @@ impl Relay {
         self.waiting.lock().unwrap_or_else(|p| p.into_inner()).keys().cloned().collect()
     }
 
-    async fn ask(&self, events: &mpsc::Sender<Event>, chat_id: &str, request: Value) -> Result<Value, String> {
-        self.ask_within(events, chat_id, request, Duration::from_secs(60), "file_request").await
-    }
-
     /// Ask the app streaming this reply to do something (a `file_request` event) and wait for
     /// its answer; an `error` in the answer comes back as the error.
     pub(crate) async fn ask_within(
@@ -146,12 +142,16 @@ pub struct Workspace {
     /// PC folders the app streaming this reply can reach (their ids).
     pub reachable: Vec<String>,
     pub events: mpsc::Sender<Event>,
+    /// Commands may run in server folders for this account (owners; others when sandboxed).
+    pub server_commands: bool,
 }
 
 /// What a tool call came to: the model's answer, and what to show under the reply.
 pub struct Outcome {
     pub reply: String,
     pub action: FileAction,
+    /// More to show under the reply (files a build made, to download).
+    pub more: Vec<FileAction>,
 }
 
 impl Workspace {
@@ -183,28 +183,73 @@ impl Workspace {
              or write_file (a new file, or a whole new version). Keep changes to what was asked. {changes} Never say a \
              change was made unless a tool said so.{commands}",
             list.join("\n"),
-            commands = if self.has_commands() {
-                "\n\nYou can run commands in a folder on a PC with run_command (path = the folder, or a sub-folder to run \
-                 in), e.g. `gradlew build`, `mvn package` or `npm test`. Use it to build and test your changes: read the \
-                 errors it shows, fix the code, and run it again until it works (say so if you can't get it working). \
-                 Only run commands that finish by themselves (no servers or programs that keep running). Run one command \
-                 per call, without && or | (chained commands always need the user's OK each time). The user may be asked \
-                 to allow a command first; if they skip it, don't run it again. Never say a build passed unless \
-                 run_command showed it."
-            } else {
-                ""
-            }
+            commands = self.command_instructions()
         )
     }
 
-    /// The tool definitions for Ollama (with run_command when a folder is on a PC).
+    fn command_instructions(&self) -> String {
+        if !self.has_commands() {
+            return String::new();
+        }
+        let mut t = String::from(
+            "\n\nYou can run commands in a folder with run_command (path = the folder, or a sub-folder to run in), e.g. \
+             `gradlew build`, `mvn package` or `npm test`. Use it to build and test your changes: read the errors it \
+             shows, fix the code, and run it again until it works (say so if you can't get it working). run_command is \
+             for commands that finish by themselves. For something that keeps running (a test Minecraft server, a dev \
+             server), use start_process, then process_output to read its log (wait for it to finish starting: read \
+             again if it isn't ready), send_to_process to type console commands into it, and stop_process when you're \
+             done (always stop what you started). Run one command per call, without && or | (chained commands always \
+             need the user's OK each time). The user may be asked to allow a command first; if they skip it, don't run \
+             it again. Never say a build passed unless run_command showed it.",
+        );
+        if self.server_commands && self.folders.iter().any(|f| f.kind != "pc") {
+            t.push_str(
+                "\n\nFolders on the Outpost server run on Linux: use `./gradlew build` (or `gradlew build`, which \
+                 Outpost runs as ./gradlew), and `/` in paths. Java is provided for Java projects (the version their \
+                 build files ask for: 21, or 25). Gradle and Maven themselves aren't installed, so use the project's \
+                 wrapper (gradlew, mvnw): if a project has none, say so. What a build makes (the .jar in build/libs \
+                 or target) is offered to the user to download.",
+            );
+        }
+        t
+    }
+
+    /// The tool definitions for Ollama (with the command tools when commands can run).
     pub fn tools(&self) -> Value {
         let mut all = Self::file_tools();
         if self.has_commands() {
             if let Some(a) = all.as_array_mut() {
+                let path = json!({ "type": "string", "description": "The folder it runs in (its name, or name/sub-folder), e.g. MyPlugin/run" });
+                let name = json!({ "type": "string", "description": "The name you gave it when starting it, e.g. test-server" });
+                a.push(json!({ "type": "function", "function": {
+                    "name": "start_process",
+                    "description": "Start something that keeps running (a test Minecraft server, a dev server) in a folder. It runs in the background: read what it prints with process_output, type into its console with send_to_process, and stop it with stop_process when done.",
+                    "parameters": { "type": "object", "properties": {
+                        "path": path,
+                        "command": { "type": "string", "description": "The command line, e.g. java -Xmx2G -jar paper.jar nogui" },
+                        "name": { "type": "string", "description": "A short name for it, e.g. test-server" } },
+                        "required": ["path", "command", "name"] } } }));
+                a.push(json!({ "type": "function", "function": {
+                    "name": "process_output",
+                    "description": "The latest lines a started process printed (its log), and whether it's still running.",
+                    "parameters": { "type": "object", "properties": {
+                        "path": path, "name": name,
+                        "lines": { "type": "integer", "description": "How many of the last lines (default 60)." } },
+                        "required": ["path", "name"] } } }));
+                a.push(json!({ "type": "function", "function": {
+                    "name": "send_to_process",
+                    "description": "Type a line into a started process's console (e.g. a server command like `plugins` or `stop`), and see what it printed after.",
+                    "parameters": { "type": "object", "properties": {
+                        "path": path, "name": name,
+                        "text": { "type": "string", "description": "The line to type." } },
+                        "required": ["path", "name", "text"] } } }));
+                a.push(json!({ "type": "function", "function": {
+                    "name": "stop_process",
+                    "description": "Stop a started process (and everything it started).",
+                    "parameters": { "type": "object", "properties": { "path": path, "name": name }, "required": ["path", "name"] } } }));
                 a.push(json!({ "type": "function", "function": {
                     "name": "run_command",
-                    "description": "Run a command in a folder on the user's PC and get its exit code and output (errors first when it's long). For builds and tests, e.g. gradlew build. It must finish by itself.",
+                    "description": "Run a command in a folder and get its exit code and output (errors first when it's long). For builds and tests, e.g. gradlew build. It must finish by itself.",
                     "parameters": { "type": "object", "properties": {
                         "path": { "type": "string", "description": "The folder to run in (its name, or name/sub-folder), e.g. MyPlugin" },
                         "command": { "type": "string", "description": "The command line, e.g. gradlew build" },
@@ -261,6 +306,10 @@ impl Workspace {
             "write_file" => "write",
             "edit_file" => "edit",
             "run_command" => "run",
+            "start_process" => "start",
+            "process_output" => "output",
+            "send_to_process" => "input",
+            "stop_process" => "stop",
             _ => {
                 return fail("tool", &full, format!("There's no tool called {name}."));
             }
@@ -281,8 +330,14 @@ impl Workspace {
                 ),
             );
         }
-        if op == "run" {
-            return self.run_command(folder, &inner, &shown, args).await;
+        if matches!(op, "run" | "start" | "output" | "input" | "stop") {
+            if folder.kind != "pc" && !self.server_commands {
+                return fail(op, &shown, "Commands can't run in server folders from this account.".into());
+            }
+            if op == "run" {
+                return self.run_command(folder, &inner, &shown, args).await;
+            }
+            return self.process(op, folder, &inner, &shown, args).await;
         }
         let result = match op {
             "list" => self.list(folder, &inner).await.map(|(text, n)| (text, format!("{n} entries"), None)),
@@ -315,6 +370,7 @@ impl Workspace {
             Ok((reply, note, change_id)) => Outcome {
                 reply,
                 action: FileAction { op: op.into(), path: shown, note: Some(note), change_id, failed: false },
+                more: Vec::new(),
             },
             Err(e) => fail(op, &shown, e),
         }
@@ -344,9 +400,9 @@ impl Workspace {
         folder.kind != "pc" || self.reachable.contains(&folder.id) || self.state.device_tools.for_folder(&self.account_id, &folder.id).is_some()
     }
 
-    /// Commands can run here: a folder on a PC.
-    fn has_commands(&self) -> bool {
-        self.folders.iter().any(|f| f.kind == "pc")
+    /// Commands can run: a folder on a PC, or a server folder this account may run them in.
+    pub fn has_commands(&self) -> bool {
+        self.folders.iter().any(|f| f.kind == "pc" || self.server_commands)
     }
 
     fn server_root(&self, folder: &ChatFolder) -> PathBuf {
@@ -517,70 +573,163 @@ impl Workspace {
 }
 
 impl Workspace {
-    /// Run a command in a PC folder, asking first unless it's allowed there.
+    /// May this command run? Asks the person unless it's allowed in the folder. `Err` is the
+    /// outcome to give the model (skipped, no answer...).
+    async fn permit(&self, folder: &ChatFolder, shown: &str, op: &str, command: &str, verb: &str) -> Result<(), Outcome> {
+        let note = |n: &str| FileAction { op: op.into(), path: shown.to_string(), note: Some(n.into()), change_id: None, failed: true };
+        if let Some(why) = refused(command) {
+            return Err(fail(op, shown, format!("That command isn't allowed ({why}).")));
+        }
+        let rules = CommandRules::load(&self.state, &folder.id).await;
+        if rules.allows(command) {
+            return Ok(());
+        }
+        let always = always_label(command);
+        let question = format!("{verb} `{command}` in {shown}?");
+        let asked = json!({ "kind": "command", "question": question, "always": always, "command": command, "folder": folder.name });
+        let answer = self.state.file_relay.ask_within(&self.events, &self.chat_id, asked, CONFIRM_WITHIN, "confirm").await;
+        let ok = answer.as_ref().is_ok_and(|v| v.get("ok").and_then(Value::as_bool) == Some(true));
+        if !ok {
+            let cannot = answer.as_ref().is_ok_and(|v| v.get("cannot_ask").and_then(Value::as_bool) == Some(true));
+            let (reply, why) = match (&answer, cannot) {
+                (_, true) => (
+                    format!("`{command}` didn't run: the app the user is chatting in can't show the request to run commands (it may need updating). Tell the user."),
+                    "couldn't ask (update the app)",
+                ),
+                (Err(_), _) => (
+                    format!("`{command}` didn't run: nobody answered the request to run it. Tell the user it's waiting for their OK."),
+                    "no answer",
+                ),
+                _ => (format!("The user chose Skip for `{command}`, so it didn't run. Don't run it again unless they ask."), "skipped"),
+            };
+            return Err(Outcome { reply, action: note(why), more: Vec::new() });
+        }
+        if answer.is_ok_and(|v| v.get("always").and_then(Value::as_bool) == Some(true)) {
+            if let Some(program) = always {
+                let _ = rules.with(&program).save(&self.state, &folder.id).await;
+            }
+        }
+        Ok(())
+    }
+
+    /// How a command runs in a server folder: where, with which Java, sandboxed or not.
+    async fn server_spec(&self, folder: &ChatFolder, inner: &Path, command: &str) -> Result<crate::runner::Spec, String> {
+        let account = outpost_core::accounts::get(&self.state.pool, &self.account_id).await.map_err(|e| e.to_string())?;
+        let sandboxed = crate::runner::sandbox_available();
+        match account.role {
+            outpost_core::accounts::Role::Restricted | outpost_core::accounts::Role::Service => {
+                return Err("Commands can't run in server folders from this account.".into())
+            }
+            outpost_core::accounts::Role::Member if !sandboxed => {
+                return Err("Commands in server folders need the server's sandbox (bubblewrap, `sudo apt install bubblewrap`), or an owner's account. Ask an owner.".into())
+            }
+            _ => {}
+        }
+        let root = self.server_root(folder);
+        let dir = within(&root, inner)?;
+        if !dir.is_dir() {
+            return Err("That isn't a folder (yet): give the folder to run in.".into());
+        }
+        let real_root = root.canonicalize().map_err(|e| e.to_string())?;
+        // The same place by its real path (what the sandbox shows).
+        let dir = real_root.join(inner);
+        let home = self.state.config.data_dir.join("build-home").join(&self.account_id);
+        tokio::fs::create_dir_all(&home).await.map_err(|e| e.to_string())?;
+        let mut command = command.to_string();
+        // `gradlew build` on Linux is `./gradlew build` (and the wrapper must be runnable).
+        if let Some(program) = program_of(&command) {
+            if program == "gradlew" || program == "mvnw" {
+                let script = dir.join(&program);
+                if script.is_file() {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755));
+                    }
+                    let rest = command.split_once(char::is_whitespace).map(|(_, r)| r.to_string()).unwrap_or_default();
+                    command = format!("./{program} {rest}").trim_end().to_string();
+                }
+            }
+        }
+        let mut env = vec![
+            ("HOME".to_string(), home.to_string_lossy().to_string()),
+            ("GRADLE_USER_HOME".to_string(), home.join(".gradle").to_string_lossy().to_string()),
+        ];
+        let mut tools = Vec::new();
+        if wants_java(&dir, &command) {
+            let mut build = String::new();
+            for f in ["build.gradle.kts", "build.gradle", "pom.xml"] {
+                if let Ok(t) = tokio::fs::read_to_string(dir.join(f)).await {
+                    build.push_str(&t);
+                }
+            }
+            let version = outpost_engines::runtimes::java_for_project(&build);
+            let engines = self.state.config.data_dir.join("engines");
+            let java = outpost_engines::runtimes::ensure_java(&reqwest::Client::new(), &engines, version, |_, _| {})
+                .await
+                .map_err(|e| format!("Couldn't get Java {version} for the build: {e:#}"))?;
+            let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into());
+            env.push(("JAVA_HOME".into(), java.to_string_lossy().to_string()));
+            env.push(("PATH".into(), format!("{}:{path}", java.join("bin").to_string_lossy())));
+            tools.push(java);
+        }
+        let sandbox = sandboxed.then(|| crate::runner::Sandbox { folder: real_root, home: home.clone(), tools, network: true });
+        Ok(crate::runner::Spec { dir, command, env, sandbox })
+    }
+
+    /// Run a command in a folder (on its PC, or here for a server folder), asking first
+    /// unless it's allowed there.
     async fn run_command(&self, folder: &ChatFolder, inner: &Path, shown: &str, args: &Value) -> Outcome {
         let command = args.get("command").and_then(Value::as_str).unwrap_or_default().trim().to_string();
         let note = |n: String| FileAction { op: "run".into(), path: shown.to_string(), note: Some(n), change_id: None, failed: false };
         if command.is_empty() {
             return fail("run", shown, "Say which command to run.".into());
         }
-        if folder.kind != "pc" {
-            return fail("run", shown, "Commands run in folders on a PC for now (server folders are coming).".into());
-        }
-        if let Some(why) = refused(&command) {
-            return fail("run", shown, format!("That command isn't allowed ({why})."));
-        }
         let mins = args.get("timeout_minutes").and_then(Value::as_u64).unwrap_or(COMMAND_SECS / 60).clamp(1, COMMAND_MAX_SECS / 60);
-        let rules = CommandRules::load(&self.state, &folder.id).await;
-        if !rules.allows(&command) {
-            let always = always_label(&command);
-            let question = format!("Run `{command}` in {shown}?");
-            let asked = json!({ "kind": "command", "question": question, "always": always, "command": command, "folder": folder.name });
-            let answer = self.state.file_relay.ask_within(&self.events, &self.chat_id, asked, CONFIRM_WITHIN, "confirm").await;
-            let ok = answer.as_ref().is_ok_and(|v| v.get("ok").and_then(Value::as_bool) == Some(true));
-            if !ok {
-                let cannot = answer.as_ref().is_ok_and(|v| v.get("cannot_ask").and_then(Value::as_bool) == Some(true));
-                let (reply, why) = match (&answer, cannot) {
-                    (_, true) => (
-                        format!("`{command}` didn't run: the app the user is chatting in can't show the request to run commands (it may need updating). Tell the user."),
-                        "couldn't ask (update the app)",
-                    ),
-                    (Err(_), _) => (
-                        format!("`{command}` didn't run: nobody answered the request to run it. Tell the user it's waiting for their OK."),
-                        "no answer",
-                    ),
-                    _ => (
-                        format!("The user chose Skip for `{command}`, so it didn't run. Don't run it again unless they ask."),
-                        "skipped",
-                    ),
-                };
-                return Outcome { reply, action: FileAction { failed: true, ..note(why.into()) } };
-            }
-            if answer.is_ok_and(|v| v.get("always").and_then(Value::as_bool) == Some(true)) {
-                if let Some(program) = always {
-                    let _ = rules.with(&program).save(&self.state, &folder.id).await;
-                }
-            }
+        if let Err(o) = self.permit(folder, shown, "run", &command, "Run").await {
+            return o;
         }
         let secs = mins * 60;
         let started = std::time::Instant::now();
+        let since = std::time::SystemTime::now();
         let run_id = uuid::Uuid::new_v4().simple().to_string();
-        let running = self.pc_within(folder, "run", inner, json!({ "command": command, "timeout": secs, "run_id": run_id }), Duration::from_secs(secs + 30));
-        let got = tokio::select! {
-            got = running => got,
-            _ = until_stopped(&self.chat_id) => {
-                // Stop it on the PC (through its open app: the reply's own stream may be gone).
-                if let Some((session, _)) = self.state.device_tools.for_folder(&self.account_id, &folder.id) {
-                    let _ = self
-                        .state
-                        .device_tools
-                        .call(&session, json!({ "kind": "folder", "folder": folder.id, "op": "cancel", "path": "", "run_id": run_id }), Duration::from_secs(15))
-                        .await;
+        let got = if folder.kind == "pc" {
+            let running =
+                self.pc_within(folder, "run", inner, json!({ "command": command, "timeout": secs, "run_id": run_id }), Duration::from_secs(secs + 30));
+            tokio::select! {
+                got = running => got,
+                _ = until_stopped(&self.chat_id) => {
+                    // Stop it on the PC (through its open app: the reply's own stream may be gone).
+                    if let Some((session, _)) = self.state.device_tools.for_folder(&self.account_id, &folder.id) {
+                        let _ = self
+                            .state
+                            .device_tools
+                            .call(&session, json!({ "kind": "folder", "folder": folder.id, "op": "cancel", "path": "", "run_id": run_id }), Duration::from_secs(15))
+                            .await;
+                    }
+                    return Outcome {
+                        reply: format!("The user pressed Stop, so `{command}` was stopped."),
+                        action: FileAction { failed: true, ..note("stopped".into()) },
+                        more: Vec::new(),
+                    };
                 }
-                return Outcome {
-                    reply: format!("The user pressed Stop, so `{command}` was stopped."),
-                    action: FileAction { failed: true, ..note("stopped".into()) },
-                };
+            }
+        } else {
+            let spec = match self.server_spec(folder, inner, &command).await {
+                Ok(s) => s,
+                Err(e) => return fail("run", shown, e),
+            };
+            let running = crate::runner::run(&spec, secs, Some(run_id.clone()));
+            tokio::select! {
+                got = running => got,
+                _ = until_stopped(&self.chat_id) => {
+                    crate::runner::cancel(&run_id);
+                    return Outcome {
+                        reply: format!("The user pressed Stop, so `{command}` was stopped."),
+                        action: FileAction { failed: true, ..note("stopped".into()) },
+                        more: Vec::new(),
+                    };
+                }
             }
         };
         let took = started.elapsed().as_secs();
@@ -597,13 +746,175 @@ impl Workspace {
                     (false, None) => format!("ended after {}", seconds(took)),
                 };
                 let ok = !timed_out && code == Some(0);
+                let mut reply = format!("`{command}` in {shown} {how}.\n{}", summarise_output(output));
+                // What it built, ready to download (server folders).
+                let mut more = Vec::new();
+                if ok && folder.kind != "pc" {
+                    let root = self.server_root(folder);
+                    if let Ok(dir) = within(&root, inner) {
+                        let built = tokio::task::spawn_blocking(move || built_files(&root, &dir, since)).await.unwrap_or_default();
+                        if !built.is_empty() {
+                            let names: Vec<String> = built.iter().map(|p| join(&folder.name, Path::new(p))).collect();
+                            reply.push_str(&format!(
+                                "\n\nBuilt (the user can download these from the chat): {}",
+                                names.join(", ")
+                            ));
+                            more = names
+                                .into_iter()
+                                .map(|path| FileAction { op: "download".into(), path, note: Some("built".into()), change_id: None, failed: false })
+                                .collect();
+                        }
+                    }
+                }
                 Outcome {
-                    reply: format!("`{command}` in {shown} {how}.\n{}", summarise_output(output)),
+                    reply,
                     action: FileAction { failed: !ok, ..note(format!("`{command}` {}", if ok { "passed".to_string() } else { how })) },
+                    more,
                 }
             }
         }
     }
+
+    /// The long-running process tools: start one (asks like a command), read its output,
+    /// type into it, stop it. On a PC they run there; for a server folder, here.
+    async fn process(&self, op: &str, folder: &ChatFolder, inner: &Path, shown: &str, args: &Value) -> Outcome {
+        let s = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or_default().trim().to_string();
+        let command = s("command");
+        let name = {
+            let n = s("name");
+            let n = if n.is_empty() { program_of(&command).unwrap_or_else(|| "process".into()) } else { n };
+            n.chars().filter(|c| c.is_alphanumeric() || "-_ .".contains(*c)).take(40).collect::<String>()
+        };
+        let key = format!("{}:{name}", folder.id);
+        let action = |n: String, failed: bool| FileAction { op: op.into(), path: shown.to_string(), note: Some(n), change_id: None, failed };
+        let result: Result<Value, String> = match op {
+            "start" => {
+                if command.is_empty() {
+                    return fail(op, shown, "Say which command to start.".into());
+                }
+                if let Err(o) = self.permit(folder, shown, op, &command, "Start").await {
+                    return o;
+                }
+                if folder.kind == "pc" {
+                    self.pc_within(folder, "start", inner, json!({ "command": command, "name": name }), Duration::from_secs(60)).await
+                } else {
+                    match self.server_spec(folder, inner, &command).await {
+                        Ok(spec) => crate::runner::start(&key, &spec).await,
+                        Err(e) => Err(e),
+                    }
+                }
+            }
+            "output" => {
+                let lines = args.get("lines").and_then(Value::as_u64).unwrap_or(60) as usize;
+                if folder.kind == "pc" {
+                    self.pc(folder, "output", inner, json!({ "name": name, "lines": lines })).await
+                } else {
+                    crate::runner::output(&key, lines, None)
+                }
+            }
+            "input" => {
+                let text = s("text");
+                if let Some(why) = refused(&text) {
+                    return fail(op, shown, format!("That isn't allowed ({why})."));
+                }
+                let sent = if folder.kind == "pc" {
+                    self.pc(folder, "input", inner, json!({ "name": name, "text": text })).await
+                } else {
+                    crate::runner::input(&key, &text).await
+                };
+                match sent {
+                    Ok(_) => {
+                        // What it said back.
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        if folder.kind == "pc" {
+                            self.pc(folder, "output", inner, json!({ "name": name, "lines": 20 })).await
+                        } else {
+                            crate::runner::output(&key, 20, None)
+                        }
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            _ => {
+                let stopped = if folder.kind == "pc" { self.pc(folder, "stop", inner, json!({ "name": name })).await } else { crate::runner::stop(&key) };
+                match stopped {
+                    Ok(_) => {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        Ok(json!({ "running": false, "output": "", "stopped": true }))
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+        };
+        match result {
+            Err(e) => fail(op, shown, e),
+            Ok(v) => {
+                let running = v.get("running").and_then(Value::as_bool) == Some(true);
+                let out = v.get("output").and_then(Value::as_str).unwrap_or_default();
+                let state = if op == "stop" {
+                    format!("\"{name}\" was stopped.")
+                } else if running {
+                    format!("\"{name}\" is running.")
+                } else {
+                    match v.get("exit_code").and_then(Value::as_i64) {
+                        Some(c) => format!("\"{name}\" has ended (exit code {c})."),
+                        None => format!("\"{name}\" has ended."),
+                    }
+                };
+                let reply = if out.trim().is_empty() || op == "stop" {
+                    state.clone()
+                } else {
+                    format!("{state} Its latest output:\n{}", summarise_output(out))
+                };
+                let note = match op {
+                    "start" => format!("started \"{name}\": `{command}`"),
+                    "output" => format!("read \"{name}\""),
+                    "input" => format!("typed `{}` into \"{name}\"", s("text")),
+                    _ => format!("stopped \"{name}\""),
+                };
+                Outcome { reply, action: action(note, op == "start" && !running), more: Vec::new() }
+            }
+        }
+    }
+}
+
+/// The command is a Java build (or the folder is a Java project): it gets Outpost's Java.
+fn wants_java(dir: &Path, command: &str) -> bool {
+    let program = program_of(command).unwrap_or_default();
+    ["java", "javac", "jar", "gradle", "gradlew", "mvn", "mvnw"].contains(&program.as_str())
+        || ["gradlew", "build.gradle", "build.gradle.kts", "pom.xml"].iter().any(|f| dir.join(f).exists())
+}
+
+/// Files a build just made, worth downloading: `.jar`s (not sources or javadoc ones) in
+/// `build/libs` or `target`, under `dir`, changed since `since`. Paths are inside `root`.
+pub fn built_files(root: &Path, dir: &Path, since: std::time::SystemTime) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut look = vec![(dir.to_path_buf(), 0)];
+    while let Some((d, depth)) = look.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            if p.is_dir() {
+                if depth < 4 && !matches!(name.as_str(), ".git" | ".gradle" | "node_modules" | "src") {
+                    look.push((p, depth + 1));
+                }
+                continue;
+            }
+            let parent = d.to_string_lossy().replace('\\', "/");
+            let in_output = parent.ends_with("build/libs") || parent.ends_with("/target") || parent == "target";
+            let wanted = name.ends_with(".jar") && !name.ends_with("-sources.jar") && !name.ends_with("-javadoc.jar") && !name.ends_with("-plain.jar");
+            let fresh = e.metadata().and_then(|m| m.modified()).is_ok_and(|m| m >= since);
+            if in_output && wanted && fresh {
+                if let Ok(rel) = p.strip_prefix(root) {
+                    found.push(slash(rel));
+                }
+            }
+        }
+    }
+    found.sort();
+    found.truncate(10);
+    found
 }
 
 fn seconds(s: u64) -> String {
@@ -739,6 +1050,7 @@ pub(crate) fn fail(op: &str, path: &str, why: String) -> Outcome {
     Outcome {
         reply: format!("That didn't work: {why}"),
         action: FileAction { op: op.into(), path: path.into(), note: Some(why), change_id: None, failed: true },
+        more: Vec::new(),
     }
 }
 
@@ -931,6 +1243,22 @@ pub fn search_dir(start: &Path, needle: &str, limit: usize) -> Vec<(String, usiz
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_builds_jars_are_offered() {
+        let root = std::env::temp_dir().join(format!("built-{}", uuid::Uuid::new_v4()));
+        let before = std::time::SystemTime::now() - std::time::Duration::from_secs(5);
+        for f in ["build/libs/Shop-1.0.jar", "build/libs/Shop-1.0-sources.jar", "api/target/api.jar", "lib/old.jar", "build/libs/notes.txt"] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"x").unwrap();
+        }
+        let got = super::built_files(&root, &root, before);
+        assert_eq!(got, vec!["api/target/api.jar".to_string(), "build/libs/Shop-1.0.jar".to_string()]);
+        // Older than the build: not offered.
+        assert!(super::built_files(&root, &root, std::time::SystemTime::now() + std::time::Duration::from_secs(60)).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn commands_ask_unless_allowed_and_some_never_run() {
         assert_eq!(program_of("./gradlew build").as_deref(), Some("gradlew"));

@@ -368,7 +368,7 @@ function Conversation({
     [api, chat.id, onError],
   );
   useEffect(() => {
-    void reload();
+    void reload().then(() => follow());
     return () => stop.current?.();
   }, [reload]);
 
@@ -397,6 +397,67 @@ function Conversation({
     setImages((cur) => [...cur, ...picked].slice(0, MAX_IMAGES));
   }
 
+  /** What a streamed reply's events do here (sent from this phone, or followed). */
+  function replyEvents(reply: { message: Message | null }) {
+    return (name: string, data: unknown) => {
+      const d = data as { text?: string; message?: unknown; user_message?: Message };
+      if (name === "done" && d.message && typeof d.message === "object") reply.message = d.message as Message;
+      if (name === "start" && d.user_message) setMessages((m) => (m.some((x) => x.id === d.user_message!.id) ? m : [...m, d.user_message!]));
+      else if (name === "token") setDraft((x) => (x ? { ...x, content: x.content + (d.text ?? "") } : x));
+      else if (name === "thinking") setDraft((x) => (x ? { ...x, thinking: x.thinking + (d.text ?? "") } : x));
+      else if (name === "file") {
+        const f = data as FileAction;
+        setDraft((x) => (x ? { ...x, files: [...x.files, f] } : x));
+        if (f.change_id) void chatFiles.reload();
+      } else if (name === "confirm") {
+        // A command the reply wants to run in a folder (asks here; other asks are skipped).
+        const c = data as { id: string; kind?: string; command?: string; folder?: string; always?: string | null };
+        if (c.kind === "command") setAsking({ id: c.id, command: c.command ?? "", folder: c.folder ?? "", always: c.always ?? null });
+        else void answerAsk(c.id, { ok: false, cannot_ask: true });
+      } else if (name === "error") setError(String((d as { message?: string }).message ?? "The reply failed."));
+    };
+  }
+
+  /** A reply being written in this chat from another device (the PC): show it as it's written. */
+  function follow() {
+    if (stop.current) return;
+    const reply: { message: Message | null } = { message: null };
+    const events = replyEvents(reply);
+    let started = false;
+    const mine: () => void = api.stream(
+      `/api/chats/${chat.id}/live`,
+      null,
+      {
+        event: (name, data) => {
+          if (!started) {
+            started = true;
+            setDraft((x) => x ?? { content: "", thinking: "", files: [] });
+          }
+          // Requests for the device that started it aren't for this phone.
+          if (name !== "file_request") events(name, data);
+        },
+        done: () => {
+          if (stop.current === mine) stop.current = null;
+          if (!started) return; // nothing being written
+          setDraft(null);
+          setAsking(null);
+          void reload();
+          void chatFiles.reload();
+        },
+        error: () => {
+          if (stop.current === mine) stop.current = null;
+          if (started) {
+            setDraft(null);
+            setAsking(null);
+            void reload();
+          }
+        },
+      },
+      "GET",
+    );
+    stop.current = mine;
+  }
+
   function send() {
     const text = input.trim();
     if ((!text && images.length === 0) || draft) return;
@@ -406,34 +467,18 @@ function Conversation({
     setError(null);
     setDraft({ content: "", thinking: "", files: [] });
     stopSaying();
-    let reply: Message | null = null;
+    // Still checking for a reply written elsewhere: this one replaces it.
+    stop.current?.();
+    const reply: { message: Message | null } = { message: null };
     stop.current = api.stream(`/api/chats/${chat.id}/messages`, { content: text, images: sending, ...clock(), use_pc_tools: true }, {
-      event: (name, data) => {
-        const d = data as { text?: string; message?: unknown; user_message?: Message };
-        if (name === "done" && d.message && typeof d.message === "object") reply = d.message as Message;
-        if (name === "start" && d.user_message) setMessages((m) => [...m, d.user_message!]);
-        else if (name === "token") setDraft((x) => (x ? { ...x, content: x.content + (d.text ?? "") } : x));
-        else if (name === "thinking") setDraft((x) => (x ? { ...x, thinking: x.thinking + (d.text ?? "") } : x));
-        else if (name === "file") {
-          const f = data as FileAction;
-          setDraft((x) => (x ? { ...x, files: [...x.files, f] } : x));
-          if (f.change_id) void chatFiles.reload();
-        }
-        else if (name === "confirm") {
-          // A command the reply wants to run in a folder (asks here; other asks are skipped).
-          const c = data as { id: string; kind?: string; command?: string; folder?: string; always?: string | null };
-          if (c.kind === "command") setAsking({ id: c.id, command: c.command ?? "", folder: c.folder ?? "", always: c.always ?? null });
-          else void answerAsk(c.id, { ok: false, cannot_ask: true });
-        }
-        else if (name === "error") setError(String((d as { message?: string }).message ?? "The reply failed."));
-      },
+      event: replyEvents(reply),
       done: () => {
         setDraft(null);
         setAsking(null);
         stop.current = null;
         void reload();
         void chatFiles.reload();
-        const r = reply as Message | null;
+        const r = reply.message;
         if (persona?.speak_replies && r?.content) readAloud(r.id, r.content);
       },
       error: (e) => {

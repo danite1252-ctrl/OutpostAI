@@ -26,6 +26,7 @@ import {
   type ServerProbe,
   type SignInResponse,
 } from "../api";
+import { okToRestart } from "./system";
 import { Avatar, Button, ErrorNote, Field, ToggleRow } from "./ui";
 
 function message(err: unknown) {
@@ -597,8 +598,9 @@ export function ServerPanel({
                 variant="ghost"
                 disabled={!!restarting}
                 title="E.g. after changing network or Tailscale access"
-                onClick={() => {
+                onClick={async () => {
                   setError(null);
+                  if (!(await okToRestart(token, "restart"))) return;
                   setRestarting("Restarting the server…");
                   systemApi
                     .restartServer(token)

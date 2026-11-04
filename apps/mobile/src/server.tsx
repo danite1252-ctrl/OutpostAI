@@ -58,11 +58,23 @@ export function ServerCard({ api }: { api: Outpost }) {
     }
   }
   const check = () => run("Checking…", () => api.json<UpdateStatus>("POST", "/api/updates/check").then(setSt));
-  const install = () => run("Installing…", () => guard((h) => api.json("POST", "/api/updates/install", undefined, h)));
+  /** Something running a restart would stop (a reply being written, a build...): ask first. */
+  async function okToRestart(what: string, go: () => void) {
+    const busy = await api.get<{ summary: string | null }>("/api/system/busy").catch(() => null);
+    if (!busy?.summary) return go();
+    Alert.alert(`${what} anyway?`, `${busy.summary} on the server. A restart stops it.`, [
+      { text: "Wait", style: "cancel" },
+      { text: what, style: "destructive", onPress: go },
+    ]);
+  }
+  const install = () =>
+    void okToRestart("Update", () => void run("Installing…", () => guard((h) => api.json("POST", "/api/updates/install", undefined, h))));
   const setAuto = (on: boolean) =>
     run("Saving…", () => api.json<UpdateStatus>("PUT", "/api/updates/settings", { enabled: st?.enabled ?? true, auto_install: on }).then(setSt));
-  function restart() {
-    Alert.alert("Restart the Outpost server?", "Chats and jobs running now are stopped. It's back in a few seconds.", [
+  async function restart() {
+    const busy = await api.get<{ summary: string | null }>("/api/system/busy").catch(() => null);
+    const now = busy?.summary ? `${busy.summary} now, and will be stopped.` : "Nothing is running now.";
+    Alert.alert("Restart the Outpost server?", `${now} It's back in a few seconds.`, [
       { text: "Cancel", style: "cancel" },
       { text: "Restart", style: "destructive", onPress: () => void run("Restarting…", () => guard((h) => api.json("POST", "/api/system/restart", undefined, h))) },
     ]);

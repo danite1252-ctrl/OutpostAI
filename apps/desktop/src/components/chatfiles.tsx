@@ -8,6 +8,7 @@ import {
   authedBlob,
   filesApi,
   pcFolders,
+  request,
   type ChatFolder,
   type FileAction,
   type FileChange,
@@ -257,6 +258,7 @@ export function FilesPanel({
                       </button>
                     </div>
                   )}
+                  {(f.kind === "server" || files.local.some((l) => l.id === f.id)) && <Running token={token} folder={f} />}
                 </li>
               );
             })}
@@ -366,6 +368,11 @@ const VERB: Record<FileAction["op"], string> = {
   tool: "Tried",
   mcp: "Used",
   run: "Ran in",
+  start: "Started in",
+  output: "Read the log in",
+  input: "Typed into",
+  stop: "Stopped in",
+  download: "Built",
 };
 
 /** Under a reply: what it did with files, and its changes to apply, skip or undo. */
@@ -382,16 +389,20 @@ export function FileActions({
   files: ChatFiles;
   live?: boolean;
 }) {
-  const looked = actions.filter((a) => !a.change_id && a.op !== "run");
-  const runs = actions.filter((a) => a.op === "run");
+  const looked = actions.filter((a) => !a.change_id && !["run", "start", "stop", "download"].includes(a.op));
+  const runs = actions.filter((a) => ["run", "start", "stop"].includes(a.op));
+  const built = actions.filter((a) => a.op === "download");
   const changed = actions.filter((a) => a.change_id);
   return (
     <div className="mt-2 flex flex-col gap-2 rounded-xl border border-line bg-surface px-3 py-2 text-sm">
       {runs.map((a, i) => (
         <p key={`run-${i}`} className={`font-mono text-xs break-all ${a.failed ? "text-danger" : "text-ok"}`}>
-          Ran in {a.path}
+          {VERB[a.op]} {a.path}
           {a.note ? ` · ${a.note}` : ""}
         </p>
+      ))}
+      {built.map((a, i) => (
+        <BuiltFile key={`built-${i}`} token={token} action={a} files={files} />
       ))}
       {looked.length > 0 && (
         <details open={live}>
@@ -420,6 +431,85 @@ export function FileActions({
         <ChangeRow key={a.change_id!} token={token} chatId={chatId} action={a} files={files} />
       ))}
       {changed.length >= 2 && chatId && <AllChanges token={token} chatId={chatId} actions={changed} files={files} />}
+    </div>
+  );
+}
+
+interface Proc {
+  name: string;
+  command?: string;
+  running: boolean;
+}
+
+/** What the chat started in a folder that keeps running (a test server): stop it. */
+function Running({ token, folder }: { token: string; folder: ChatFolder }) {
+  const [list, setList] = useState<Proc[]>([]);
+  const look = useCallback(async () => {
+    try {
+      if (folder.kind === "server") setList(await request<Proc[]>("GET", `/api/folders/${folder.id}/processes`, { token }));
+      else setList(((await pcFolders.op(folder.id, "processes", "")).processes as Proc[] | undefined) ?? []);
+    } catch {
+      setList([]);
+    }
+  }, [token, folder]);
+  useEffect(() => {
+    void look();
+    const t = window.setInterval(() => void look(), 5000);
+    return () => window.clearInterval(t);
+  }, [look]);
+  const running = list.filter((p) => p.running);
+  if (!running.length) return null;
+  async function stop(name: string) {
+    if (folder.kind === "server") await request<void>("POST", `/api/folders/${folder.id}/processes/${encodeURIComponent(name)}/stop`, { token }).catch(() => undefined);
+    else await pcFolders.op(folder.id, "stop", "", { name }).catch(() => undefined);
+    window.setTimeout(() => void look(), 800);
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      {running.map((p) => (
+        <div key={p.name} className="flex items-center gap-2 text-xs">
+          <span className="text-ok">●</span>
+          <span className="min-w-0 flex-1 truncate font-mono">
+            {p.name}
+            {p.command ? ` · ${p.command}` : ""}
+          </span>
+          <button type="button" className="text-muted underline hover:text-ink" onClick={() => void stop(p.name)}>
+            Stop
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** A file a build made in a server folder: download it. */
+function BuiltFile({ token, action, files }: { token: string; action: FileAction; files: ChatFiles }) {
+  const [state, setState] = useState<string | null>(null);
+  const [folderName, ...rest] = action.path.split("/");
+  const inner = rest.join("/");
+  const folder = files.folders.find((f) => f.kind !== "pc" && f.name.toLowerCase() === folderName.toLowerCase());
+  const fileName = rest[rest.length - 1] ?? action.path;
+  async function save() {
+    if (!folder) return;
+    setState("Downloading…");
+    try {
+      const blob = await authedBlob(token, `/api/folders/${folder.id}/file?path=${encodeURIComponent(inner)}`);
+      const path = await saveToDownloads(blob, fileName);
+      window.dispatchEvent(new CustomEvent("outpost-saved", { detail: path }));
+      setState(null);
+    } catch (e) {
+      setState(message(e));
+    }
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <span className="min-w-0 flex-1 truncate font-mono text-xs text-ok">Built {action.path}</span>
+      {folder && (
+        <button className="rounded-lg border border-line px-2 py-0.5 text-xs hover:bg-surface-2" onClick={() => void save()}>
+          Download
+        </button>
+      )}
+      {state && <span className="text-xs text-muted">{state}</span>}
     </div>
   );
 }

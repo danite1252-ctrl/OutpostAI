@@ -398,9 +398,50 @@ pub async fn background(state: AppState) {
 /// Nothing a restart would interrupt: no job running (here or on a helper PC), no
 /// training, and no chat in the last couple of minutes.
 async fn quiet(state: &AppState) -> bool {
-    state.queue.running().is_none()
-        && state.queue.remote_runs().is_empty()
-        && !crate::gallery_index::chat_recently(120)
+    busy(state).summary.is_none() && !crate::gallery_index::chat_recently(120)
+}
+
+/// What a restart now would interrupt.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct Busy {
+    /// Replies being written.
+    pub replies: usize,
+    /// Create jobs running (here or on a PC lending its card).
+    pub jobs: usize,
+    /// Commands (builds) running in server folders.
+    pub commands: usize,
+    /// Processes (test servers) still running in server folders.
+    pub processes: usize,
+    /// In words ("a reply is being written, a build is running"), or none: nothing to interrupt.
+    pub summary: Option<String>,
+}
+
+pub fn busy(state: &AppState) -> Busy {
+    let replies = crate::live::count();
+    let jobs = usize::from(state.queue.running().is_some()) + state.queue.remote_runs().len();
+    let (commands, processes) = crate::runner::busy();
+    let mut parts = Vec::new();
+    let n = |k: usize, one: &str, many: &str| if k == 1 { one.to_string() } else { format!("{k} {many}") };
+    if replies > 0 {
+        parts.push(n(replies, "a reply is being written", "replies are being written"));
+    }
+    if jobs > 0 {
+        parts.push(n(jobs, "a Create job is running", "Create jobs are running"));
+    }
+    if commands > 0 {
+        parts.push(n(commands, "a build or command is running", "builds or commands are running"));
+    }
+    if processes > 0 {
+        parts.push(n(processes, "a test server (process) is running", "test servers (processes) are running"));
+    }
+    let summary = (!parts.is_empty()).then(|| {
+        let mut s = parts.join(", ");
+        if let Some(first) = s.get_mut(0..1) {
+            first.make_ascii_uppercase();
+        }
+        s
+    });
+    Busy { replies, jobs, commands, processes, summary }
 }
 
 /// `a` is a newer version than `b` (`0.10.0` > `0.9.2`; `1.0.0` > `1.0.0-beta.1`).

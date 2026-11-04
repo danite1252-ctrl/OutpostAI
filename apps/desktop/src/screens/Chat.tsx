@@ -6,6 +6,7 @@ import {
   JOB_CARD,
   jobCards,
   MAX_IMAGES,
+  followReply,
   streamMessage,
   type Chat as ChatT,
   type FileAction,
@@ -102,7 +103,14 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
       setMessages([]);
       return;
     }
-    api.chat(token, activeId).then((r) => setMessages(r.messages), fail);
+    const chatId = activeId;
+    const controller = new AbortController();
+    api.chat(token, chatId).then((r) => {
+      setMessages(r.messages);
+      // A reply being written there (from the phone, say): follow it.
+      if (!controller.signal.aborted) void follow(chatId, controller);
+    }, fail);
+    return () => controller.abort();
   }, [activeId, token, fail]);
 
   useEffect(() => {
@@ -337,6 +345,63 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
       abort.current = null;
       void chatFiles.reload(); // changes the reply made or proposed
       void loadLists(); // titles and order change after a message
+    }
+  }
+
+  /** Show a reply being written in this chat elsewhere, as it's written (and answer its asks). */
+  async function follow(chatId: string, controller: AbortController) {
+    if (abort.current) return; // this app is sending one
+    const here = () => activeRef.current === chatId;
+    const empty: Draft = { content: "", thinking: "", model: "", files: [] };
+    let following = false;
+    const update = (f: (d: Draft) => Draft) => {
+      if (!following) {
+        following = true;
+        abort.current = controller;
+        setStreamingId(chatId);
+      }
+      setDraft((d) => f(d ?? empty));
+    };
+    try {
+      await followReply(
+        token,
+        chatId,
+        {
+          start: ({ user_message, model }) => {
+            if (here()) setMessages((m) => (m.some((x) => x.id === user_message.id) ? m : [...m, user_message]));
+            update((d) => ({ ...d, model }));
+          },
+          thinking: (t) => update((d) => ({ ...d, thinking: d.thinking + t })),
+          token: (t) => update((d) => ({ ...d, content: d.content + t })),
+          file: (a) => update((d) => ({ ...d, files: [...d.files, a] })),
+          done: ({ message, error }) => {
+            if (here()) setMessages((m) => (m.some((x) => x.id === message.id) ? m : [...m, message]));
+            if (error) setError(error);
+          },
+          error: (message) => setError(message),
+          approve: (ask) =>
+            new Promise((resolve) =>
+              setAsking({
+                ask,
+                answer: (a) => {
+                  setAsking(null);
+                  resolve(a);
+                },
+              }),
+            ),
+        },
+        controller.signal,
+      );
+    } catch {
+      // Closed, or switched chats.
+    } finally {
+      if (following && abort.current === controller) {
+        setAsking(null);
+        setDraft(null);
+        setStreamingId(null);
+        abort.current = null;
+        void chatFiles.reload();
+      }
     }
   }
 

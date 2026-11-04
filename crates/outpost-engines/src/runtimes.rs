@@ -145,3 +145,86 @@ pub async fn ensure_uv(client: &reqwest::Client, engines_root: &Path, on_progres
     }
     Ok(target)
 }
+
+/// Where Outpost keeps a Java (JDK) of one version, for building in server folders.
+pub fn java_dir(engines_root: &Path, version: u32) -> PathBuf {
+    engines_root.join(format!("java-{version}"))
+}
+
+/// Outpost's Java of that version (its home folder), if it's been downloaded.
+pub fn java_home(engines_root: &Path, version: u32) -> Option<PathBuf> {
+    let dir = java_dir(engines_root, version);
+    dir.join("bin").join(exe("java")).is_file().then_some(dir)
+}
+
+/// The Java version a project wants, from its build files (Gradle's toolchain or release
+/// setting, Maven's release or source): 25 when it asks for 22 or newer, else 21.
+pub fn java_for_project(build_files: &str) -> u32 {
+    let text = build_files.to_lowercase();
+    let mut wanted = 21;
+    for key in ["languageversion.of(", "javalanguageversion.of(", "release = ", "release.set(", "<maven.compiler.release>", "<release>", "<java.version>", "sourcecompatibility = javaversion.version_"] {
+        for (i, _) in text.match_indices(key) {
+            let digits: String = text[i + key.len()..].chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(v) = digits.parse::<u32>() {
+                if (22..=40).contains(&v) {
+                    wanted = wanted.max(25);
+                }
+            }
+        }
+    }
+    wanted
+}
+
+/// Download Eclipse Temurin's JDK `version` (21, 25...) into `<engines>/java-<version>`,
+/// checked against Adoptium's checksum. Returns its home folder.
+pub async fn ensure_java(client: &reqwest::Client, engines_root: &Path, version: u32, on_progress: impl FnMut(u64, Option<u64>)) -> anyhow::Result<PathBuf> {
+    if let Some(home) = java_home(engines_root, version) {
+        return Ok(home);
+    }
+    let (os, ext) = if cfg!(windows) { ("windows", ".zip") } else if cfg!(target_os = "macos") { ("mac", ".tar.gz") } else { ("linux", ".tar.gz") };
+    let arch = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x64" };
+    let api = format!("https://api.adoptium.net/v3/assets/latest/{version}/hotspot?architecture={arch}&image_type=jdk&os={os}&vendor=eclipse");
+    let listing: serde_json::Value = serde_json::from_str(&download::fetch_text(client, &api).await?)?;
+    let package = listing
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|r| r.pointer("/binary/package"))
+        .ok_or_else(|| anyhow!("Adoptium didn't list a Java {version} for this machine"))?;
+    let link = package.get("link").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("Adoptium sent no download link"))?;
+    let sum = package.get("checksum").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let staging = engines_root.join(format!("java-{version}-download"));
+    let file = staging.join(format!("jdk{ext}"));
+    let got = download::download(client, link, &file, on_progress).await?;
+    if !sum.is_empty() && !got.eq_ignore_ascii_case(&sum) {
+        let _ = tokio::fs::remove_file(&file).await;
+        bail!("The Java download is damaged (checksum mismatch). Please try again.");
+    }
+    let (archive_path, unpacked, dest) = (file.clone(), staging.join("unpacked"), java_dir(engines_root, version));
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        if unpacked.exists() {
+            std::fs::remove_dir_all(&unpacked)?;
+        }
+        archive::extract(&archive_path, &unpacked)?;
+        if dest.exists() {
+            std::fs::remove_dir_all(&dest)?;
+        }
+        archive::unpack_single_folder(&unpacked, &dest)?;
+        Ok(())
+    })
+    .await??;
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    java_home(engines_root, version).ok_or_else(|| anyhow!("Java wasn't in its download"))
+}
+
+#[cfg(test)]
+mod java_tests {
+    use super::java_for_project;
+
+    #[test]
+    fn the_java_a_project_wants() {
+        assert_eq!(java_for_project("java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }"), 21);
+        assert_eq!(java_for_project("java { toolchain { languageVersion.set(JavaLanguageVersion.of(25)) } }"), 25);
+        assert_eq!(java_for_project("<properties><maven.compiler.release>25</maven.compiler.release></properties>"), 25);
+        assert_eq!(java_for_project("plugins { id 'java' }"), 21);
+    }
+}
