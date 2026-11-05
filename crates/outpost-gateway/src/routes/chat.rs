@@ -838,6 +838,16 @@ pub async fn send_message(
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
+/// Watch one of my chats while it's open: a `replying` event whenever a reply starts there
+/// (sent from another device), to follow with `/live`.
+#[utoipa::path(get, path = "/api/chats/{id}/watch", tag = "chat", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Chat id")),
+    responses((status = 200, description = "Server-Sent Events"), (status = 404, description = "Not found", body = ErrorBody)))]
+pub async fn watch(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>> {
+    let chat = chats::get(&state.pool, &auth.account.id, &id).await?;
+    Ok(Sse::new(crate::live::watch(&chat.id)).keep_alive(KeepAlive::default()))
+}
+
 /// Follow the reply being written in one of my chats (from another device): everything it
 /// has streamed so far, then the rest, as the same events as sending a message. 204 when no
 /// reply is being written.

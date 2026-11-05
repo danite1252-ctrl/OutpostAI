@@ -6,6 +6,9 @@
 //! A follower gets everything so far, then the rest as it comes. Requests meant for the
 //! device that started the reply (`file_request`: its own folders and tools) are passed on
 //! too; followers ignore them.
+//!
+//! A device with the chat open also *watches* it: it's told when a reply starts there (sent
+//! from another device), and follows that reply as above.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -26,6 +29,32 @@ struct Feed {
 static FEEDS: LazyLock<Mutex<HashMap<String, Feed>>> = LazyLock::new(Default::default);
 static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// Chats being watched: told (`()`) when a reply starts in them.
+static BELLS: LazyLock<Mutex<HashMap<String, broadcast::Sender<()>>>> = LazyLock::new(Default::default);
+
+fn bell(chat_id: &str) -> broadcast::Sender<()> {
+    let mut bells = BELLS.lock().unwrap_or_else(|p| p.into_inner());
+    // Nobody watching any more: forget them.
+    bells.retain(|id, b| id == chat_id || b.receiver_count() > 0);
+    bells.entry(chat_id.to_string()).or_insert_with(|| broadcast::channel(16).0).clone()
+}
+
+/// Watch a chat: a `replying` event now if a reply is being written there, then one each time
+/// a reply starts (follow it with [`follow`]). Runs until the device closes it.
+pub fn watch(chat_id: &str) -> impl Stream<Item = Result<Event, Infallible>> {
+    let rx = bell(chat_id).subscribe();
+    let now = active(chat_id);
+    let replying = || Ok::<Event, Infallible>(Event::default().event("replying").data("{}"));
+    let first = futures_util::stream::iter(now.then(replying));
+    let rest = futures_util::stream::unfold(rx, move |mut rx| async move {
+        match rx.recv().await {
+            Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => Some((replying(), rx)),
+            Err(broadcast::error::RecvError::Closed) => None,
+        }
+    });
+    first.chain(rest)
+}
+
 /// Most events kept for a follower joining late (a very long reply keeps its start and end).
 const BACKLOG_MAX: usize = 50_000;
 
@@ -39,6 +68,8 @@ pub fn tee(chat_id: &str, mut rx: mpsc::Receiver<Event>) -> mpsc::Receiver<Event
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .insert(chat_id.to_string(), Feed { backlog: Vec::new(), tx: tx.clone(), run });
+    // Devices with the chat open start following it.
+    let _ = bell(chat_id).send(());
     let chat = chat_id.to_string();
     tokio::spawn(async move {
         let mut asker = Some(out_tx);
@@ -103,6 +134,17 @@ pub fn follow(chat_id: &str) -> Option<impl Stream<Item = Result<Event, Infallib
 mod tests {
     use super::*;
     use futures_util::StreamExt;
+
+    #[tokio::test]
+    async fn a_watcher_hears_when_a_reply_starts() {
+        let chat = format!("c-{}", uuid::Uuid::new_v4());
+        let mut w = Box::pin(watch(&chat));
+        let (tx, rx) = mpsc::channel(8);
+        let _asker = tee(&chat, rx);
+        let got = tokio::time::timeout(std::time::Duration::from_secs(1), w.next()).await;
+        assert!(matches!(got, Ok(Some(Ok(_)))), "told a reply started");
+        drop(tx);
+    }
 
     #[tokio::test]
     async fn a_follower_gets_the_start_then_the_rest() {

@@ -1110,6 +1110,38 @@ export async function streamMessage(
 }
 
 /**
+ * Watch an open chat: `onReplying` runs whenever a reply starts there (sent from another
+ * device), and once now if one is being written. Reconnects until `signal` is aborted.
+ */
+export async function watchChat(token: string, chatId: string, onReplying: () => void, signal: AbortSignal): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      const res = await fetch(`${GATEWAY}/api/chats/${chatId}/watch`, { headers: { Authorization: `Bearer ${token}` }, signal });
+      if (res.ok && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let cut: number;
+          while ((cut = buffer.indexOf("\n\n")) >= 0) {
+            const block = buffer.slice(0, cut);
+            buffer = buffer.slice(cut + 2);
+            if (/^event: replying$/m.test(block)) onReplying();
+          }
+        }
+      } else if (res.status === 404) return; // the chat's gone
+    } catch {
+      // Dropped (or closed): try again shortly.
+    }
+    if (signal.aborted) return;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+}
+
+/**
  * Follow a reply being written in a chat from another device (or before this app opened it):
  * what it has written so far, then the rest, through the same handlers. False when no reply
  * is being written.

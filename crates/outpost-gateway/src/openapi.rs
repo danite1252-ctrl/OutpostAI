@@ -144,6 +144,7 @@ use crate::routes::{
         crate::persona_templates::list,
         chat::stop_reply,
         chat::live,
+        chat::watch,
         crate::persona_templates::add,
         crate::server_tools::catalog,
         crate::server_tools::create,

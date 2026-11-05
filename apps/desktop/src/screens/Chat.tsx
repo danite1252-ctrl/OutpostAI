@@ -7,6 +7,7 @@ import {
   jobCards,
   MAX_IMAGES,
   followReply,
+  watchChat,
   streamMessage,
   type Chat as ChatT,
   type FileAction,
@@ -108,8 +109,12 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
     const controller = new AbortController();
     api.chat(token, chatId).then((r) => {
       setMessages(r.messages);
-      // A reply being written there (from the phone, say): follow it.
-      if (!controller.signal.aborted) void follow(chatId, controller);
+      // Replies sent from another device (the phone, say): follow each one as it's written,
+      // including one being written now.
+      if (!controller.signal.aborted)
+        void watchChat(token, chatId, () => {
+          if (!controller.signal.aborted && !abort.current) void follow(chatId, new AbortController(), controller.signal);
+        }, controller.signal);
     }, fail);
     return () => controller.abort();
   }, [activeId, token, fail]);
@@ -365,8 +370,10 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
   }
 
   /** Show a reply being written in this chat elsewhere, as it's written (and answer its asks). */
-  async function follow(chatId: string, controller: AbortController) {
+  async function follow(chatId: string, controller: AbortController, closed?: AbortSignal) {
     if (abort.current) return; // this app is sending one
+    // Switching chats stops following.
+    closed?.addEventListener("abort", () => controller.abort());
     const here = () => activeRef.current === chatId;
     const empty: Draft = { content: "", thinking: "", model: "", files: [] };
     let following = false;

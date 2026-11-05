@@ -248,6 +248,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/chats/{id}/messages/{message_id}", delete(chat::delete_message))
         .route("/api/chats/{id}/stop", post(chat::stop_reply))
         .route("/api/chats/{id}/live", get(chat::live))
+        .route("/api/chats/{id}/watch", get(chat::watch))
         .route("/api/files/{id}", get(chat::get_file))
         .route("/api/memory", get(chat::list_memory).post(chat::add_memory))
         .route(

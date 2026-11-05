@@ -341,7 +341,9 @@ impl Workspace {
             if folder.kind != "pc" && !self.server_commands {
                 return fail(op, &shown, "Commands can't run in server folders from this account.".into());
             }
-            if matches!(op, "run" | "start") {
+            // Asking first, with changes waiting: a build would use the old files. (Saving
+            // straight away, older waiting changes don't hold anything up.)
+            if matches!(op, "run" | "start") && self.mode != "auto" {
                 let waiting = self.waiting_in(folder).await;
                 if !waiting.is_empty() {
                     let n = waiting.len();
@@ -375,7 +377,9 @@ impl Workspace {
             "list" => self.list(folder, &inner).await.map(|(text, n)| (text, format!("{n} entries"), None)),
             "read" => {
                 let from = args.get("from_line").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
-                let waiting = self.waiting_change(folder, &slash(&inner)).await;
+                // Asking first: the model sees its own changes still waiting (saving straight away,
+                // the file is what's saved).
+                let waiting = if self.mode == "auto" { None } else { self.waiting_change(folder, &slash(&inner)).await };
                 let text = match &waiting {
                     Some(c) => Ok(Some(c.after.clone())),
                     None => self.read_text(folder, &inner).await,

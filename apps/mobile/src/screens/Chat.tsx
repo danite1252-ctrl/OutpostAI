@@ -385,8 +385,38 @@ function Conversation({
     [api, chat.id, onError],
   );
   useEffect(() => {
-    void reload().then(() => follow());
-    return () => stop.current?.();
+    // Watch the chat while it's open: a reply sent from another device (the PC) is followed
+    // as it's written, including one being written now.
+    let open = true;
+    let unwatch: (() => void) | null = null;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    const watch = () => {
+      if (!open) return;
+      unwatch = api.stream(
+        `/api/chats/${chat.id}/watch`,
+        null,
+        {
+          event: (name) => {
+            if (name === "replying") follow();
+          },
+          // Dropped (the network changed, the app was away): watch again shortly.
+          done: () => {
+            if (open) retry = setTimeout(watch, 3000);
+          },
+          error: () => {
+            if (open) retry = setTimeout(watch, 3000);
+          },
+        },
+        "GET",
+      );
+    };
+    void reload().then(() => watch());
+    return () => {
+      open = false;
+      if (retry) clearTimeout(retry);
+      unwatch?.();
+      stop.current?.();
+    };
   }, [reload]);
 
   // Keep the newest message in view when the keyboard opens.
