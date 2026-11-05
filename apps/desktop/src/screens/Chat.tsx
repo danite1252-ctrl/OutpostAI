@@ -327,7 +327,11 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
             if (error) setError(error);
           },
           error: (message) => setError(message),
-          file: (a) => setDraft((d) => (d ? { ...d, files: [...d.files, a] } : d)),
+          file: (a) => {
+            setDraft((d) => (d ? { ...d, files: [...d.files, a] } : d));
+            // A change made or waiting: show its Apply / Undo now, not only when the reply ends.
+            if (a.change_id) void chatFiles.reload();
+          },
           approve: (ask) =>
             new Promise((resolve) =>
               setAsking({
@@ -385,7 +389,10 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
           },
           thinking: (t) => update((d) => ({ ...d, thinking: d.thinking + t })),
           token: (t) => update((d) => ({ ...d, content: d.content + t })),
-          file: (a) => update((d) => ({ ...d, files: [...d.files, a] })),
+          file: (a) => {
+            update((d) => ({ ...d, files: [...d.files, a] }));
+            if (a.change_id) void chatFiles.reload();
+          },
           done: ({ message, error }) => {
             if (here()) setMessages((m) => (m.some((x) => x.id === message.id) ? m : [...m, message]));
             if (error) setError(error);

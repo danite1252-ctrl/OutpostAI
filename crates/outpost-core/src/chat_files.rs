@@ -378,6 +378,19 @@ pub async fn change(pool: &SqlitePool, chat_id: &str, id: &str) -> CoreResult<Fi
 }
 
 /// Move a change on: proposed → applied | skipped; applied → undone. Anything else is refused.
+/// A waiting change, changed again before the user got to it: it now ends as `after` (still
+/// from the same starting file), so there's one change per file to apply.
+pub async fn update_proposed(pool: &SqlitePool, chat_id: &str, id: &str, after: &str) -> CoreResult<FileChange> {
+    sqlx::query("UPDATE file_changes SET after = ?, updated_at = ? WHERE id = ? AND chat_id = ? AND status = 'proposed'")
+        .bind(after)
+        .bind(now())
+        .bind(id)
+        .bind(chat_id)
+        .execute(pool)
+        .await?;
+    change(pool, chat_id, id).await
+}
+
 pub async fn set_change_status(pool: &SqlitePool, chat_id: &str, id: &str, to: &str) -> CoreResult<FileChange> {
     let c = change(pool, chat_id, id).await?;
     let ok = matches!((c.status.as_str(), to), ("proposed", "applied") | ("proposed", "skipped") | ("applied", "undone"));

@@ -341,6 +341,31 @@ impl Workspace {
             if folder.kind != "pc" && !self.server_commands {
                 return fail(op, &shown, "Commands can't run in server folders from this account.".into());
             }
+            if matches!(op, "run" | "start") {
+                let waiting = self.waiting_in(folder).await;
+                if !waiting.is_empty() {
+                    let n = waiting.len();
+                    return Outcome {
+                        reply: format!(
+                            "Not run: {n} change{} in {} {} still waiting for the user to apply ({}), so the command \
+                             would use the old files. Stop now: tell the user to apply them (Apply all) and say \
+                             \"carry on\", then run it. Don't change more files or run anything else until they do.",
+                            if n == 1 { "" } else { "s" },
+                            folder.name,
+                            if n == 1 { "is" } else { "are" },
+                            waiting.join(", ")
+                        ),
+                        action: FileAction {
+                            op: op.into(),
+                            path: shown.clone(),
+                            note: Some(format!("waiting for {n} change{} to be applied", if n == 1 { "" } else { "s" })),
+                            change_id: None,
+                            failed: true,
+                        },
+                        more: Vec::new(),
+                    };
+                }
+            }
             if op == "run" {
                 return self.run_command(folder, &inner, &shown, args).await;
             }
@@ -350,9 +375,18 @@ impl Workspace {
             "list" => self.list(folder, &inner).await.map(|(text, n)| (text, format!("{n} entries"), None)),
             "read" => {
                 let from = args.get("from_line").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
-                self.read_text(folder, &inner).await.and_then(|t| match t {
+                let waiting = self.waiting_change(folder, &slash(&inner)).await;
+                let text = match &waiting {
+                    Some(c) => Ok(Some(c.after.clone())),
+                    None => self.read_text(folder, &inner).await,
+                };
+                text.and_then(|t| match t {
                     Some(t) => Ok(numbered(&shown, &t, from)),
                     None => Err("There's no such file.".to_string()),
+                })
+                .map(|(text, note, id)| match waiting {
+                    Some(_) => (format!("(This includes your changes still waiting for the user to apply.)\n{text}"), note, id),
+                    None => (text, note, id),
                 })
             }
             "search" => self.search(folder, &inner, &s("text")).await.map(|(text, n)| (text, format!("{n} matches"), None)),
@@ -534,6 +568,27 @@ impl Workspace {
     }
 
     /// Make (or propose) a change. `make` gets what's there now and returns the new text.
+    /// This chat's change to that file still waiting for the user, if any.
+    async fn waiting_change(&self, folder: &ChatFolder, rel: &str) -> Option<chat_files::FileChange> {
+        chat_files::changes(&self.state.pool, &self.chat_id)
+            .await
+            .ok()?
+            .into_iter()
+            .rev()
+            .find(|c| c.status == "proposed" && c.folder_id == folder.id && c.kind == folder.kind && c.path == rel)
+    }
+
+    /// Changes in this folder still waiting for the user: a command would run on the old files.
+    async fn waiting_in(&self, folder: &ChatFolder) -> Vec<String> {
+        chat_files::changes(&self.state.pool, &self.chat_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|c| c.status == "proposed" && c.folder_id == folder.id && c.kind == folder.kind)
+            .map(|c| c.path)
+            .collect()
+    }
+
     /// A file can't go where a folder is (or will be), or inside something that's a file: the
     /// folder as it is, and the changes still waiting in this chat.
     async fn check_shape(&self, folder: &ChatFolder, inner: &Path, rel: &str) -> Result<(), String> {
@@ -587,6 +642,28 @@ impl Workspace {
     ) -> Result<(String, String, Option<String>), String> {
         let rel = slash(inner);
         self.check_shape(folder, inner, &rel).await?;
+        // A change to this file is already waiting: build on it, and keep one change per file.
+        let waiting = if self.mode == "auto" { None } else { self.waiting_change(folder, &rel).await };
+        if let Some(w) = waiting {
+            let shown = join(&folder.name, inner);
+            let after = make(Some(w.after.clone()))?;
+            if after.len() > WRITE_LIMIT {
+                return Err("That's too big for one file (1 MB at most).".into());
+            }
+            if after == w.after {
+                return Ok((format!("{shown} already says that: nothing to change."), "no change".into(), None));
+            }
+            let c = chat_files::update_proposed(&self.state.pool, &self.chat_id, &w.id, &after).await.map_err(|e| e.to_string())?;
+            let (added, removed) = line_counts(c.before.as_deref(), &after);
+            return Ok((
+                format!(
+                    "Updated your waiting change to {shown} (now +{added} −{removed} lines from the original). It's still \
+                     waiting for the user to apply it; reading the file shows your version."
+                ),
+                format!("+{added} −{removed}"),
+                Some(c.id),
+            ));
+        }
         let before = self.read_text(folder, inner).await?;
         let after = make(before.clone())?;
         if after.len() > WRITE_LIMIT {
@@ -615,8 +692,9 @@ impl Workspace {
                 .map_err(|e| e.to_string())?;
             Ok((
                 format!(
-                    "Proposed a change to {shown} (+{added} −{removed} lines). The user will apply or skip it; the file \
-                     stays as it was until then, so don't read it back expecting the change."
+                    "Proposed a change to {shown} (+{added} −{removed} lines). It's waiting for the user to apply it: \
+                     reading the file shows your version, but commands (builds) can't run in this folder until the \
+                     user has applied or skipped the waiting changes."
                 ),
                 format!("+{added} −{removed}"),
                 Some(c.id),

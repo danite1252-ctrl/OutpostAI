@@ -565,7 +565,9 @@ function AllChanges({ token, chatId, actions, files }: { token: string; chatId: 
   const [note, setNote] = useState<string | null>(null);
   const mine = actions
     .map((a) => files.changes.find((c) => c.id === a.change_id))
-    .filter((c): c is NonNullable<typeof c> => !!c && (c.kind !== "pc" || files.local.some((l) => l.id === c.folder_id)));
+    .filter((c): c is NonNullable<typeof c> => !!c && (c.kind !== "pc" || files.local.some((l) => l.id === c.folder_id)))
+    // A change updated again later in the reply appears more than once: count it once.
+    .filter((c, i, list) => list.findIndex((x) => x.id === c.id) === i);
   const waiting = mine.filter((c) => c.status === "proposed");
   const applied = mine.filter((c) => c.status === "applied");
   if (waiting.length < 2 && applied.length < 2) return null;
