@@ -1049,10 +1049,14 @@ export interface StreamHandlers {
   confirm?: (question: string) => Promise<boolean>;
   /** Asked before a command runs in a folder (`always`: what "Always allow" would allow). */
   approve?: (ask: CommandAsk) => Promise<{ ok: boolean; always?: boolean }>;
+  /** A request was answered (maybe on another device) or given up on: stop showing it. */
+  answered?: (id: string) => void;
 }
 
 /** A reply wants to run a command in a folder the person hasn't allowed it for. */
 export interface CommandAsk {
+  /** This request (an answer on any device settles it). */
+  id: string;
   question: string;
   command: string;
   folder: string;
@@ -1147,6 +1151,7 @@ async function readReply(stream: ReadableStream<Uint8Array>, token: string, chat
       else if (name === "file_request") {
         if (!follower) void answerFileRequest(token, chatId, payload);
       }
+      else if (name === "answered") on.answered?.(String(payload.id ?? ""));
       else if (name === "confirm") {
         const question = String(payload.question ?? "Go ahead?");
         const ask: Promise<{ ok: boolean; always?: boolean; cannot_ask?: boolean }> =

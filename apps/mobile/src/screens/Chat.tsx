@@ -431,6 +431,10 @@ function Conversation({
         const c = data as { id: string; kind?: string; command?: string; folder?: string; always?: string | null };
         if (c.kind === "command") setAsking({ id: c.id, command: c.command ?? "", folder: c.folder ?? "", always: c.always ?? null });
         else void answerAsk(c.id, { ok: false, cannot_ask: true });
+      } else if (name === "answered") {
+        // Answered on another device (or given up on): put it away here too.
+        const id = (data as { id?: string }).id;
+        setAsking((a) => (a && a.id === id ? null : a));
       } else if (name === "error") setError(String((d as { message?: string }).message ?? "The reply failed."));
     };
   }

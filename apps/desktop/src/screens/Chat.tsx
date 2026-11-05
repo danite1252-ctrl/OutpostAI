@@ -338,6 +338,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
                 },
               }),
             ),
+          answered: (id) => setAsking((a) => (a && a.ask.id === id ? null : a)),
         },
         controller.signal,
         chatFiles.reachable,
@@ -400,6 +401,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
                 },
               }),
             ),
+          answered: (id) => setAsking((a) => (a && a.ask.id === id ? null : a)),
         },
         controller.signal,
       );

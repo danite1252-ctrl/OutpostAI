@@ -402,7 +402,8 @@ mod tests {
             }
             let id = relay.pending_ids().pop().unwrap();
             assert!(relay.answer("chat1", &id, json!({ "ok": false })));
-            // Nothing else is asked of the app.
+            // Every device is told it's settled ("answered"), and nothing else is asked.
+            assert!(tokio::time::timeout(Duration::from_millis(500), rx.recv()).await.is_ok());
             assert!(tokio::time::timeout(Duration::from_millis(100), rx.recv()).await.is_err());
         });
         let out = t.run("home_assistant__hassturnoff", &json!({ "name": "lamp" })).await;

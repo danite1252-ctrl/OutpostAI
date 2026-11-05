@@ -123,6 +123,10 @@ impl Relay {
             }
         };
         self.waiting.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+        if event == "confirm" {
+            // Answered (on one device) or given up on: every device showing it puts it away.
+            let _ = events.send(Event::default().event("answered").data(json!({ "id": id }).to_string())).await;
+        }
         let v = answer?;
         match v.get("error").and_then(Value::as_str) {
             Some(e) => Err(e.to_string()),
@@ -284,7 +288,7 @@ impl Workspace {
                     "path": { "type": "string", "description": "Folder to look in, e.g. Shop or Shop/src." } }, "required": ["text", "path"] } } },
             { "type": "function", "function": {
                 "name": "write_file",
-                "description": "Create a file, or replace a file's whole content.",
+                "description": "Create a file, or replace a file's whole content. Folders are made by themselves when you write a file inside them (write src/main/java/App.java directly): never write a file just to make a folder.",
                 "parameters": { "type": "object", "properties": {
                     "path": path,
                     "content": { "type": "string", "description": "The complete new content." } }, "required": ["path", "content"] } } },
@@ -530,12 +534,59 @@ impl Workspace {
     }
 
     /// Make (or propose) a change. `make` gets what's there now and returns the new text.
+    /// A file can't go where a folder is (or will be), or inside something that's a file: the
+    /// folder as it is, and the changes still waiting in this chat.
+    async fn check_shape(&self, folder: &ChatFolder, inner: &Path, rel: &str) -> Result<(), String> {
+        let shown = join(&folder.name, inner);
+        let folder_msg = format!(
+            "{shown} is a folder, so it can't be written as a file. Folders are made by themselves when you write a file \
+             inside one: write each file at its full path (e.g. {shown}/src/Main.java)."
+        );
+        if folder.kind != "pc" {
+            let root = self.server_root(folder);
+            let target = within(&root, inner)?;
+            if target.is_dir() {
+                return Err(folder_msg);
+            }
+            let mut up = target.parent();
+            while let Some(p) = up {
+                if p == root || !p.starts_with(&root) {
+                    break;
+                }
+                if p.is_file() {
+                    let name = p.strip_prefix(&root).map(slash).unwrap_or_default();
+                    return Err(format!(
+                        "{} is a file, so nothing can go inside it. If it was meant to be a folder, delete that file first.",
+                        join(&folder.name, Path::new(&name))
+                    ));
+                }
+                up = p.parent();
+            }
+        }
+        let waiting = chat_files::changes(&self.state.pool, &self.chat_id).await.map_err(|e| e.to_string())?;
+        for c in waiting.iter().filter(|c| c.status == "proposed" && c.folder_id == folder.id && c.kind == folder.kind) {
+            if c.path.starts_with(&format!("{rel}/")) {
+                return Err(folder_msg);
+            }
+            if rel.starts_with(&format!("{}/", c.path)) {
+                return Err(format!(
+                    "A change waiting for the user writes {} as a file, so {shown} can't go inside it. Folders are made by \
+                     themselves: don't write a file to make a folder.",
+                    join(&folder.name, Path::new(&c.path))
+                ));
+            }
+        }
+        Ok(())
+    }
+
     async fn change(
         &self,
         folder: &ChatFolder,
         inner: &Path,
         make: impl FnOnce(Option<String>) -> Result<String, String>,
     ) -> Result<(String, String, Option<String>), String> {
+        let rel = slash(inner);
+        self.check_shape(folder, inner, &rel).await?;
         let before = self.read_text(folder, inner).await?;
         let after = make(before.clone())?;
         if after.len() > WRITE_LIMIT {
@@ -546,7 +597,6 @@ impl Workspace {
             return Ok((format!("{shown} already says that: nothing to change."), "no change".into(), None));
         }
         let (added, removed) = line_counts(before.as_deref(), &after);
-        let rel = slash(inner);
         if self.mode == "auto" {
             if folder.kind == "pc" {
                 self.pc(folder, "write", inner, json!({ "content": after })).await?;
@@ -1160,8 +1210,17 @@ pub fn line_counts(before: Option<&str>, after: &str) -> (usize, usize) {
 pub async fn write_server(root: &Path, inner: &Path, text: &str) -> Result<(), String> {
     tokio::fs::create_dir_all(root).await.map_err(|e| e.to_string())?;
     let file = within(root, inner)?;
+    if file.is_dir() {
+        return Err(format!("{} is a folder, so it can't be written as a file (skip this change).", slash(inner)));
+    }
     if let Some(dir) = file.parent() {
-        tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+        if let Err(e) = tokio::fs::create_dir_all(dir).await {
+            return Err(if e.kind() == std::io::ErrorKind::AlreadyExists || e.raw_os_error() == Some(20) {
+                format!("Part of {} is a file, not a folder, so it can't go there (skip this change).", slash(inner))
+            } else {
+                e.to_string()
+            });
+        }
     }
     let part = file.with_extension(format!(
         "{}outpost-part",
@@ -1259,6 +1318,17 @@ pub fn search_dir(start: &Path, needle: &str, limit: usize) -> Vec<(String, usiz
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn a_file_cant_go_where_a_folder_is() {
+        let root = std::env::temp_dir().join(format!("shape-{}", uuid::Uuid::new_v4()));
+        super::write_server(&root, std::path::Path::new("Hello/src/App.java"), "class App {}").await.unwrap();
+        let e = super::write_server(&root, std::path::Path::new("Hello"), "oops").await.unwrap_err();
+        assert!(e.contains("is a folder"), "{e}");
+        let e = super::write_server(&root, std::path::Path::new("Hello/src/App.java/x.txt"), "oops").await.unwrap_err();
+        assert!(e.contains("is a file"), "{e}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_builds_jars_are_offered() {
         let root = std::env::temp_dir().join(format!("built-{}", uuid::Uuid::new_v4()));

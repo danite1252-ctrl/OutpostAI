@@ -576,36 +576,39 @@ function AllChanges({ token, chatId, actions, files }: { token: string; chatId: 
     setNote(null);
     let done = 0;
     let left = 0;
+    // One that fails doesn't stop the rest: they're listed at the end.
+    const failed: string[] = [];
     try {
       for (const c of list) {
-        if (c.kind === "pc" && what !== "skip") {
-          const expect = what === "apply" ? c.before : c.after;
-          const becomes = what === "apply" ? c.after : c.before;
-          const now = await pcFolders.op(c.folder_id, "read", c.path);
-          if (now.error) throw new Error(String(now.error));
-          if ((now.missing ? null : String(now.text ?? "")) !== expect) {
-            left++;
-            continue;
-          }
-          const r = becomes === null ? await pcFolders.op(c.folder_id, "delete", c.path) : await pcFolders.op(c.folder_id, "write", c.path, { content: becomes });
-          if (r.error) throw new Error(String(r.error));
-          const updated = await filesApi.act(token, chatId, c.id, what, { done_on_pc: true });
-          files.setChanges((cs) => cs.map((x) => (x.id === updated.id ? updated : x)));
-        } else {
-          try {
-            const updated = await filesApi.act(token, chatId, c.id, what, {});
-            files.setChanges((cs) => cs.map((x) => (x.id === updated.id ? updated : x)));
-          } catch (e) {
-            if (e instanceof ApiError && e.code === "changed_since") {
+        try {
+          if (c.kind === "pc" && what !== "skip") {
+            const expect = what === "apply" ? c.before : c.after;
+            const becomes = what === "apply" ? c.after : c.before;
+            const now = await pcFolders.op(c.folder_id, "read", c.path);
+            if (now.error) throw new Error(String(now.error));
+            if ((now.missing ? null : String(now.text ?? "")) !== expect) {
               left++;
               continue;
             }
-            throw e;
+            const r = becomes === null ? await pcFolders.op(c.folder_id, "delete", c.path) : await pcFolders.op(c.folder_id, "write", c.path, { content: becomes });
+            if (r.error) throw new Error(String(r.error));
+            const updated = await filesApi.act(token, chatId, c.id, what, { done_on_pc: true });
+            files.setChanges((cs) => cs.map((x) => (x.id === updated.id ? updated : x)));
+          } else {
+            const updated = await filesApi.act(token, chatId, c.id, what, {});
+            files.setChanges((cs) => cs.map((x) => (x.id === updated.id ? updated : x)));
           }
+          done++;
+        } catch (e) {
+          if (e instanceof ApiError && e.code === "changed_since") left++;
+          else failed.push(`${c.path} (${message(e)})`);
         }
-        done++;
       }
-      setNote(left ? `${done} done; ${left} left because the file changed since (do those one by one).` : null);
+      const parts = [
+        left ? `${left} left because the file changed since (do those one by one)` : "",
+        failed.length ? `${failed.length} couldn't be done: ${failed.join("; ")}` : "",
+      ].filter(Boolean);
+      setNote(parts.length ? `${done} done; ${parts.join(". ")}.` : null);
     } catch (e) {
       setNote(`${done} done, then: ${message(e)}`);
     } finally {

@@ -330,6 +330,8 @@ function AllChanges({ api, chatId, actions, files }: { api: Outpost; chatId: str
     setNote(null);
     let done = 0;
     let left = 0;
+    // One that fails doesn't stop the rest: they're listed at the end.
+    const failed: string[] = [];
     for (const c of list) {
       try {
         const updated = await api.json<FileChange>("POST", `/api/chats/${chatId}/changes/${c.id}/${what}`, { force: false });
@@ -337,14 +339,14 @@ function AllChanges({ api, chatId, actions, files }: { api: Outpost; chatId: str
         done++;
       } catch (e) {
         if (e instanceof ApiError && e.code === "changed_since") left++;
-        else {
-          setNote(`${done} done, then: ${e instanceof Error ? e.message : "it stopped"}`);
-          setBusy(false);
-          return;
-        }
+        else failed.push(`${c.path} (${e instanceof Error ? e.message : "didn't work"})`);
       }
     }
-    setNote(left ? `${done} done; ${left} left because the file changed since (do those one by one).` : null);
+    const parts = [
+      left ? `${left} left because the file changed since (do those one by one)` : "",
+      failed.length ? `${failed.length} couldn't be done: ${failed.join("; ")}` : "",
+    ].filter(Boolean);
+    setNote(parts.length ? `${done} done; ${parts.join(". ")}.` : null);
     setBusy(false);
   }
   return (
