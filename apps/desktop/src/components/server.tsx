@@ -5,7 +5,7 @@
 // or pair with it (a code from "Pair a device" on something already paired, then your
 // account and PIN). The app then restarts as a paired device of the server.
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   api,
   ApiError,
@@ -27,7 +27,8 @@ import {
   type SignInResponse,
 } from "../api";
 import { okToRestart } from "./system";
-import { Avatar, Button, ErrorNote, Field, ToggleRow } from "./ui";
+import { formatBytes } from "./downloads";
+import { Avatar, Button, ErrorNote, Field, ToggleRow, areYouSure } from "./ui";
 
 function message(err: unknown) {
   if (err instanceof ApiError) return err.message;
@@ -616,6 +617,7 @@ export function ServerPanel({
               </Button>
             )}
           </div>
+          {isOwner && <BuildCache token={token} />}
         </>
       ) : (
         <>
@@ -1065,5 +1067,43 @@ export function WhoPicker({ onPicked, onAdd }: { onPicked: (auth: SignInResponse
         </>
       )}
     </main>
+  );
+}
+
+/** What builds in server folders keep (Gradle's libraries), with a way to clear it. */
+function BuildCache({ token }: { token: string }) {
+  const [sizes, setSizes] = useState<{ bytes: number; tools_bytes: number } | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const look = useCallback(() => {
+    systemApi.buildCache(token).then(setSizes, () => setSizes(null));
+  }, [token]);
+  useEffect(() => look(), [look]);
+  if (!sizes) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-3 text-sm">
+      <span className="text-muted">
+        Build caches: {formatBytes(sizes.bytes)}
+        {sizes.tools_bytes > 0 ? ` (Java and Gradle, kept: ${formatBytes(sizes.tools_bytes)})` : ""}
+      </span>
+      {sizes.bytes > 0 && (
+        <Button
+          variant="ghost"
+          onClick={async () => {
+            if (!(await areYouSure(`Clear the build caches (${formatBytes(sizes.bytes)})? The next build downloads what it needs again.`))) return;
+            setNote(null);
+            try {
+              await systemApi.clearBuildCache(token);
+              setNote("Cleared.");
+              look();
+            } catch (e) {
+              setNote(message(e));
+            }
+          }}
+        >
+          Clear build caches
+        </Button>
+      )}
+      {note && <span className="text-muted">{note}</span>}
+    </div>
   );
 }

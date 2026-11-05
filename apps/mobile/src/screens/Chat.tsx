@@ -10,7 +10,7 @@ import HandsFree from "./HandsFree";
 import { hear, onSaying, say, stopSaying, type Listening } from "../voice";
 import type { Chat as ChatT, Message, Outpost, Persona } from "../outpost";
 import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
-import { FileActions, FilesSheet, useChatFiles, type FileAction } from "../chatfiles";
+import { FileActions, FilesSheet, formatBytes, useChatFiles, type FileAction, type Folder } from "../chatfiles";
 import { ToolsSheet, useChatToolNames } from "../tools";
 import { ModelSheet } from "../models";
 import { ChatDocsSheet } from "../docsMemory";
@@ -86,7 +86,7 @@ export default function Chat({
           setRenaming(c);
         },
       },
-      { text: "Delete", style: "destructive", onPress: () => removeChat(c) },
+      { text: "Delete", style: "destructive", onPress: () => void removeChat(c) },
       { text: "Cancel", style: "cancel" },
     ]);
   async function rename() {
@@ -103,23 +103,40 @@ export default function Chat({
     }
   }
 
-  // Delete a chat (with its pictures, and what the persona learned from it).
-  const removeChat = (c: ChatT) =>
-    Alert.alert("Delete this chat?", `"${c.title}" goes, with its pictures and anything the persona learned from it.`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () =>
-          void api.json("DELETE", `/api/chats/${c.id}`).then(
-            () => setChats((list) => list.filter((x) => x.id !== c.id)),
-            (e) => {
-              onError(e);
-              setError(e instanceof Error ? e.message : "Couldn't delete that chat.");
-            },
-          ),
-      },
-    ]);
+  // Delete a chat (with its pictures, and what the persona learned from it). Server folders
+  // only this chat uses can go with it, so they don't pile up on the server.
+  const deleteChat = (c: ChatT, folders: Folder[]) =>
+    void (async () => {
+      try {
+        await api.json("DELETE", `/api/chats/${c.id}`);
+        for (const f of folders) await api.json("DELETE", `/api/folders/${f.id}`).catch(() => undefined);
+        setChats((list) => list.filter((x) => x.id !== c.id));
+      } catch (e) {
+        onError(e);
+        setError(e instanceof Error ? e.message : "Couldn't delete that chat.");
+      }
+    })();
+  const removeChat = async (c: ChatT) => {
+    const own = await api.get<Folder[]>(`/api/chats/${c.id}/own-folders`).catch(() => [] as Folder[]);
+    const body = `"${c.title}" goes, with its pictures and anything the persona learned from it.`;
+    if (!own.length) {
+      Alert.alert("Delete this chat?", body, [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: () => deleteChat(c, []) },
+      ]);
+      return;
+    }
+    const names = own.map((f) => `"${f.name}" (${formatBytes(f.bytes ?? 0)})`).join(", ");
+    Alert.alert(
+      "Delete this chat?",
+      `${body}\n\nIts server folder${own.length === 1 ? "" : "s"} ${names} ${own.length === 1 ? "isn't" : "aren't"} used by any other chat. Delete ${own.length === 1 ? "it" : "them"} too?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Chat only", onPress: () => deleteChat(c, []) },
+        { text: "Chat and folder", style: "destructive", onPress: () => deleteChat(c, own) },
+      ],
+    );
+  };
 
   if (open) {
     return (

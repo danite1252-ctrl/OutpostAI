@@ -284,3 +284,46 @@ async fn ready_made_personas_come_with_the_tools_you_have() {
     let (s, _) = call(&app, "POST", "/api/personas/templates/nope", Some(&sj), None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn server_folders_show_their_size_and_go_with_the_last_chat_using_them() {
+    let (app, state) = app().await;
+    let (dan, _, _) = people(&app).await;
+    let (s, folder) = call(&app, "POST", "/api/folders", Some(&dan), Some(json!({"name": "MyPlugin"}))).await;
+    assert_eq!(s, StatusCode::CREATED, "{folder}");
+    let id = folder["id"].as_str().unwrap().to_string();
+    let dir = outpost_core::chat_files::folder_dir(&state.config.files_dir(), folder["account_id"].as_str().unwrap(), &id);
+    std::fs::create_dir_all(dir.join("build/libs")).unwrap();
+    std::fs::write(dir.join("build/libs/MyPlugin.jar"), vec![0u8; 2048]).unwrap();
+
+    let link = json!([{"kind": "server", "id": id, "name": "MyPlugin"}]);
+    let (_, one) = call(&app, "POST", "/api/chats", Some(&dan), Some(json!({}))).await;
+    let (_, two) = call(&app, "POST", "/api/chats", Some(&dan), Some(json!({}))).await;
+    let (one, two) = (one["id"].as_str().unwrap().to_string(), two["id"].as_str().unwrap().to_string());
+    for c in [&one, &two] {
+        let (s, v) = call(&app, "PUT", &format!("/api/chats/{c}/folders"), Some(&dan), Some(link.clone())).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+    }
+
+    let (_, list) = call(&app, "GET", "/api/folders", Some(&dan), None).await;
+    assert_eq!(list[0]["name"], "MyPlugin");
+    assert_eq!(list[0]["bytes"], 2048);
+    assert_eq!(list[0]["chats"], 2);
+
+    // Used by another chat: not offered with this one.
+    let (_, own) = call(&app, "GET", &format!("/api/chats/{one}/own-folders"), Some(&dan), None).await;
+    assert_eq!(own.as_array().unwrap().len(), 0, "{own}");
+    let (s, _) = call(&app, "DELETE", &format!("/api/chats/{two}"), Some(&dan), None).await;
+    assert!(s.is_success());
+    let (_, own) = call(&app, "GET", &format!("/api/chats/{one}/own-folders"), Some(&dan), None).await;
+    assert_eq!(own[0]["id"], id.as_str());
+
+    let (s, _) = call(&app, "DELETE", &format!("/api/folders/{id}"), Some(&dan), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert!(!dir.exists());
+
+    // Build caches: owners see the size.
+    let (s, cache) = call(&app, "GET", "/api/system/build-cache", Some(&dan), None).await;
+    assert_eq!(s, StatusCode::OK, "{cache}");
+    assert_eq!(cache["bytes"], 0);
+}

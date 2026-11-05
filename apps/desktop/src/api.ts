@@ -333,6 +333,10 @@ export interface Folder {
   name: string;
   created_at: number;
   updated_at: number;
+  /** Its files' total size (server folders). */
+  bytes?: number;
+  /** How many chats use it. */
+  chats?: number;
 }
 
 /** A folder a chat works with: on the server, or on a PC. */
@@ -382,6 +386,8 @@ export const filesApi = {
   createFolder: (token: string, name: string) => request<Folder>("POST", "/api/folders", { token, body: { name } }),
   renameFolder: (token: string, id: string, name: string) => request<Folder>("PATCH", `/api/folders/${id}`, { token, body: { name } }),
   deleteFolder: (token: string, id: string) => request<void>("DELETE", `/api/folders/${id}`, { token }),
+  /** The server folders only this chat uses. */
+  ownFolders: (token: string, chatId: string) => request<Folder[]>("GET", `/api/chats/${chatId}/own-folders`, { token }),
   folderFiles: (token: string, id: string) => request<{ path: string; bytes: number }[]>("GET", `/api/folders/${id}/files`, { token }),
   /** Put one file (any type) into a server folder. */
   async putFile(token: string, id: string, path: string, data: Blob): Promise<void> {
@@ -1712,6 +1718,9 @@ export const systemApi = {
     request<{ replies: number; jobs: number; commands: number; processes: number; summary: string | null }>("GET", "/api/system/busy", { token }),
   /** Restart Outpost on the server (a server only). */
   restartServer: (token: string) => request<void>("POST", "/api/system/restart", { token }),
+  /** Build caches (what builds in server folders download), and Java and Gradle themselves. */
+  buildCache: (token: string) => request<{ bytes: number; tools_bytes: number }>("GET", "/api/system/build-cache", { token }),
+  clearBuildCache: (token: string) => request<void>("DELETE", "/api/system/build-cache", { token }),
 };
 
 /** Wait for the server to come back after a restart (up to two minutes). */

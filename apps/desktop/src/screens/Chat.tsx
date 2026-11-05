@@ -25,7 +25,8 @@ import { ChatDocuments, SourcesLine } from "../components/documents";
 import { FileActions, FilesPanel, useChatFiles } from "../components/chatfiles";
 import { PlusMenu } from "../components/plusmenu";
 import { ToolsPanel, useChatTools } from "../components/tools";
-import type { CommandAsk, MessageTools } from "../api";
+import type { CommandAsk, Folder, MessageTools } from "../api";
+import { formatBytes } from "../components/downloads";
 import { GalleryPicker, mediaAsInput } from "../components/gallery";
 import { Avatar, Button, ErrorNote, areYouSure } from "../components/ui";
 import { hasModel } from "./Personas";
@@ -250,8 +251,18 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
 
   async function removeChat(id: string) {
     if (!await areYouSure("Delete this chat? Its images, and anything Outpost learned from it, go too.")) return;
+    // Server folders only this chat uses: offer to delete them too, so they don't pile up.
+    const own = await filesApi.ownFolders(token, id).catch(() => [] as Folder[]);
+    let alsoFolders = false;
+    if (own.length) {
+      const names = own.map((f) => `"${f.name}" (${formatBytes(f.bytes ?? 0)})`).join(", ");
+      alsoFolders = await areYouSure(
+        `Also delete its server folder${own.length === 1 ? "" : "s"} ${names}? No other chat uses ${own.length === 1 ? "it" : "them"}. Cancel keeps ${own.length === 1 ? "it" : "them"}.`,
+      );
+    }
     try {
       await api.deleteChat(token, id);
+      if (alsoFolders) for (const f of own) await filesApi.deleteFolder(token, f.id).catch(() => undefined);
       setChats((cs) => cs.filter((c) => c.id !== id));
       if (activeId === id) setActiveId(null);
     } catch (err) {

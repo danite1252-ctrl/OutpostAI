@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Text, View } from "react-native";
 import { message, Toggle, usePin } from "./admin";
+import { formatBytes } from "./chatfiles";
 import type { Outpost } from "./outpost";
 import { Button, C, ErrorText, P, s } from "./ui";
 
@@ -28,12 +29,14 @@ export function ServerCard({ api }: { api: Outpost }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showCrashes, setShowCrashes] = useState(false);
+  const [cache, setCache] = useState<{ bytes: number; tools_bytes: number } | null>(null);
   const { guard, prompt } = usePin();
 
   const reload = useCallback(async () => {
     try {
       setSt(await api.get<UpdateStatus>("/api/updates"));
       setDiag(await api.get<Diagnostics>("/api/diagnostics").catch(() => null));
+      setCache(await api.get<{ bytes: number; tools_bytes: number }>("/api/system/build-cache").catch(() => null));
     } catch (e) {
       setError(message(e));
     }
@@ -126,6 +129,26 @@ export function ServerCard({ api }: { api: Outpost }) {
             ))}
           {diag.unseen > 0 && <Button kind="ghost" title="Mark as seen" onPress={() => void markSeen()} />}
           <P muted>Full reports are in Settings › Diagnostics on the PC.</P>
+        </View>
+      )}
+      {cache && (
+        <View style={{ gap: 6 }}>
+          <P muted>
+            Build caches (what coding builds download): {formatBytes(cache.bytes)}
+            {cache.tools_bytes > 0 ? `. Java and Gradle, kept: ${formatBytes(cache.tools_bytes)}.` : "."}
+          </P>
+          {cache.bytes > 0 && (
+            <Button
+              kind="ghost"
+              title={busy === "Clearing…" ? "Clearing…" : "Clear build caches"}
+              onPress={() =>
+                Alert.alert("Clear the build caches?", `${formatBytes(cache.bytes)} goes. The next build downloads what it needs again.`, [
+                  { text: "Keep", style: "cancel" },
+                  { text: "Clear", style: "destructive", onPress: () => void run("Clearing…", () => guard((h) => api.json("DELETE", "/api/system/build-cache", undefined, h))) },
+                ])
+              }
+            />
+          )}
         </View>
       )}
       <Button kind="danger" title={busy === "Restarting…" ? "Restarting…" : "Restart the server"} onPress={restart} />

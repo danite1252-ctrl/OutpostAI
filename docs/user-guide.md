@@ -211,6 +211,12 @@ works (up to 30 rounds in one reply).
   in the background (asking first, like a command), reads their log, types console commands
   into them (`plugins`, `stop`) and stops them when it's done. **Files** shows what's still
   running in each folder, with **Stop**. Anything left running is stopped after 3 hours.
+- **Cleaning up**: server folders stay on the server until you delete them (a folder can be
+  in several chats). Deleting a chat offers to delete its server folders too when no other
+  chat uses them. **Files** lists all your server folders with their sizes and a **Delete**
+  (anything running in one stops first). Builds keep the libraries they download so the next
+  build is quick; owners see their size and **Clear build caches** under the server's settings
+  (Java and Gradle themselves are kept).
 - Long output comes back to the model as the error lines and the end, so it fits.
 - **Stop** ends the reply at its next step and stops a command it's running (with everything
   it started). What it wrote so far is kept.

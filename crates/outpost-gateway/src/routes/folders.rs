@@ -34,11 +34,78 @@ fn inner(path: &str) -> ApiResult<std::path::PathBuf> {
 
 // ---------------------------------------------------------------- server folders
 
-/// My server folders.
+/// A server folder, with how much space it takes and how many chats use it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FolderInfo {
+    #[serde(flatten)]
+    pub folder: Folder,
+    /// Its files' total size.
+    pub bytes: u64,
+    /// Chats it's added to.
+    pub chats: i64,
+}
+
+/// Total size of the files under a folder (not following links).
+pub fn size_of(dir: &std::path::Path) -> u64 {
+    let mut total = 0;
+    let mut look = vec![dir.to_path_buf()];
+    while let Some(d) = look.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let Ok(m) = e.metadata() else { continue };
+            if m.is_dir() {
+                look.push(e.path());
+            } else {
+                total += m.len();
+            }
+        }
+    }
+    total
+}
+
+async fn info(state: &AppState, f: Folder) -> ApiResult<FolderInfo> {
+    let chats: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chat_folders WHERE kind = 'server' AND ref = ?")
+        .bind(&f.id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(outpost_core::CoreError::from)?;
+    let dir = root(state, &f.account_id, &f.id);
+    let bytes = tokio::task::spawn_blocking(move || size_of(&dir)).await.unwrap_or(0);
+    Ok(FolderInfo { folder: f, bytes, chats })
+}
+
+/// My server folders, with their sizes and how many chats use each.
 #[utoipa::path(get, path = "/api/folders", tag = "files", security(("bearer" = [])),
-    responses((status = 200, description = "Folders", body = [Folder])))]
-pub async fn list(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<Vec<Folder>>> {
-    Ok(Json(chat_files::folders(&state.pool, &auth.account.id).await?))
+    responses((status = 200, description = "Folders", body = [FolderInfo])))]
+pub async fn list(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<Vec<FolderInfo>>> {
+    let mut out = Vec::new();
+    for f in chat_files::folders(&state.pool, &auth.account.id).await? {
+        out.push(info(&state, f).await?);
+    }
+    Ok(Json(out))
+}
+
+/// The server folders only this chat uses (what deleting the chat could clean up too).
+#[utoipa::path(get, path = "/api/chats/{id}/own-folders", tag = "files", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Chat id")),
+    responses((status = 200, description = "Folders", body = [FolderInfo])))]
+pub async fn own_folders(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<Vec<FolderInfo>>> {
+    outpost_core::chats::get(&state.pool, &auth.account.id, &id).await?;
+    let refs: Vec<String> = sqlx::query_scalar(
+        "SELECT ref FROM chat_folders cf WHERE chat_id = ? AND kind = 'server' \
+         AND NOT EXISTS (SELECT 1 FROM chat_folders o WHERE o.kind = 'server' AND o.ref = cf.ref AND o.chat_id <> cf.chat_id)",
+    )
+    .bind(&id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(outpost_core::CoreError::from)?;
+    let mut out = Vec::new();
+    for r in refs {
+        if let Ok(f) = chat_files::folder(&state.pool, &auth.account.id, &r).await {
+            out.push(info(&state, f).await?);
+        }
+    }
+    Ok(Json(out))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -70,6 +137,17 @@ pub async fn rename(State(state): State<AppState>, auth: Auth, Path(id): Path<St
     params(("id" = String, Path, description = "Folder id")),
     responses((status = 204, description = "Deleted"), (status = 404, description = "Not found", body = ErrorBody)))]
 pub async fn delete(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {
+    // Anything still running in it (a test server) stops first.
+    let f = chat_files::folder(&state.pool, &auth.account.id, &id).await?;
+    let prefix = format!("{}:", f.id);
+    for (name, running) in crate::runner::list(&prefix) {
+        if running {
+            let _ = crate::runner::stop(&name);
+        }
+    }
+    if !crate::runner::list(&prefix).is_empty() {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
     chat_files::delete_folder(&state.pool, &state.config.files_dir(), &auth.account.id, &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

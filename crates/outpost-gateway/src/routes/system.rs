@@ -155,6 +155,59 @@ pub async fn busy(State(state): State<AppState>, _auth: Auth) -> Json<updates::B
     Json(updates::busy(&state))
 }
 
+/// Build caches: what builds in server folders download and keep (Gradle's libraries, per
+/// account), so the next build is quick.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BuildCache {
+    pub bytes: u64,
+    /// Java and Gradle themselves (kept when the caches are cleared).
+    pub tools_bytes: u64,
+}
+
+fn build_home(state: &AppState) -> std::path::PathBuf {
+    state.config.data_dir.join("build-home")
+}
+
+/// How big the build caches are (owners).
+#[utoipa::path(get, path = "/api/system/build-cache", tag = "system", security(("bearer" = [])),
+    responses((status = 200, description = "Sizes", body = BuildCache)))]
+pub async fn build_cache(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<BuildCache>> {
+    auth.require_owner()?;
+    let (home, engines) = (build_home(&state), state.config.data_dir.join("engines"));
+    let sizes = tokio::task::spawn_blocking(move || {
+        let tools: u64 = std::fs::read_dir(&engines)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| {
+                let n = e.file_name().to_string_lossy().to_string();
+                n == "gradle" || (n.starts_with("java-") && !n.ends_with("-download"))
+            })
+            .map(|e| crate::routes::folders::size_of(&e.path()))
+            .sum();
+        (crate::routes::folders::size_of(&home), tools)
+    })
+    .await
+    .unwrap_or((0, 0));
+    Ok(Json(BuildCache { bytes: sizes.0, tools_bytes: sizes.1 }))
+}
+
+/// Clear the build caches (owners, PIN). Builds download what they need again next time.
+#[utoipa::path(delete, path = "/api/system/build-cache", tag = "system", security(("bearer" = [])),
+    responses((status = 204, description = "Cleared"), (status = 403, description = "Not an owner, or no PIN", body = ErrorBody),
+        (status = 409, description = "A build is running", body = ErrorBody)))]
+pub async fn clear_build_cache(State(state): State<AppState>, auth: Auth, headers: axum::http::HeaderMap) -> ApiResult<StatusCode> {
+    auth.require_owner()?;
+    auth.require_fresh_pin(&state, &headers).await?;
+    let (commands, processes) = crate::runner::busy();
+    if commands + processes > 0 {
+        return Err(ApiError::conflict("A build or test server is running: stop it first, then clear the caches."));
+    }
+    let home = build_home(&state);
+    tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&home)).await.ok();
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Restart Outpost on this server (owner, with the PIN from a paired device), e.g. after
 /// changing network access. Only a server started with `--server`; it's back in a few seconds.
 #[utoipa::path(post, path = "/api/system/restart", tag = "system", security(("bearer" = [])),

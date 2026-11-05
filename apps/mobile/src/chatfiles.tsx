@@ -3,7 +3,7 @@
 // apply, skip or undo (server folders; a PC folder's change is applied on that PC).
 
 import { useCallback, useEffect, useState } from "react";
-import { Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import OutpostNet from "../modules/outpost-net";
 import { ApiError, type Outpost } from "./outpost";
 import { Button, C, Chip, ErrorText, P, s } from "./ui";
@@ -33,9 +33,21 @@ export interface FileChange {
   status: "proposed" | "applied" | "skipped" | "undone";
 }
 
-interface Folder {
+export interface Folder {
   id: string;
   name: string;
+  /** Its files' total size. */
+  bytes?: number;
+  /** How many chats use it. */
+  chats?: number;
+}
+
+/** A size for people: "12 MB". */
+export function formatBytes(n: number) {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(n >= 1e10 ? 0 : 1)} GB`;
+  if (n >= 1e6) return `${Math.round(n / 1e6)} MB`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)} KB`;
+  return `${n} B`;
 }
 
 export function useChatFiles(api: Outpost, chatId: string) {
@@ -87,6 +99,31 @@ export function FilesSheet({
     }
   };
   const unused = server.filter((f) => !files.folders.some((x) => x.kind === "server" && x.id === f.id));
+  const total = server.reduce((n, f) => n + (f.bytes ?? 0), 0);
+  // Delete a server folder and its files (anything running in it stops).
+  function removeServerFolder(f: Folder) {
+    const here = files.folders.some((x) => x.kind === "server" && x.id === f.id);
+    const others = (f.chats ?? 0) - (here ? 1 : 0);
+    Alert.alert(
+      `Delete "${f.name}" from the server?`,
+      `${formatBytes(f.bytes ?? 0)} of files go, and anything running in it stops.${others > 0 ? ` ${others} other chat${others === 1 ? " uses" : "s use"} it too.` : ""}`,
+      [
+        { text: "Keep", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () =>
+            void api.json("DELETE", `/api/folders/${f.id}`).then(
+              () => {
+                setServer((list) => list.filter((x) => x.id !== f.id));
+                if (here) files.setFolders(files.folders.filter((x) => !(x.kind === "server" && x.id === f.id)));
+              },
+              (e) => setError(e instanceof Error ? e.message : "Couldn't delete it."),
+            ),
+        },
+      ],
+    );
+  }
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "flex-end" }}>
@@ -116,6 +153,24 @@ export function FilesSheet({
                 <Chip label="Remove" onPress={() => void save(files.folders.filter((x) => !(x.kind === f.kind && x.id === f.id)))} />
               </View>
             ))}
+            {server.length > 0 && (
+              <>
+                <Text style={s.label}>
+                  Your server folders ({server.length}, {formatBytes(total)})
+                </Text>
+                {server.map((f) => (
+                  <View key={`all-${f.id}`} style={[s.row, { alignItems: "center" }]}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: C.ink }}>{f.name}</Text>
+                      <Text style={{ color: C.muted, fontSize: 13 }}>
+                        {formatBytes(f.bytes ?? 0)} · {f.chats ? `${f.chats} chat${f.chats === 1 ? "" : "s"}` : "no chats"}
+                      </Text>
+                    </View>
+                    <Chip label="Delete" color={C.danger} onPress={() => removeServerFolder(f)} />
+                  </View>
+                ))}
+              </>
+            )}
             {unused.length > 0 && (
               <>
                 <Text style={s.label}>Add a server folder</Text>

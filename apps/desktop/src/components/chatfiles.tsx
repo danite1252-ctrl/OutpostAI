@@ -15,6 +15,7 @@ import {
   type Folder,
   type PcFolder,
 } from "../api";
+import { formatBytes } from "./downloads";
 import { saveToDownloads } from "./save";
 import { Button, ErrorNote, ToggleRow, areYouSure } from "./ui";
 
@@ -123,6 +124,23 @@ export function FilesPanel({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  /** Delete a server folder and its files (stopping anything running in it). */
+  async function removeServerFolder(f: Folder) {
+    const others = (f.chats ?? 0) - (files.folders.some((x) => x.kind === "server" && x.id === f.id) ? 1 : 0);
+    const used = others > 0 ? ` ${others} other chat${others === 1 ? " uses" : "s use"} it too.` : "";
+    if (!(await areYouSure(`Delete "${f.name}" (${formatBytes(f.bytes ?? 0)}) from the server? Its files go, and anything running in it stops.${used}`))) return;
+    setError(null);
+    try {
+      await filesApi.deleteFolder(token, f.id);
+      setServer((list) => list.filter((x) => x.id !== f.id));
+      if (files.folders.some((x) => x.kind === "server" && x.id === f.id)) {
+        files.setFolders(files.folders.filter((x) => !(x.kind === "server" && x.id === f.id)));
+      }
+    } catch (e) {
+      setError(message(e));
+    }
+  }
 
   const save = async (list: ChatFolder[]) => {
     setError(null);
@@ -256,6 +274,10 @@ export function FilesPanel({
                       >
                         Download as zip
                       </button>
+                      <button type="button" className="text-danger underline hover:text-ink" onClick={() => void removeServerFolder(s)}>
+                        Delete from the server
+                      </button>
+                      {s.bytes !== undefined && <span className="text-muted">{formatBytes(s.bytes)}</span>}
                     </div>
                   )}
                   {(f.kind === "server" || files.local.some((l) => l.id === f.id)) && <Running token={token} folder={f} />}
@@ -264,6 +286,28 @@ export function FilesPanel({
             })}
           </ul>
         </section>
+
+        {server.length > 0 && (
+          <details className="rounded-xl border border-line px-3 py-2 text-sm">
+            <summary className="cursor-pointer">
+              Your server folders ({server.length}, {formatBytes(server.reduce((n, f) => n + (f.bytes ?? 0), 0))})
+            </summary>
+            <ul className="mt-2 flex flex-col gap-1">
+              {server.map((f) => (
+                <li key={f.id} className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                  <span className="text-xs text-muted">
+                    {formatBytes(f.bytes ?? 0)}
+                    {f.chats ? ` · ${f.chats} chat${f.chats === 1 ? "" : "s"}` : " · no chats"}
+                  </span>
+                  <button type="button" className="text-xs text-danger underline hover:text-ink" onClick={() => void removeServerFolder(f)}>
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
 
         <section className="flex flex-col gap-2">
           <h3 className="text-sm font-semibold">Add a folder</h3>
