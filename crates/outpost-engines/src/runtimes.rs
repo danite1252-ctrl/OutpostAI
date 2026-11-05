@@ -216,6 +216,60 @@ pub async fn ensure_java(client: &reqwest::Client, engines_root: &Path, version:
     java_home(engines_root, version).ok_or_else(|| anyhow!("Java wasn't in its download"))
 }
 
+/// Where Outpost keeps Gradle, for Java builds in server folders.
+pub fn gradle_dir(engines_root: &Path) -> PathBuf {
+    engines_root.join("gradle")
+}
+
+/// Outpost's Gradle (its home folder), if it's been downloaded.
+pub fn gradle_home(engines_root: &Path) -> Option<PathBuf> {
+    let dir = gradle_dir(engines_root);
+    let script = if cfg!(windows) { "gradle.bat" } else { "gradle" };
+    dir.join("bin").join(script).is_file().then_some(dir)
+}
+
+/// Download the current Gradle release into `<engines>/gradle`, checked against Gradle's
+/// checksum. Returns its home folder. A project with its own wrapper (gradlew) uses that
+/// instead; this is for starting one (`gradle init`, `gradle wrapper`) or one without.
+pub async fn ensure_gradle(client: &reqwest::Client, engines_root: &Path, on_progress: impl FnMut(u64, Option<u64>)) -> anyhow::Result<PathBuf> {
+    if let Some(home) = gradle_home(engines_root) {
+        return Ok(home);
+    }
+    let current: serde_json::Value = serde_json::from_str(&download::fetch_text(client, "https://services.gradle.org/versions/current").await?)?;
+    let link = current.get("downloadUrl").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("Gradle didn't say where its download is"))?;
+    let sum = match current.get("checksumUrl").and_then(|v| v.as_str()) {
+        Some(u) => download::fetch_text(client, u).await.unwrap_or_default().trim().to_string(),
+        None => String::new(),
+    };
+    let staging = engines_root.join("gradle-download");
+    let file = staging.join("gradle.zip");
+    let got = download::download(client, link, &file, on_progress).await?;
+    if !sum.is_empty() && !got.eq_ignore_ascii_case(&sum) {
+        let _ = tokio::fs::remove_file(&file).await;
+        bail!("The Gradle download is damaged (checksum mismatch). Please try again.");
+    }
+    let (archive_path, unpacked, dest) = (file.clone(), staging.join("unpacked"), gradle_dir(engines_root));
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        if unpacked.exists() {
+            std::fs::remove_dir_all(&unpacked)?;
+        }
+        archive::extract(&archive_path, &unpacked)?;
+        if dest.exists() {
+            std::fs::remove_dir_all(&dest)?;
+        }
+        archive::unpack_single_folder(&unpacked, &dest)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(dest.join("bin").join("gradle"), std::fs::Permissions::from_mode(0o755));
+        }
+        Ok(())
+    })
+    .await??;
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    gradle_home(engines_root).ok_or_else(|| anyhow!("Gradle wasn't in its download"))
+}
+
 #[cfg(test)]
 mod java_tests {
     use super::java_for_project;

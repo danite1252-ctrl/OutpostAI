@@ -205,9 +205,12 @@ impl Workspace {
         if self.server_commands && self.folders.iter().any(|f| f.kind != "pc") {
             t.push_str(
                 "\n\nFolders on the Outpost server run on Linux: use `./gradlew build` (or `gradlew build`, which \
-                 Outpost runs as ./gradlew), and `/` in paths. Java is provided for Java projects (the version their \
-                 build files ask for: 21, or 25). Gradle and Maven themselves aren't installed, so use the project's \
-                 wrapper (gradlew, mvnw): if a project has none, say so. What a build makes (the .jar in build/libs \
+                 Outpost runs as ./gradlew), and `/` in paths. Java and Gradle are provided (Outpost downloads them the first \
+                 time; Java 21, or 25 when the build files ask for it), so you can start a new project in an \
+                 empty folder: write settings.gradle.kts and build.gradle.kts (for a Paper plugin, the \
+                 papermc repository and paper-api as compileOnly), then run `gradle build`, or `gradle wrapper` \
+                 once to add a wrapper. Never try to install software (apt, sudo, curl | sh): it isn't allowed \
+                 and isn't needed. Maven isn't installed: use Gradle. What a build makes (the .jar in build/libs \
                  or target) is offered to the user to download.",
             );
         }
@@ -656,7 +659,11 @@ impl Workspace {
             ("GRADLE_USER_HOME".to_string(), home.join(".gradle").to_string_lossy().to_string()),
         ];
         let mut tools = Vec::new();
-        if wants_java(&dir, &command) {
+        let engines = self.state.config.data_dir.join("engines");
+        // Java and Gradle for Java work: downloaded the first time they're needed, then
+        // always there (so a new project in an empty folder can be started with them).
+        let java_ready = (17..=40).any(|v| outpost_engines::runtimes::java_home(&engines, v).is_some());
+        if java_ready || wants_java(&dir, &command) {
             let mut build = String::new();
             for f in ["build.gradle.kts", "build.gradle", "pom.xml"] {
                 if let Ok(t) = tokio::fs::read_to_string(dir.join(f)).await {
@@ -664,14 +671,21 @@ impl Workspace {
                 }
             }
             let version = outpost_engines::runtimes::java_for_project(&build);
-            let engines = self.state.config.data_dir.join("engines");
-            let java = outpost_engines::runtimes::ensure_java(&reqwest::Client::new(), &engines, version, |_, _| {})
+            let client = reqwest::Client::new();
+            let java = outpost_engines::runtimes::ensure_java(&client, &engines, version, |_, _| {})
                 .await
                 .map_err(|e| format!("Couldn't get Java {version} for the build: {e:#}"))?;
+            let gradle = outpost_engines::runtimes::ensure_gradle(&client, &engines, |_, _| {})
+                .await
+                .map_err(|e| format!("Couldn't get Gradle for the build: {e:#}"))?;
             let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into());
             env.push(("JAVA_HOME".into(), java.to_string_lossy().to_string()));
-            env.push(("PATH".into(), format!("{}:{path}", java.join("bin").to_string_lossy())));
+            env.push((
+                "PATH".into(),
+                format!("{}:{}:{path}", java.join("bin").to_string_lossy(), gradle.join("bin").to_string_lossy()),
+            ));
             tools.push(java);
+            tools.push(gradle);
         }
         let sandbox = sandboxed.then(|| crate::runner::Sandbox { folder: real_root, home: home.clone(), tools, network: true });
         Ok(crate::runner::Spec { dir, command, env, sandbox })
@@ -882,7 +896,9 @@ impl Workspace {
 fn wants_java(dir: &Path, command: &str) -> bool {
     let program = program_of(command).unwrap_or_default();
     ["java", "javac", "jar", "gradle", "gradlew", "mvn", "mvnw"].contains(&program.as_str())
-        || ["gradlew", "build.gradle", "build.gradle.kts", "pom.xml"].iter().any(|f| dir.join(f).exists())
+        || ["gradlew", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "pom.xml", "src"]
+            .iter()
+            .any(|f| dir.join(f).exists())
 }
 
 /// Files a build just made, worth downloading: `.jar`s (not sources or javadoc ones) in

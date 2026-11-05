@@ -194,9 +194,9 @@ works (up to 30 rounds in one reply).
   the rest come from that PC). Carry on the chat from your phone or another PC and it still
   runs there, as long as that PC is on with the Outpost app open.
 - **A server folder**: a command runs on the Outpost server (Linux), so a chat started on the
-  phone can build without a PC. Outpost downloads Java for Java projects itself (Temurin 21,
-  or 25 when the build files ask for it) and runs `gradlew` as `./gradlew`; projects need their
-  wrapper (`gradlew`, `mvnw`). When a build makes a `.jar` (in `build/libs` or `target`), it's
+  phone can build without a PC. Outpost downloads Java (Temurin 21, or 25 when the build files
+  ask for it) and Gradle itself the first time, so a chat can start a new plugin in an empty
+  folder; a project's own wrapper (`gradlew`) is used when it has one. When a build makes a `.jar` (in `build/libs` or `target`), it's
   shown under the reply with **Download** (on the phone it's saved in Download/Outpost).
   - With **bubblewrap** installed on the server (`sudo apt install bubblewrap`), commands run
     sandboxed: they see only that folder, Java and a build cache, nothing else on the server.

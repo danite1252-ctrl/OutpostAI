@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install Outpost</title>
+<meta name="description" content="How to install Outpost on a Windows PC or a Linux server, and the Android app on your phone.">
+<meta name="theme-color" content="#0c0a0d">
+<link rel="canonical" href="https://outpost.hartspace.cc/install.html">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="Outpost home">
+      <img src="assets/mark-64.png" alt="" width="34" height="34">
+      OUTPOST
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a class="hide-sm" href="./#features">What it does</a>
+      <a href="privacy.html">Privacy</a>
+      <a class="get" href="install.html" aria-current="page">Get Outpost</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap doc-hero">
+    <h1>Install Outpost</h1>
+    <p>Outpost lives on one computer in your home, and everything else connects to it. Start with a Windows PC or a Linux server, then add your phones.</p>
+  </div>
+
+  <div class="wrap">
+    <div class="choose">
+      <a class="pick" href="#windows">
+        <span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v11H3zM9 20h6M12 16v4"/></svg></span>
+        <h2>A Windows PC</h2>
+        <p>The quickest start. Outpost runs while the PC is on, and keeps going in the tray when you close the window.</p>
+        <span class="go">Windows steps</span>
+      </a>
+      <a class="pick" href="#server">
+        <span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/><path d="M8 6.5h.01M8 17.5h.01M12 6.5h4M12 17.5h4"/></svg></span>
+        <h2>A Linux server</h2>
+        <p>For a household that wants it always on. No screen needed: you set it up and use it from your PC and phones.</p>
+        <span class="go">Server steps</span>
+      </a>
+      <a class="pick" href="#phone">
+        <span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg></span>
+        <h2>Your Android phone</h2>
+        <p>Chat, create and talk to Outpost from your phone, once it's running on a PC or server.</p>
+        <span class="go">Phone steps</span>
+      </a>
+    </div>
+  </div>
+
+  <!-- Windows -->
+  <section class="wrap guide-section" id="windows" aria-labelledby="windows-title">
+    <div class="guide-head">
+      <h2 id="windows-title">On a Windows PC</h2>
+      <p class="intro">About ten minutes, plus downloading a model.</p>
+    </div>
+
+    <div class="table needs">
+      <table>
+        <caption>What you need</caption>
+        <thead><tr><th></th><th>Enough</th><th>Better</th></tr></thead>
+        <tbody>
+          <tr><td>Windows</td><td>10 or 11, 64-bit</td><td></td></tr>
+          <tr><td>Graphics card</td><td>NVIDIA with 8 GB, for chat and pictures</td><td>NVIDIA with 16 GB or more, for video and training characters</td></tr>
+          <tr><td>Memory</td><td>16 GB</td><td>32 GB</td></tr>
+          <tr><td>Free disk space</td><td>30 GB</td><td>100 GB or more, as models are large</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <ol class="guide">
+      <li>
+        <h3>Download the installer</h3>
+        <p>Get <strong>Outpost_<em>version</em>_x64-setup.exe</strong> from the latest release.</p>
+        <p><a class="btn btn-ember" href="https://github.com/danite1252-ctrl/OutpostAI/releases/latest">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+          Open the latest release</a></p>
+      </li>
+      <li>
+        <h3>Run it</h3>
+        <p>Windows may say <strong>"Windows protected your PC"</strong>, because the installer isn't signed with a paid certificate yet. Press <strong>More info</strong>, then <strong>Run anyway</strong>. It installs for your Windows user only, with no administrator needed, and adds Outpost to the Start menu.</p>
+      </li>
+      <li>
+        <h3>Make yourself the owner</h3>
+        <p>Choose your name and a PIN. The owner looks after accounts, models and connections.</p>
+      </li>
+      <li>
+        <h3>Install the engines</h3>
+        <p>Outpost offers the parts it needs for chat, pictures and video, and voice. Each downloads once and Outpost keeps it up to date. You can add any of them later in <strong>Settings › Engines</strong>.</p>
+      </li>
+      <li>
+        <h3>Get a chat model</h3>
+        <p>Open <strong>Models</strong>. Outpost suggests the ones that fit your graphics card; download one and start chatting.</p>
+      </li>
+      <li>
+        <h3>Add your household</h3>
+        <p>In <strong>Settings › Accounts</strong>, add each person. Everyone picks their name when Outpost opens and signs in with their own PIN.</p>
+      </li>
+    </ol>
+    <p class="aside">Closing the window keeps Outpost running in the system tray, by the clock, so phones and long jobs keep working. Right-click the tray icon and choose <strong>Quit Outpost</strong> to stop it.</p>
+  </section>
+
+  <!-- Linux server -->
+  <section class="wrap guide-section" id="server" aria-labelledby="server-title">
+    <div class="guide-head">
+      <h2 id="server-title">On a Linux server</h2>
+      <p class="intro">The server holds everything: accounts, chats, pictures and models. Your PCs and phones pair with it, and nobody needs to log in to the server after setup.</p>
+    </div>
+
+    <div class="table needs">
+      <table>
+        <caption>What you need</caption>
+        <tbody>
+          <tr><td>The server</td><td>A Linux machine that stays on, such as Ubuntu. A virtual machine works if the graphics card is passed through to it.</td></tr>
+          <tr><td>Graphics card</td><td>NVIDIA, with its driver installed. 8 GB runs chat and pictures; a PC in the house can lend a bigger card for the rest.</td></tr>
+          <tr><td>Disk space</td><td>100 GB or more for models.</td></tr>
+          <tr><td>A Windows PC</td><td>With the Outpost desktop app, to set up the owner account.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <ol class="guide">
+      <li>
+        <h3>Install Outpost on the server</h3>
+        <p>Sign in as the user Outpost should run as, and run:</p>
+        <div class="code"><pre><code>curl -fsSL https://github.com/danite1252-ctrl/OutpostAI/releases/latest/download/install.sh | bash</code></pre><button type="button" class="copy">Copy</button></div>
+        <p>It downloads the newest release, checks it hasn't been tampered with, sets Outpost up to run in the background, and shows a <strong>setup code</strong> and three <strong>check words</strong>. Keep them on screen for step 4.</p>
+      </li>
+      <li>
+        <h3>Keep it running at boot</h3>
+        <p>So Outpost starts with the server, even when nobody is logged in:</p>
+        <div class="code"><pre><code>sudo loginctl enable-linger $USER</code></pre><button type="button" class="copy">Copy</button></div>
+      </li>
+      <li>
+        <h3>Connect from your PC</h3>
+        <p>Install the desktop app on a Windows PC (see above). On its first screen, choose <strong>Connect to an Outpost server</strong> and type the server's address on your network.</p>
+      </li>
+      <li>
+        <h3>Check the words, then make yourself the owner</h3>
+        <p>The app shows three check words. They must match the server's: if they don't, something else is answering at that address, so stop there. Then enter the setup code, your name and a PIN. That PC becomes your first paired device.</p>
+        <p class="note-line">The setup code works once and lasts 30 minutes. If it runs out, the <a href="https://github.com/danite1252-ctrl/OutpostAI/blob/master/docs/linux-server.md">full server guide</a> shows how to get a new one.</p>
+      </li>
+      <li>
+        <h3>Pair phones and invite people</h3>
+        <p>From any paired device, <strong>Connections › Pair a device</strong> shows a QR code for your phones. <strong>Settings › Accounts › Make an invite</strong> lets each person choose their own PIN on their own device.</p>
+      </li>
+    </ol>
+
+    <h3 class="extras-title">Worth doing next</h3>
+    <ul class="extras">
+      <li><strong>Lend a bigger graphics card.</strong> On a gaming PC using the server, <strong>Settings › Server › Lend this PC's graphics card</strong> runs big models, video and training there, and pauses while you play.</li>
+      <li><strong>Give the server some swap space</strong>, so big video and 3D jobs slow down rather than running out of memory.</li>
+      <li><strong>Limit it to your home network</strong> with the server's firewall.</li>
+      <li><strong>Keep coding builds sandboxed</strong> by installing bubblewrap: <code>sudo apt install bubblewrap</code>.</li>
+      <li><strong>Use it away from home</strong> with Tailscale, a private network between your own devices.</li>
+    </ul>
+    <p class="aside">Running the install command again updates Outpost, and owners can also update it from the desktop or phone app. The <a href="https://github.com/danite1252-ctrl/OutpostAI/blob/master/docs/linux-server.md">full server guide</a> covers all of the above in detail.</p>
+  </section>
+
+  <!-- Android -->
+  <section class="wrap guide-section" id="phone" aria-labelledby="phone-title">
+    <div class="guide-head">
+      <h2 id="phone-title">On your Android phone</h2>
+      <p class="intro">You'll need Outpost running on a PC or server first. The phone app connects only to your Outpost, encrypted.</p>
+    </div>
+
+    <ol class="guide">
+      <li>
+        <h3>Download the app</h3>
+        <p>On the phone, open the latest release and download <strong>Outpost-<em>version</em>.apk</strong>.</p>
+        <p><a class="btn btn-line" href="https://github.com/danite1252-ctrl/OutpostAI/releases/latest">Open the latest release</a></p>
+      </li>
+      <li>
+        <h3>Install it</h3>
+        <p>Open the download. Android asks you to allow installs from your browser or file manager the first time: allow it, then press <strong>Install</strong>.</p>
+      </li>
+      <li>
+        <h3>Show a pairing code</h3>
+        <p>On a PC with Outpost, open <strong>Connections</strong> and press <strong>Pair a phone</strong> (on a server, <strong>Pair a device</strong>). If Outpost runs on that PC itself, first turn on <strong>Allow other devices on my network</strong> there and restart Outpost.</p>
+      </li>
+      <li>
+        <h3>Scan it and sign in</h3>
+        <p>In the phone app, scan the QR code, check the three words match the ones on the PC, then sign in with your PIN. If someone sent you an invite, scan or open that instead and pick your own PIN.</p>
+      </li>
+    </ol>
+    <p class="aside">The app updates itself: new versions download in the background and install when you press <strong>Restart to update</strong>, and you stay paired. To use Outpost away from home, set up Tailscale on the phone and on your Outpost.</p>
+  </section>
+
+  <div class="wrap help">
+    <h2>Stuck?</h2>
+    <p class="intro">The <a href="https://github.com/danite1252-ctrl/OutpostAI/blob/master/docs/user-guide.md">user guide</a> has a troubleshooting section, or <a href="https://github.com/danite1252-ctrl/OutpostAI/issues">ask on GitHub</a>.</p>
+  </div>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="Outpost home"><img src="assets/mark-64.png" alt="" width="26" height="26">OUTPOST</a>
+    <nav aria-label="Footer">
+      <a href="install.html">Install guide</a>
+      <a href="privacy.html">Privacy policy</a>
+      <a href="https://github.com/danite1252-ctrl/OutpostAI">Source code</a>
+      <a href="https://github.com/danite1252-ctrl/OutpostAI/issues">Contact</a>
+    </nav>
+    <p class="legal">© 2026 Outpost. Free software under the MIT licence.</p>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>
