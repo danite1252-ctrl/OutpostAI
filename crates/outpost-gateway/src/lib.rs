@@ -28,6 +28,7 @@ pub mod persona_templates;
 pub mod print3d;
 pub mod remote;
 pub mod routes;
+pub mod routines;
 pub mod runner;
 pub mod server_tools;
 pub mod setup_code;
@@ -249,6 +250,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/chats/{id}/stop", post(chat::stop_reply))
         .route("/api/chats/{id}/live", get(chat::live))
         .route("/api/chats/{id}/watch", get(chat::watch))
+        .route("/api/routines", get(routines::list).post(routines::create))
+        .route("/api/routines/{id}", put(routines::update).delete(routines::delete))
+        .route("/api/routines/{id}/run", post(routines::run_now))
+        .route("/api/routines/{id}/runs", get(routines::runs))
         .route("/api/files/{id}", get(chat::get_file))
         .route("/api/memory", get(chat::list_memory).post(chat::add_memory))
         .route(
@@ -467,6 +472,7 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     tokio::spawn(gallery_index::run(state.clone()));
     // The one call to the internet: a daily look for a newer release (can be switched off).
     tokio::spawn(updates::background(state.clone()));
+    tokio::spawn(routines::scheduler(state.clone()));
     // With network access on, phones get the encrypted port next door, and the
     // Outpost announces itself on the network.
     let background = start_remote_access(&state).await;

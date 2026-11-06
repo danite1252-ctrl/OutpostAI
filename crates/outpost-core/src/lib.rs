@@ -18,6 +18,7 @@ pub mod media_index;
 pub mod memory;
 pub mod pairing;
 pub mod personas;
+pub mod routines;
 pub mod secret;
 pub mod sessions;
 pub mod settings;

@@ -13,14 +13,18 @@ import { ModelsScreen } from "../modelsScreen";
 import { PeopleScreen } from "../people";
 import { ServerCard } from "../server";
 import { DocsMemoryScreen } from "../docsMemory";
+import { RoutinesScreen } from "../routines";
 
 export default function Me({
   api,
   saved,
   onSignedOut,
   update,
+  onOpenChat,
 }: {
   api: Outpost;
+  /** Open a chat (a routine's) in the Chat tab. */
+  onOpenChat?: (chatId: string) => void;
   saved: Saved;
   onSignedOut: () => void;
   update: ReturnType<typeof usePhoneUpdate>;
@@ -41,7 +45,7 @@ export default function Me({
   }, []);
   const u = update.state;
   const [toolsOpen, setToolsOpen] = useState(false);
-  const [page, setPage] = useState<"personas" | "models" | "people" | "docs" | null>(null);
+  const [page, setPage] = useState<"personas" | "routines" | "models" | "people" | "docs" | null>(null);
   const [checked, setChecked] = useState<{ host: string; ok: boolean; problem?: string }[] | null>(null);
   const [checking, setChecking] = useState(false);
   async function checkConnection() {
@@ -111,6 +115,7 @@ export default function Me({
       <View style={s.card}>
         <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Your Outpost</Text>
         <Button kind="ghost" title="Personas" onPress={() => setPage("personas")} />
+        {role !== "restricted" && <Button kind="ghost" title="Routines" onPress={() => setPage("routines")} />}
         <Button kind="ghost" title="Tools" onPress={() => setToolsOpen(true)} />
         <Button kind="ghost" title="Documents and memory" onPress={() => setPage("docs")} />
         <Button kind="ghost" title="Models" onPress={() => setPage("models")} />
@@ -121,6 +126,16 @@ export default function Me({
         <ToolsScreen api={api} isOwner={role === "owner"} canAdd={role !== "restricted"} onClose={() => setToolsOpen(false)} />
       )}
       {page === "personas" && <PersonasScreen api={api} onClose={() => setPage(null)} />}
+      {page === "routines" && (
+        <RoutinesScreen
+          api={api}
+          onClose={() => setPage(null)}
+          onOpenChat={(id) => {
+            setPage(null);
+            onOpenChat?.(id);
+          }}
+        />
+      )}
       {page === "models" && <ModelsScreen api={api} isOwner={role === "owner"} onClose={() => setPage(null)} />}
       {page === "docs" && <DocsMemoryScreen api={api} onClose={() => setPage(null)} />}
       {page === "people" && (

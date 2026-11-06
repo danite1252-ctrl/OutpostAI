@@ -11,6 +11,7 @@ import Gallery from "./Gallery";
 import Connections from "./Connections";
 import Train from "./Train";
 import Api from "./Api";
+import Routines from "./Routines";
 import { DownloadsButton } from "../components/downloads";
 import { useJobNotifications } from "../components/notify";
 import { useDeviceTools } from "../components/devicebridge";
@@ -19,13 +20,14 @@ import { QueueButton } from "../components/queue";
 import { CrashNotice, UpdateBanner } from "../components/system";
 import type { CreateRequest } from "../components/gallery";
 
-type Section = "chat" | "create" | "gallery" | "train" | "models" | "personas" | "connections" | "api" | "settings";
+type Section = "chat" | "create" | "gallery" | "train" | "routines" | "models" | "personas" | "connections" | "api" | "settings";
 
 const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "chat", label: "Chat", icon: icons.chat },
   { id: "create", label: "Create", icon: icons.create },
   { id: "gallery", label: "Gallery", icon: icons.gallery },
   { id: "train", label: "Train", icon: icons.train },
+  { id: "routines", label: "Routines", icon: icons.routines },
   { id: "models", label: "Models", icon: icons.models },
   { id: "personas", label: "Personas", icon: icons.personas },
   { id: "connections", label: "Connections", icon: icons.connections },
@@ -56,6 +58,8 @@ export default function Shell({
     if (SERVER) void refreshServerHosts(auth.token).catch(() => undefined);
   }, [auth.token]);
   const [createRequest, setCreateRequest] = useState<CreateRequest | null>(null);
+  // A chat to open (from Routines).
+  const [chatToOpen, setChatToOpen] = useState<string | null>(null);
   useJobNotifications(auth.token);
   // This PC's tools, for your chats from the phone.
   useDeviceTools(auth.token);
@@ -70,7 +74,7 @@ export default function Shell({
       <SavedToasts />
       <nav aria-label="Main" className="flex w-[76px] shrink-0 flex-col items-center gap-1.5 border-r border-line py-4">
         <Mark size={44} className="mb-4" />
-        {NAV.map((n) => (
+        {NAV.filter((n) => n.id !== "routines" || auth.account.role !== "restricted").map((n) => (
           <button
             key={n.id}
             type="button"
@@ -144,11 +148,20 @@ export default function Shell({
         {auth.account.role === "owner" && <CrashNotice token={auth.token} onOpenSettings={() => setSection("settings")} />}
         {section === "chat" && (
           <div className="min-h-0 flex-1">
-            <Chat token={auth.token} onUnauthorized={onSignedOutElsewhere} />
+            <Chat token={auth.token} onUnauthorized={onSignedOutElsewhere} open={chatToOpen} onOpened={() => setChatToOpen(null)} />
           </div>
         )}
         <main className={`min-h-0 flex-1 overflow-auto p-8 ${section === "chat" ? "hidden" : ""}`}>
           {section === "personas" && <Personas token={auth.token} />}
+          {section === "routines" && auth.account.role !== "restricted" && (
+            <Routines
+              token={auth.token}
+              onOpenChat={(id) => {
+                setChatToOpen(id);
+                setSection("chat");
+              }}
+            />
+          )}
           {section === "create" && (
             <Create
               token={auth.token}

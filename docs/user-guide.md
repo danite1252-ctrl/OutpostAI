@@ -230,6 +230,23 @@ Open a chat on the phone (or another PC) while its reply is being written somewh
 you see it as it's written, from the start, including any request to allow a command, which
 you can answer there. Stop works from there too.
 
+## Routines
+
+A routine is a persona doing something on its own, on a schedule: a morning brief, checking
+whether a new Paper build is out, a weekly summary. Owners and members can make them (on the
+PC: **Routines** in the sidebar; on the phone: **You › Routines**).
+
+- Give it a **name**, a **persona** (its instructions, model and tools do the work) and what it
+  should do, in plain words.
+- Pick when: **every day**, **weekdays**, **chosen days** at a time, **every few hours**, or
+  **once**. Times are your device's time zone (daylight saving included), wherever the server is.
+- Each run is a reply in the routine's own chat, so you can read every result (**Open chat**)
+  or carry on talking about one. The list shows when it runs next and how the last run went.
+- **Run now** runs it straight away (its schedule carries on as before). **Pause** stops it
+  until you resume it. A routine never runs twice at once, and a run is stopped after 30 minutes.
+- Routines use the persona's tools on the server, and its tools on your PC when that PC has
+  Outpost open.
+
 ## Create, Gallery and the queue
 
 - **Create** has a tab per task: **Picture**, **Character**, **Edit**, **Video** and

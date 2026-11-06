@@ -22,12 +22,17 @@ export default function Chat({
   onError,
   incoming,
   onIncomingUsed,
+  openId,
+  onOpenUsed,
 }: {
   api: Outpost;
   onError: (e: unknown) => void;
   /** Something shared from another app, to start a new chat with. */
   incoming?: ChatStart | null;
   onIncomingUsed?: () => void;
+  /** A chat to open (a routine's). */
+  openId?: string | null;
+  onOpenUsed?: () => void;
 }) {
   const [chats, setChats] = useState<ChatT[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
@@ -56,6 +61,19 @@ export default function Chat({
   useEffect(() => {
     void load();
   }, [load]);
+  // Opened from elsewhere (a routine's chat, maybe new): fetch the list and open it.
+  useEffect(() => {
+    if (!openId) return;
+    void api.get<ChatT[]>("/api/chats").then(
+      (c) => {
+        setChats(c);
+        const chat = c.find((x) => x.id === openId);
+        if (chat) setOpen(chat);
+        onOpenUsed?.();
+      },
+      () => onOpenUsed?.(),
+    );
+  }, [openId, api, onOpenUsed]);
 
   const [opening, setOpening] = useState<ChatStart | null>(null);
   async function start(persona?: Persona) {

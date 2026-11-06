@@ -327,3 +327,53 @@ async fn server_folders_show_their_size_and_go_with_the_last_chat_using_them() {
     assert_eq!(s, StatusCode::OK, "{cache}");
     assert_eq!(cache["bytes"], 0);
 }
+
+#[tokio::test]
+async fn routines_are_made_paused_run_and_kept_to_their_owner() {
+    let (app, _state) = app().await;
+    let (dan, sj, noah) = people(&app).await;
+    let weekdays = json!({
+        "name": "Morning brief",
+        "instructions": "Give me the weather and my day.",
+        "schedule": {"kind": "days", "time": "07:30", "days": [1, 2, 3, 4, 5]},
+        "time_zone": "Australia/Sydney"
+    });
+    let (s, r) = call(&app, "POST", "/api/routines", Some(&sj), Some(weekdays.clone())).await;
+    assert_eq!(s, StatusCode::CREATED, "{r}");
+    let id = r["id"].as_str().unwrap().to_string();
+    assert!(r["next_at"].as_i64().unwrap() > outpost_core::now());
+    assert_eq!(r["schedule"]["kind"], "days");
+
+    // Only its owner sees it; children can't have routines.
+    let (_, dans) = call(&app, "GET", "/api/routines", Some(&dan), None).await;
+    assert_eq!(dans.as_array().unwrap().len(), 0);
+    let (s, _) = call(&app, "GET", "/api/routines", Some(&noah), None).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = call(&app, "PUT", &format!("/api/routines/{id}"), Some(&dan), Some(json!({"enabled": false}))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // Paused: no next time. Bad schedules are refused.
+    let (_, paused) = call(&app, "PUT", &format!("/api/routines/{id}"), Some(&sj), Some(json!({"enabled": false}))).await;
+    assert_eq!(paused["enabled"], false);
+    assert!(paused["next_at"].is_null());
+    let (s, _) = call(&app, "POST", "/api/routines", Some(&sj), Some(json!({
+        "name": "Bad", "instructions": "x", "schedule": {"kind": "days", "time": "31:00", "days": [1]}
+    }))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // Run now: here there's no model, so the run fails, and says why. Its chat was made.
+    let (s, started) = call(&app, "POST", &format!("/api/routines/{id}/run"), Some(&sj), None).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{started}");
+    let (_, runs) = call(&app, "GET", &format!("/api/routines/{id}/runs"), Some(&sj), None).await;
+    assert_eq!(runs[0]["status"], "running", "{runs}");
+    assert_eq!(runs[0]["reason"], "now");
+    // Not twice at once.
+    let (s, _) = call(&app, "POST", &format!("/api/routines/{id}/run"), Some(&sj), None).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    let (_, r) = call(&app, "GET", "/api/routines", Some(&sj), None).await;
+    assert!(r[0]["chat_id"].is_string(), "its chat was made: {r}");
+    assert_eq!(r[0]["last_status"], "running");
+
+    let (s, _) = call(&app, "DELETE", &format!("/api/routines/{id}"), Some(&sj), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+}

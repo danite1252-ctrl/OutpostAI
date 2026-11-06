@@ -169,6 +169,9 @@ function Main({
   const [tab, setTab] = useState<Tab>("chat");
   const [chatStart, setChatStart] = useState<ChatStart | null>(null);
   const clearChatStart = useCallback(() => setChatStart(null), []);
+  // A chat to open in the Chat tab (a routine's).
+  const [chatToOpen, setChatToOpen] = useState<string | null>(null);
+  const clearChatToOpen = useCallback(() => setChatToOpen(null), []);
   const api = useMemo(() => new Outpost({ ...saved }), [saved]);
   const update = usePhoneUpdate(api);
   const [revoked, setRevoked] = useState(false);
@@ -279,7 +282,9 @@ function Main({
       <Connection api={api} />
       <UpdateBar update={update} />
       <View style={{ flex: 1 }} key={reconnects}>
-        {tab === "chat" && <Chat api={api} onError={onError} incoming={chatStart} onIncomingUsed={clearChatStart} />}
+        {tab === "chat" && (
+          <Chat api={api} onError={onError} incoming={chatStart} onIncomingUsed={clearChatStart} openId={chatToOpen} onOpenUsed={clearChatToOpen} />
+        )}
         {tab === "create" && (
           <Create api={api} onError={onError} incoming={editImage} onIncomingUsed={() => setEditImage(null)} onQueued={() => setTab("queue")} />
         )}
@@ -295,7 +300,18 @@ function Main({
           />
         )}
         {tab === "queue" && <Queue api={api} line={line} onError={onError} />}
-        {tab === "me" && <Me api={api} saved={saved} onSignedOut={onSignedOut} update={update} />}
+        {tab === "me" && (
+          <Me
+            api={api}
+            saved={saved}
+            onSignedOut={onSignedOut}
+            update={update}
+            onOpenChat={(id) => {
+              setChatToOpen(id);
+              setTab("chat");
+            }}
+          />
+        )}
       </View>
       <View style={{ flexDirection: "row", borderTopWidth: 1, borderTopColor: C.line, backgroundColor: C.surface, display: typing ? "none" : "flex" }}>
         {TABS.map((t) => (

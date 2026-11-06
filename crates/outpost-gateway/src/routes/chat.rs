@@ -310,7 +310,7 @@ pub async fn get_file(State(state): State<AppState>, auth: Auth, Path(id): Path<
         })
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Default, Serialize, Deserialize, ToSchema)]
 pub struct SendRequest {
     #[serde(default)]
     pub content: String,
@@ -463,6 +463,21 @@ pub async fn send_message(
     Path(id): Path<String>,
     Json(req): Json<SendRequest>,
 ) -> ApiResult<Sse<impl Stream<Item = Result<Event, Infallible>>>> {
+    let rx = start_reply(&state, &auth, &id, req).await?;
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<Event, Infallible>);
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+/// Send a message in a chat and start its reply (or its picture, for `/draw`): what it
+/// streams. Used by the apps (through [`send_message`]) and by routines.
+pub async fn start_reply(
+    state: &AppState,
+    auth: &Auth,
+    id: &str,
+    req: SendRequest,
+) -> ApiResult<tokio::sync::mpsc::Receiver<Event>> {
+    let state = state.clone();
+    let id = id.to_string();
     let content = req.content.trim().to_string();
     if content.is_empty() && req.images.is_empty() {
         return Err(ApiError::new(
@@ -497,9 +512,7 @@ pub async fn send_message(
                 "Send /draw without pictures. To change a picture, use Create › Edit.",
             ));
         }
-        let rx = draw(&state, &auth, &chat, &content, prompt).await?;
-        let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<Event, Infallible>);
-        return Ok(Sse::new(stream).keep_alive(KeepAlive::default()));
+        return draw(&state, auth, &chat, &content, prompt).await;
     }
     let persona = match &chat.persona_id {
         Some(pid) => personas::get_usable(&state.pool, &account_id, pid).await.ok(),
@@ -833,9 +846,7 @@ pub async fn send_message(
     });
 
     // Other devices can follow it (see crate::live).
-    let rx = crate::live::tee(&live_chat, rx);
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<Event, Infallible>);
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+    Ok(crate::live::tee(&live_chat, rx))
 }
 
 /// Watch one of my chats while it's open: a `replying` event whenever a reply starts there

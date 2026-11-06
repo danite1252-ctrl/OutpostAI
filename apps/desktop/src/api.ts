@@ -1865,3 +1865,68 @@ export const voiceApi = {
     return res.blob();
   },
 };
+
+// ---------------------------------------------------------------- routines
+
+/** When a routine runs: once; at a time on chosen days (0 = Sunday); or every few hours. */
+export type Schedule =
+  | { kind: "once"; at: number }
+  | { kind: "days"; time: string; days: number[] }
+  | { kind: "every"; hours: number };
+
+export interface Routine {
+  id: string;
+  name: string;
+  persona_id: string | null;
+  instructions: string;
+  schedule: Schedule;
+  time_zone: string | null;
+  utc_offset_minutes: number | null;
+  enabled: boolean;
+  chat_id: string | null;
+  next_at: number | null;
+  last_at: number | null;
+  last_status: "ok" | "failed" | "running" | null;
+  last_note: string | null;
+}
+
+export interface RoutineInput {
+  name?: string;
+  persona_id?: string;
+  instructions?: string;
+  schedule?: Schedule;
+  enabled?: boolean;
+  time_zone?: string;
+  utc_offset_minutes?: number;
+}
+
+export interface RoutineRun {
+  id: string;
+  started_at: number;
+  finished_at: number | null;
+  status: "ok" | "failed" | "running";
+  message_id: string | null;
+  note: string | null;
+  reason: "schedule" | "now";
+}
+
+/** This app's time zone, sent with a routine so it runs at your times. */
+function myZone(): Pick<RoutineInput, "time_zone" | "utc_offset_minutes"> {
+  let zone: string | undefined;
+  try {
+    zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    zone = undefined;
+  }
+  return { time_zone: zone, utc_offset_minutes: -new Date().getTimezoneOffset() };
+}
+
+export const routinesApi = {
+  list: (token: string) => request<Routine[]>("GET", "/api/routines", { token }),
+  create: (token: string, input: RoutineInput) => request<Routine>("POST", "/api/routines", { token, body: { ...input, ...myZone() } }),
+  update: (token: string, id: string, input: RoutineInput) =>
+    request<Routine>("PUT", `/api/routines/${id}`, { token, body: input.schedule ? { ...input, ...myZone() } : input }),
+  remove: (token: string, id: string) => request<void>("DELETE", `/api/routines/${id}`, { token }),
+  runNow: (token: string, id: string) => request<Routine>("POST", `/api/routines/${id}/run`, { token }),
+  runs: (token: string, id: string) => request<RoutineRun[]>("GET", `/api/routines/${id}/runs?limit=10`, { token }),
+};

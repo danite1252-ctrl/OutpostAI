@@ -82,6 +82,7 @@ export const icons = {
   chat: "M4 5h16v11H9l-5 4z",
   create: "M4 4h16v16H4z M4 16l5-5 4 4 3-3 4 4 M15 8.5a1.5 1.5 0 1 0 0.01 0",
   train: "M12 3l9 5-9 5-9-5z M5 10.5V16c0 1.5 3 3 7 3s7-1.5 7-3v-5.5",
+  routines: "M12 21a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M12 9v4l2.5 2 M9 2h6 M19 5l1.5 1.5",
   models: "M12 3l8 4.5v9L12 21l-8-4.5v-9z M12 12l8-4.5 M12 12v9 M12 12L4 7.5",
   personas: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21c1-4 4.5-6 8-6s7 2 8 6",
   connections: "M9 3v5 M15 3v5 M6 8h12v3a6 6 0 0 1-12 0z M12 17v4",

@@ -50,7 +50,18 @@ interface Draft {
   files: FileAction[];
 }
 
-export default function Chat({ token, onUnauthorized }: { token: string; onUnauthorized: () => void }) {
+export default function Chat({
+  token,
+  onUnauthorized,
+  open,
+  onOpened,
+}: {
+  token: string;
+  onUnauthorized: () => void;
+  /** A chat to show (opened from elsewhere, like Routines). */
+  open?: string | null;
+  onOpened?: () => void;
+}) {
   const [chats, setChats] = useState<ChatT[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -98,6 +109,14 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
       if (c.length > 0) setActiveId((id) => id ?? c[0].id);
     });
   }, [loadLists]);
+  // Opened from elsewhere (a routine's chat): fetch the list (it may be new) and show it.
+  useEffect(() => {
+    if (!open) return;
+    void loadLists().then(() => {
+      setActiveId(open);
+      onOpened?.();
+    });
+  }, [open, loadLists, onOpened]);
 
   useEffect(() => {
     activeRef.current = activeId;
