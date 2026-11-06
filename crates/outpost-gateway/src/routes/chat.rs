@@ -795,6 +795,8 @@ pub async fn start_reply(
 
         if content.is_empty() && failure.is_some() {
             let message = failure.unwrap_or_default();
+            // Kept for a moment, for whoever started it without a screen (a routine).
+            crate::live::set_failure(&chat_id, &message);
             let _ = tx.send(event("error", serde_json::json!({ "message": message }))).await;
             return;
         }

@@ -148,6 +148,7 @@ async fn attempt(state: &AppState, r: &Routine) -> Result<Done, String> {
         ..Default::default()
     };
     let started = outpost_core::now();
+    crate::live::take_failure(&chat.id);
     let mut rx = crate::routes::chat::start_reply(state, &auth, &chat.id, req).await.map_err(|e| e.message)?;
     let finished = tokio::time::timeout(RUN_MAX, async { while rx.recv().await.is_some() {} }).await;
     if finished.is_err() {
@@ -162,7 +163,10 @@ async fn attempt(state: &AppState, r: &Routine) -> Result<Done, String> {
             text: m.content.clone(),
             model: m.model.clone(),
         }),
-        _ => Err("It didn't give a reply (the model may be unavailable: open the routine's chat to see).".into()),
+        _ => Err(match crate::live::take_failure(&chat.id) {
+            Some(why) => format!("The reply failed: {why}"),
+            None => "It didn't give a reply (open the routine's chat to see).".into(),
+        }),
     }
 }
 

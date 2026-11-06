@@ -55,6 +55,22 @@ pub fn watch(chat_id: &str) -> impl Stream<Item = Result<Event, Infallible>> {
     first.chain(rest)
 }
 
+/// Why a chat's last reply failed (for a routine, which has no screen to show the error on).
+static FAILURES: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
+
+pub fn set_failure(chat_id: &str, why: &str) {
+    let mut f = FAILURES.lock().unwrap_or_else(|p| p.into_inner());
+    if f.len() > 200 {
+        f.clear();
+    }
+    f.insert(chat_id.to_string(), why.to_string());
+}
+
+/// Why this chat's last reply failed, if it did (and forget it).
+pub fn take_failure(chat_id: &str) -> Option<String> {
+    FAILURES.lock().unwrap_or_else(|p| p.into_inner()).remove(chat_id)
+}
+
 /// Most events kept for a follower joining late (a very long reply keeps its start and end).
 const BACKLOG_MAX: usize = 50_000;
 

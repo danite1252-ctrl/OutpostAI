@@ -416,7 +416,8 @@ pub async fn start_run(pool: &SqlitePool, r: &Routine, reason: &str) -> CoreResu
         s => next_for(s, r.enabled, &r.zone(), Some(t)),
     };
     let next_at = if reason == "schedule" { next_at } else { r.next_at.filter(|n| *n > t).or(next_at) };
-    let enabled = r.enabled && !(matches!(r.schedule, Schedule::Once { .. }) && reason == "schedule");
+    // A one-off that's run stays on, with nothing next: done (not paused).
+    let enabled = r.enabled;
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO routine_runs (id, routine_id, started_at, status, reason) VALUES (?, ?, ?, 'running', ?)")
         .bind(&id)
@@ -572,6 +573,33 @@ mod tests {
         assert!(Schedule::Days { time: "25:00".into(), days: vec![1] }.check().is_err());
         assert!(Schedule::Days { time: "07:30".into(), days: vec![] }.check().is_err());
         assert!(Schedule::Every { hours: 0 }.check().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_one_off_is_done_after_it_runs_not_paused() {
+        let pool = crate::db::open_in_memory().await.unwrap();
+        let me = crate::accounts::create(
+            &pool,
+            crate::accounts::NewAccount { name: "Dan".into(), role: crate::accounts::Role::Owner, secret: Some("4821".into()) },
+        )
+        .await
+        .unwrap();
+        let r = create(
+            &pool,
+            &me.id,
+            RoutineInput {
+                name: Some("Once".into()),
+                instructions: Some("Say hi.".into()),
+                schedule: Some(Schedule::Once { at: now() + 600 }),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        start_run(&pool, &r, "schedule").await.unwrap();
+        let after = get(&pool, &me.id, &r.id).await.unwrap();
+        assert!(after.enabled, "still on");
+        assert_eq!(after.next_at, None, "nothing next: done");
     }
 
     #[test]
