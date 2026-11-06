@@ -1664,6 +1664,25 @@ export const trainApi = {
 /** A chat reply that started a picture carries `[[outpost-job:<id>]]`, one per picture. */
 export const JOB_CARD = /\[\[outpost-job:([0-9a-f-]{36})\]\]/;
 
+/** A routine's message, as people should see it: its own instructions without the note
+ *  Outpost adds for the persona, and replies without the "nothing new" marker. */
+export function routineView(role: string, content: string): { text: string; routine: string | null } {
+  if (role === "user") {
+    const m = content.match(/^\[Routine "([^"]*)":[^\]]*\]\s*/);
+    if (m) return { text: content.slice(m[0].length), routine: m[1] };
+    return { text: content, routine: null };
+  }
+  if (!content.includes("NOTHING_NEW")) return { text: content, routine: null };
+  const text = content
+    .split("\n")
+    .filter((l) => l.trim() !== "NOTHING_NEW")
+    .join("\n")
+    .replace(/NOTHING_NEW/g, "")
+    .trim();
+  return { text: text || "Nothing new this time.", routine: null };
+}
+
+
 /** The job ids in a chat reply, in order. */
 export function jobCards(content: string): string[] {
   return [...content.matchAll(/\[\[outpost-job:([0-9a-f-]{36})\]\]/g)].map((m) => m[1]);

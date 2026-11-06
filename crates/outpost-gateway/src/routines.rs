@@ -71,7 +71,7 @@ pub async fn run(state: AppState, r: Routine, reason: &'static str) {
                         Some(model) => crate::llm::judge_news(&state, model, &r.instructions, &done.text).await == Some(false),
                         None => false,
                     });
-            let note = if quiet { format!("Nothing new this time. {}", done.gist.replace(NOTHING_NEW, "").trim()) } else { done.gist };
+            let note = if quiet { "Nothing new this time.".to_string() } else { done.gist };
             (true, !quiet, Some(done.id), Some(note.trim().to_string()))
         }
         Err(why) => (false, false, None, Some(why)),
@@ -159,7 +159,7 @@ async fn attempt(state: &AppState, r: &Routine) -> Result<Done, String> {
     match messages.iter().rev().find(|m| m.role == "assistant" && m.created_at >= started) {
         Some(m) if !m.content.trim().is_empty() => Ok(Done {
             id: m.id.clone(),
-            gist: m.content.trim().chars().take(240).collect(),
+            gist: gist(&m.content),
             text: m.content.clone(),
             model: m.model.clone(),
         }),
@@ -167,6 +167,48 @@ async fn attempt(state: &AppState, r: &Routine) -> Result<Done, String> {
             Some(why) => format!("The reply failed: {why}"),
             None => "It didn't give a reply (open the routine's chat to see).".into(),
         }),
+    }
+}
+
+/// What a reply came to, for the list and a notification: its last paragraphs (where the
+/// answer is, after any "let me check…"), about 240 characters.
+fn gist(reply: &str) -> String {
+    let paragraphs: Vec<&str> = reply
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && *p != NOTHING_NEW)
+        .collect();
+    // The last paragraph (the answer); the one before too only when that's very short.
+    let mut kept: Vec<&str> = Vec::new();
+    let mut len = 0;
+    for p in paragraphs.iter().rev() {
+        if !kept.is_empty() && (len >= 40 || len + p.chars().count() > 240) {
+            break;
+        }
+        len += p.chars().count();
+        kept.push(p);
+    }
+    kept.reverse();
+    let text = kept.join(" ").replace(NOTHING_NEW, "");
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() > 240 {
+        let cut: String = text.chars().take(239).collect();
+        format!("{}…", cut.trim_end())
+    } else {
+        text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_gist_is_where_the_answer_is() {
+        let reply = "Let me check for Paper builds.\n\nLet me look at the downloads page.\n\nThe latest Paper 26.3 build is #245, out today.";
+        assert_eq!(super::gist(reply), "The latest Paper 26.3 build is #245, out today.");
+        assert_eq!(super::gist("Checked the page.\n\nYes: 245."), "Checked the page. Yes: 245.");
+        assert_eq!(super::gist("Short answer.\n\nNOTHING_NEW"), "Short answer.");
+        let long = "x".repeat(500);
+        assert!(super::gist(&long).chars().count() <= 240);
     }
 }
 

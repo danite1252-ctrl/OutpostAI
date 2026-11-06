@@ -4,6 +4,7 @@ import {
   ApiError,
   SERVER,
   JOB_CARD,
+  routineView,
   jobCards,
   MAX_IMAGES,
   followReply,
@@ -919,7 +920,8 @@ function Bubble({
   onDelete?: () => void;
   onVoiceError?: (message: string) => void;
 }) {
-  const { role, content, thinking, attachments, sources } = message;
+  const { role, thinking, attachments, sources } = message;
+  const { text: content, routine } = routineView(role, message.content);
   if (role === "user") {
     return (
       <div className="group flex max-w-[80%] flex-col items-end gap-2 self-end">
@@ -930,6 +932,7 @@ function Bubble({
             ))}
           </div>
         )}
+        {routine !== null && <span className="text-xs text-muted">Routine: {routine}</span>}
         {content && <div className="rounded-2xl rounded-br-md bg-raised px-4 py-3 whitespace-pre-wrap">{content}</div>}
         {onDelete && <DeleteButton onClick={onDelete} label="Delete this message and its reply" />}
       </div>

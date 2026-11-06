@@ -831,6 +831,8 @@ function Bubble({
 }) {
   const [showThinking, setShowThinking] = useState(false);
   const user = role === "user";
+  const { text: shown, routine } = routineView(role, content);
+  content = shown;
   const jobIds = user ? [] : [...content.matchAll(new RegExp(JOB_CARD.source, "g"))].map((m) => m[1]);
   const text = jobIds.length ? content.replace(new RegExp(JOB_CARD.source, "g"), "").trim() : content;
   return (
@@ -847,6 +849,7 @@ function Bubble({
           ))}
         </View>
       )}
+      {routine !== null ? <Text style={{ color: C.muted, fontSize: 12, alignSelf: "flex-end" }}>Routine: {routine}</Text> : null}
       {thinking ? (
         <Pressable onPress={() => setShowThinking((v) => !v)}>
           <Text style={{ color: C.muted, fontSize: 13 }}>{showThinking ? thinking : "Show reasoning"}</Text>
@@ -891,6 +894,25 @@ function Bubble({
 
 /** A reply that started a picture carries `[[outpost-job:<id>]]`. */
 const JOB_CARD = /\[\[outpost-job:([0-9a-f-]{36})\]\]/;
+
+/** A routine's message, as people should see it: its own instructions without the note
+ *  Outpost adds for the persona, and replies without the "nothing new" marker. */
+function routineView(role: string, content: string): { text: string; routine: string | null } {
+  if (role === "user") {
+    const m = content.match(/^\[Routine "([^"]*)":[^\]]*\]\s*/);
+    if (m) return { text: content.slice(m[0].length), routine: m[1] };
+    return { text: content, routine: null };
+  }
+  if (!content.includes("NOTHING_NEW")) return { text: content, routine: null };
+  const text = content
+    .split("\n")
+    .filter((l) => l.trim() !== "NOTHING_NEW")
+    .join("\n")
+    .replace(/NOTHING_NEW/g, "")
+    .trim();
+  return { text: text || "Nothing new this time.", routine: null };
+}
+
 
 type JobView = {
   status: "queued" | "running" | "done" | "failed" | "cancelled";
