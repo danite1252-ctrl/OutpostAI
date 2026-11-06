@@ -558,9 +558,37 @@ function BuiltFile({ token, action, files }: { token: string; action: FileAction
   );
 }
 
+/** Every change in the chat still waiting for Apply or Skip, whichever reply made it: a bar
+ *  above the message box, so none get lost further up the chat. */
+export function WaitingChanges({ token, chatId, files }: { token: string; chatId: string | null; files: ChatFiles }) {
+  const [open, setOpen] = useState(false);
+  const waiting = files.changes.filter((c) => c.status === "proposed");
+  if (!chatId || !waiting.length) return null;
+  const here = waiting.filter((c) => c.kind !== "pc" || files.local.some((l) => l.id === c.folder_id));
+  const elsewhere = waiting.length - here.length;
+  const rows: FileAction[] = here.map((c) => ({ op: "edit", path: `${c.folder}/${c.path}`, change_id: c.id }));
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-amber/40 bg-surface px-3 py-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-sm text-amber">
+          {waiting.length} change{waiting.length === 1 ? "" : "s"} waiting for you
+          {elsewhere ? ` (${elsewhere} on another PC: apply ${elsewhere === 1 ? "it" : "those"} there)` : ""}
+        </span>
+        {here.length > 0 && (
+          <button type="button" className="text-xs text-muted underline hover:text-ink" onClick={() => setOpen((o) => !o)}>
+            {open ? "Hide" : "Review"}
+          </button>
+        )}
+      </div>
+      {open && rows.map((a) => <ChangeRow key={a.change_id} token={token} chatId={chatId} action={a} files={files} />)}
+      {here.length > 0 && <AllChanges token={token} chatId={chatId} actions={rows} files={files} min={1} label="" />}
+    </div>
+  );
+}
+
 /** A reply's changes, all at once: apply or skip the ones waiting, or undo the ones made
  *  (newest first). Ones whose file changed since are left for you to look at. */
-function AllChanges({ token, chatId, actions, files }: { token: string; chatId: string; actions: FileAction[]; files: ChatFiles }) {
+function AllChanges({ token, chatId, actions, files, min = 2, label = "All changes in this reply:" }: { token: string; chatId: string; actions: FileAction[]; files: ChatFiles; min?: number; label?: string }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const mine = actions
@@ -570,7 +598,7 @@ function AllChanges({ token, chatId, actions, files }: { token: string; chatId: 
     .filter((c, i, list) => list.findIndex((x) => x.id === c.id) === i);
   const waiting = mine.filter((c) => c.status === "proposed");
   const applied = mine.filter((c) => c.status === "applied");
-  if (waiting.length < 2 && applied.length < 2) return null;
+  if (waiting.length < min && applied.length < 2) return null;
 
   async function all(what: "apply" | "skip" | "undo") {
     const list = what === "undo" ? [...applied].reverse() : waiting;
@@ -619,8 +647,8 @@ function AllChanges({ token, chatId, actions, files }: { token: string; chatId: 
   }
   return (
     <div className="flex flex-wrap items-center gap-2 border-t border-line pt-2">
-      <span className="text-xs text-muted">All changes in this reply:</span>
-      {waiting.length >= 2 && (
+      {label && <span className="text-xs text-muted">{label}</span>}
+      {waiting.length >= min && (
         <>
           <Button disabled={busy} onClick={() => void all("apply")}>
             Apply all ({waiting.length})

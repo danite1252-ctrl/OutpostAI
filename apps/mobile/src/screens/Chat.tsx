@@ -10,7 +10,7 @@ import HandsFree from "./HandsFree";
 import { hear, onSaying, say, stopSaying, type Listening } from "../voice";
 import type { Chat as ChatT, Message, Outpost, Persona } from "../outpost";
 import { Avatar, Button, C, Chip, ErrorText, H1, P, s } from "../ui";
-import { FileActions, FilesSheet, formatBytes, useChatFiles, type FileAction, type Folder } from "../chatfiles";
+import { FileActions, FilesSheet, WaitingChanges, formatBytes, useChatFiles, type FileAction, type Folder } from "../chatfiles";
 import { ToolsSheet, useChatToolNames } from "../tools";
 import { ModelSheet } from "../models";
 import { ChatDocsSheet } from "../docsMemory";
@@ -613,6 +613,7 @@ function Conversation({
             </View>
           </View>
         )}
+        {!draft && <WaitingChanges api={api} chatId={chat.id} files={chatFiles} />}
         {asking && (
           <View accessibilityRole="alert" style={[s.card, { gap: 8, borderColor: C.amber }]}>
             <Text style={{ color: C.ink }}>Run this in {asking.folder}?</Text>

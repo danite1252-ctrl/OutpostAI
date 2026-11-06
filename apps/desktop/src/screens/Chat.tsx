@@ -23,7 +23,7 @@ import { jobsChanged } from "../components/queue";
 import { HandsFree, MicButton, PlayButton, sayAloud } from "../components/voice";
 import { ContextPanel } from "../components/context";
 import { ChatDocuments, SourcesLine } from "../components/documents";
-import { FileActions, FilesPanel, useChatFiles } from "../components/chatfiles";
+import { FileActions, FilesPanel, WaitingChanges, useChatFiles } from "../components/chatfiles";
 import { PlusMenu } from "../components/plusmenu";
 import { ToolsPanel, useChatTools } from "../components/tools";
 import type { CommandAsk, Folder, MessageTools } from "../api";
@@ -653,6 +653,7 @@ export default function Chat({ token, onUnauthorized }: { token: string; onUnaut
         <div className="mx-auto w-full max-w-3xl px-6 pb-6">
           <ErrorNote>{error}</ErrorNote>
           {asking && <CommandApproval ask={asking.ask} onAnswer={asking.answer} />}
+          {!draft && <WaitingChanges token={token} chatId={active?.id ?? null} files={chatFiles} />}
           <div className="mt-2 flex flex-col gap-2 rounded-2xl border border-line bg-surface p-3">
             {images.length > 0 && (
               <ul className="flex flex-wrap gap-2" aria-label="Images to send">

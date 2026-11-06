@@ -315,7 +315,37 @@ export function FileActions({ api, chatId, actions, files, live }: { api: Outpos
 }
 
 /** A reply's changes in server folders, all at once (a PC folder's are done on that PC). */
-function AllChanges({ api, chatId, actions, files }: { api: Outpost; chatId: string; actions: FileAction[]; files: ChatFiles }) {
+/** Every change in the chat still waiting for Apply or Skip, whichever reply made it: a bar
+ *  above the message box, so none get lost further up the chat. */
+export function WaitingChanges({ api, chatId, files }: { api: Outpost; chatId: string; files: ChatFiles }) {
+  const [open, setOpen] = useState(false);
+  const waiting = files.changes.filter((c) => c.status === "proposed");
+  if (!waiting.length) return null;
+  const here = waiting.filter((c) => c.kind !== "pc");
+  const onPc = waiting.length - here.length;
+  const rows: FileAction[] = here.map((c) => ({ op: "edit", path: `${c.folder}/${c.path}`, change_id: c.id }));
+  return (
+    <View style={[s.card, { gap: 6, borderColor: C.amber, borderWidth: 1, marginHorizontal: 12, marginBottom: 6, maxHeight: 360 }]}>
+      <View style={[s.row, { alignItems: "center", flexWrap: "wrap" }]}>
+        <Text style={{ color: C.amber, flex: 1 }}>
+          {waiting.length} change{waiting.length === 1 ? "" : "s"} waiting for you
+          {onPc ? ` (${onPc} in a PC folder: apply ${onPc === 1 ? "it" : "those"} on that PC)` : ""}
+        </Text>
+        {here.length > 0 && <Chip label={open ? "Hide" : "Review"} onPress={() => setOpen((o) => !o)} />}
+      </View>
+      {open && (
+        <ScrollView style={{ maxHeight: 220 }} contentContainerStyle={{ gap: 6 }}>
+          {rows.map((a) => (
+            <ChangeRow key={a.change_id} api={api} chatId={chatId} action={a} files={files} />
+          ))}
+        </ScrollView>
+      )}
+      {here.length > 0 && <AllChanges api={api} chatId={chatId} actions={rows} files={files} min={1} label="" />}
+    </View>
+  );
+}
+
+function AllChanges({ api, chatId, actions, files, min = 2, label = "All changes in this reply:" }: { api: Outpost; chatId: string; actions: FileAction[]; files: ChatFiles; min?: number; label?: string }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const mine = actions
@@ -325,7 +355,7 @@ function AllChanges({ api, chatId, actions, files }: { api: Outpost; chatId: str
     .filter((c, i, list) => list.findIndex((x) => x.id === c.id) === i);
   const waiting = mine.filter((c) => c.status === "proposed");
   const applied = mine.filter((c) => c.status === "applied");
-  if (waiting.length < 2 && applied.length < 2) return null;
+  if (waiting.length < min && applied.length < 2) return null;
   async function all(what: "apply" | "skip" | "undo") {
     const list = what === "undo" ? [...applied].reverse() : waiting;
     setBusy(true);
@@ -353,10 +383,10 @@ function AllChanges({ api, chatId, actions, files }: { api: Outpost; chatId: str
   }
   return (
     <View style={{ gap: 6, borderTopWidth: 1, borderTopColor: C.line, paddingTop: 8 }}>
-      <Text style={{ color: C.muted, fontSize: 13 }}>All changes in this reply:</Text>
+      {label ? <Text style={{ color: C.muted, fontSize: 13 }}>{label}</Text> : null}
       <View style={[s.row, { flexWrap: "wrap" }]}>
-        {waiting.length >= 2 && <Chip label={busy ? "Working…" : `Apply all (${waiting.length})`} active onPress={() => void all("apply")} />}
-        {waiting.length >= 2 && <Chip label="Skip all" onPress={() => void all("skip")} />}
+        {waiting.length >= min && <Chip label={busy ? "Working…" : `Apply all (${waiting.length})`} active onPress={() => void all("apply")} />}
+        {waiting.length >= min && <Chip label="Skip all" onPress={() => void all("skip")} />}
         {applied.length >= 2 && <Chip label={`Undo all (${applied.length})`} onPress={() => void all("undo")} />}
       </View>
       {note && <Text style={{ color: C.amber, fontSize: 13 }}>{note}</Text>}

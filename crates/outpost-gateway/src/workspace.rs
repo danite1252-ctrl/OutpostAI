@@ -350,8 +350,8 @@ impl Workspace {
                     return Outcome {
                         reply: format!(
                             "Not run: {n} change{} in {} {} still waiting for the user to apply ({}), so the command \
-                             would use the old files. Stop now: tell the user to apply them (Apply all) and say \
-                             \"carry on\", then run it. Don't change more files or run anything else until they do.",
+                             would use the old files. Stop now: tell the user to apply them (with Apply all \
+                             in the \"waiting for you\" bar above the message box) and say \"carry on\", then run it. Don't change more files or run anything else until they do.",
                             if n == 1 { "" } else { "s" },
                             folder.name,
                             if n == 1 { "is" } else { "are" },
