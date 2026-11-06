@@ -56,6 +56,7 @@ object JobNotifier {
     val p = prefs(ctx).edit()
     if (!on || hosts.isEmpty() || token.isEmpty()) {
       p.clear().apply()
+      RoutineAlarm.cancel(ctx)
       WorkManager.getInstance(ctx).cancelUniqueWork(PERIODIC)
       WorkManager.getInstance(ctx).cancelUniqueWork(SOON)
       return
@@ -158,6 +159,14 @@ object JobNotifier {
       if (j.optBoolean("long") && !inFront) notify(ctx, id, j.optString("title"), j.optString("body"), j.optString("chat_id"))
     }
     val now = r.optLong("now", System.currentTimeMillis() / 1000)
+    // Routines: look again just after the next one's due, or soon if one's running now.
+    val running = r.optInt("routines_running", 0)
+    val next = r.optLong("next_routine_at", 0)
+    when {
+      running > 0 -> RoutineAlarm.set(ctx, System.currentTimeMillis() + 3 * 60 * 1000L)
+      next > 0 -> RoutineAlarm.set(ctx, (next + 90) * 1000L - (now * 1000L - System.currentTimeMillis()))
+      else -> RoutineAlarm.cancel(ctx)
+    }
     p.edit()
       .putLong("since", maxOf(since, now - 5))
       .putStringSet("seen", if (seen.size > 100) seen.toList().takeLast(50).toSet() else seen)
@@ -259,3 +268,48 @@ class JobCheckWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, param
     return Result.success()
   }
 }
+
+/**
+ * A routine's result shouldn't wait for Android's next 15-minute check (which an idle phone can
+ * put off for hours): an alarm, which Android lets through while the phone is idle, looks just
+ * after the next routine is due, and every few minutes while one is running.
+ */
+class RoutineAlarm : android.content.BroadcastReceiver() {
+  override fun onReceive(ctx: Context, intent: android.content.Intent) {
+    val pending = goAsync()
+    Thread({
+      try {
+        JobNotifier.look(ctx.applicationContext, 0)
+      } catch (_: Exception) {
+        // Couldn't look now: the regular checks carry on.
+      } finally {
+        pending.finish()
+      }
+    }, "outpost-routine-alarm").start()
+  }
+
+  companion object {
+    private fun intent(ctx: Context) = android.app.PendingIntent.getBroadcast(
+      ctx,
+      7,
+      android.content.Intent(ctx, RoutineAlarm::class.java),
+      android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
+    /** Look at `atMillis` (wall clock). Inexact by a few minutes, but allowed while idle. */
+    fun set(ctx: Context, atMillis: Long) {
+      val alarms = ctx.getSystemService(android.app.AlarmManager::class.java) ?: return
+      val at = maxOf(atMillis, System.currentTimeMillis() + 60_000)
+      try {
+        alarms.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, at, intent(ctx))
+      } catch (_: Exception) {
+        // Not allowed here: the regular checks carry on.
+      }
+    }
+
+    fun cancel(ctx: Context) {
+      ctx.getSystemService(android.app.AlarmManager::class.java)?.cancel(intent(ctx))
+    }
+  }
+}
+

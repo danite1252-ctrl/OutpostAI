@@ -607,6 +607,10 @@ pub struct FinishedJobs {
     pub unfinished: i64,
     /// The server's clock now (Unix seconds), for the next `since`.
     pub now: i64,
+    /// When my next routine that tells me anything is due (a phone looks just after).
+    pub next_routine_at: Option<i64>,
+    /// My routines running now (a phone looks again soon).
+    pub routines_running: i64,
 }
 
 /// My jobs that finished since a time, for "it's ready" notifications. Stopped jobs are left out.
@@ -644,7 +648,9 @@ pub async fn finished_jobs(State(state): State<AppState>, auth: Auth, Query(q): 
                     chat_id: run.chat_id,
                 });
             }
-            return Ok(Json(FinishedJobs { jobs: out, unfinished, now }));
+            let (next_routine_at, routines_running) =
+                outpost_core::routines::watch_times(&state.pool, &auth.account.id).await.unwrap_or((None, 0));
+            return Ok(Json(FinishedJobs { jobs: out, unfinished, now, next_routine_at, routines_running }));
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }

@@ -248,10 +248,12 @@ PC: **Routines** in the sidebar; on the phone: **You › Routines**).
   Outpost open.
 - **Tell me**: each routine sends a notification to your phone and PC when it runs (**Every
   time**), **Only when there's news** (the persona decides; when there's nothing new it says so
-  quietly in the chat, and failures are always told), **Only if it fails**, or **Never**.
-  Tapping the notification on the phone opens the routine's chat. The phone checks in every
-  15 minutes or so, so a notification can arrive up to about 15 minutes after the run (sooner
-  while Outpost is open or a job of yours is running). On the PC, notifications need
+  quietly in the chat, and a quick separate check of each result decides; failures are always told), **Only if it fails**, or **Never**.
+  Tapping the notification on the phone opens the routine's chat. The phone looks just after
+  each routine is due (and every few minutes while one is running), as well as every 15
+  minutes or so. If phone notifications come late or not at all, let Outpost run in the
+  background: on Samsung phones, Settings › Apps › Outpost › Battery › **Unrestricted** (and
+  keep it out of "Sleeping apps"). On the PC, notifications need
   **Tell me when long jobs and routines finish** on in Settings.
 
 ## Create, Gallery and the queue

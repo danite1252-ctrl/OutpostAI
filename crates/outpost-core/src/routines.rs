@@ -517,6 +517,22 @@ pub async fn told_since(pool: &SqlitePool, account_id: &str, since: i64) -> Core
     .await?)
 }
 
+/// When my next routine that tells me anything is due, and how many of mine are running now
+/// (so a phone knows when to look).
+pub async fn watch_times(pool: &SqlitePool, account_id: &str) -> CoreResult<(Option<i64>, i64)> {
+    let next: Option<i64> = sqlx::query_scalar(
+        "SELECT MIN(next_at) FROM routines WHERE account_id = ? AND enabled = 1 AND next_at IS NOT NULL AND notify <> 'never'",
+    )
+    .bind(account_id)
+    .fetch_one(pool)
+    .await?;
+    let running: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM routines WHERE account_id = ? AND last_status = 'running'")
+        .bind(account_id)
+        .fetch_one(pool)
+        .await?;
+    Ok((next, running))
+}
+
 /// A routine's latest runs, newest first.
 pub async fn runs(pool: &SqlitePool, account_id: &str, routine_id: &str, limit: i64) -> CoreResult<Vec<Run>> {
     get(pool, account_id, routine_id).await?;

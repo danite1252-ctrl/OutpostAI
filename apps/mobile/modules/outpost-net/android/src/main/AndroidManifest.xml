@@ -24,5 +24,9 @@
         android:name="expo.modules.outpostnet.JobWatchService"
         android:exported="false"
         android:foregroundServiceType="dataSync" />
+    <!-- Looking for a routine's result just after it's due (an alarm Android allows while idle). -->
+    <receiver
+        android:name="expo.modules.outpostnet.RoutineAlarm"
+        android:exported="false" />
   </application>
 </manifest>

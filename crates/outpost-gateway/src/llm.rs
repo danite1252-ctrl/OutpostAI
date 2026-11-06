@@ -318,6 +318,38 @@ async fn summarise(
     (!text.is_empty()).then_some(text)
 }
 
+/// For routines that only tell you when there's news: does this result have something the
+/// task was watching for? A short, separate yes-or-no from the same model (more reliable than
+/// asking the reply itself to say so). `None`: it couldn't be decided.
+pub async fn judge_news(state: &AppState, model: &str, task: &str, result: &str) -> Option<bool> {
+    let result: String = result.chars().take(8000).collect();
+    let body = json!({
+        "model": model,
+        "stream": false,
+        "options": { "temperature": 0, "num_predict": 600 },
+        "messages": [
+            { "role": "system", "content": "You check the result of a scheduled task and decide whether the user should be notified. Answer with one word: YES or NO." },
+            { "role": "user", "content": format!(
+                "The task:\n{task}\n\nIts result:\n{result}\n\nThe user only wants a notification when the result has something \
+                 new or worth knowing that the task was watching for (for example a newer version than the one they named, a \
+                 change, a match). If the result says there's nothing new, nothing changed, the latest is the one they already \
+                 have, or the condition wasn't met, answer NO. Otherwise answer YES. One word: YES or NO."
+            ) }
+        ]
+    });
+    let resp = crate::lent::post(state, "/api/chat", &body, Some(std::time::Duration::from_secs(120))).await.ok()?;
+    let answer: Value = tokio::time::timeout(std::time::Duration::from_secs(120), resp.json()).await.ok()?.ok()?;
+    let text = answer["message"]["content"].as_str()?;
+    // Past any reasoning a model writes inline.
+    let text = text.rsplit("</think>").next().unwrap_or(text).trim().to_uppercase();
+    let first = text.split(|c: char| !c.is_ascii_alphabetic()).find(|w| !w.is_empty())?;
+    match first {
+        "YES" => Some(true),
+        "NO" => Some(false),
+        _ => None,
+    }
+}
+
 /// The context window Ollama runs `model` with on the card that answers (a lent PC's, or
 /// this server's), in tokens.
 pub async fn card_window(state: &AppState, model: &str) -> usize {

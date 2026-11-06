@@ -62,11 +62,17 @@ pub async fn run(state: AppState, r: Routine, reason: &'static str) {
     tracing::info!(routine = %r.id, name = %r.name, reason, "routine running");
     let result = attempt(&state, &r).await;
     let (ok, news, message_id, note) = match result {
-        Ok((id, gist)) => {
-            // "Nothing new" (when it only tells you about news): recorded, not told.
-            let quiet = r.notify == Notify::Worth && gist.trim_start().starts_with(NOTHING_NEW);
-            let note = if quiet { "Nothing new this time.".to_string() } else { gist };
-            (true, !quiet, Some(id), Some(note))
+        Ok(done) => {
+            // Only told when there's news: the reply said "nothing new", or a quick separate
+            // check of the result says so.
+            let quiet = r.notify == Notify::Worth
+                && (done.text.contains(NOTHING_NEW)
+                    || match &done.model {
+                        Some(model) => crate::llm::judge_news(&state, model, &r.instructions, &done.text).await == Some(false),
+                        None => false,
+                    });
+            let note = if quiet { format!("Nothing new this time. {}", done.gist.replace(NOTHING_NEW, "").trim()) } else { done.gist };
+            (true, !quiet, Some(done.id), Some(note.trim().to_string()))
         }
         Err(why) => (false, false, None, Some(why)),
     };
@@ -77,9 +83,19 @@ pub async fn run(state: AppState, r: Routine, reason: &'static str) {
     RUNNING.lock().unwrap_or_else(|p| p.into_inner()).remove(&r.id);
 }
 
-/// One run: the routine's instructions sent in its chat, and its reply waited for. Returns the
-/// reply's id and the start of what it said, or why it failed.
-async fn attempt(state: &AppState, r: &Routine) -> Result<(String, String), String> {
+/// What a run said.
+struct Done {
+    /// Its reply.
+    id: String,
+    text: String,
+    /// The start of it.
+    gist: String,
+    model: Option<String>,
+}
+
+/// One run: the routine's instructions sent in its chat, and its reply waited for. Returns
+/// what it said, or why it failed.
+async fn attempt(state: &AppState, r: &Routine) -> Result<Done, String> {
     let account = outpost_core::accounts::get(&state.pool, &r.account_id).await.map_err(|e| e.to_string())?;
     if !matches!(account.role, Role::Owner | Role::Member) {
         return Err("This account can't run routines.".into());
@@ -140,10 +156,12 @@ async fn attempt(state: &AppState, r: &Routine) -> Result<(String, String), Stri
     }
     let messages = outpost_core::chats::messages(&state.pool, &chat.id).await.map_err(|e| e.to_string())?;
     match messages.iter().rev().find(|m| m.role == "assistant" && m.created_at >= started) {
-        Some(m) if !m.content.trim().is_empty() => {
-            let gist: String = m.content.trim().chars().take(240).collect();
-            Ok((m.id.clone(), gist))
-        }
+        Some(m) if !m.content.trim().is_empty() => Ok(Done {
+            id: m.id.clone(),
+            gist: m.content.trim().chars().take(240).collect(),
+            text: m.content.clone(),
+            model: m.model.clone(),
+        }),
         _ => Err("It didn't give a reply (the model may be unavailable: open the routine's chat to see).".into()),
     }
 }
