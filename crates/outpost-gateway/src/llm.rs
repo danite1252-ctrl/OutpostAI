@@ -419,15 +419,19 @@ pub fn ollama_chat_body(
     // The clock goes beside the newest message instead: in a long chat, small models
     // otherwise repeat a wrong date from their own earlier replies.
     let (system, clock) = split_clock(system);
+    // One system message, at the start (some models' templates refuse any other): the chat's
+    // summary of its older part goes in it too.
+    let mut system = system.to_string();
+    if let Some(summary) = summary.filter(|s| !s.trim().is_empty()) {
+        if !system.is_empty() {
+            system.push_str("\n\n");
+        }
+        system.push_str(&format!("Summary of the earlier part of this conversation (those messages aren't shown):\n{summary}"));
+    }
     if !system.is_empty() {
         messages.push(json!({ "role": "system", "content": system }));
     }
-    if let Some(summary) = summary.filter(|s| !s.trim().is_empty()) {
-        messages.push(json!({
-            "role": "system",
-            "content": format!("Summary of the earlier part of this conversation (those messages aren't shown):\n{summary}"),
-        }));
-    }
+    let lead = messages.len();
     let start = history.len().saturating_sub(HISTORY);
     // The newest replies' tool calls and results go back too, so the model sees it used tools
     // (and does again for a follow-up) rather than copying replies that seem to act without.
@@ -452,13 +456,24 @@ pub fn ollama_chat_body(
     }
     // Two messages in a row from the same side (a message whose reply failed, then another)
     // become one: some models' templates refuse anything but user and assistant taking turns.
+    // The conversation starts with the user: the newest messages kept can begin with a reply
+    // (or its tool calls), which those templates also refuse.
+    let first_user = messages[lead..].iter().position(|m| m["role"] == "user").map_or(messages.len(), |i| lead + i);
+    messages.drain(lead..first_user);
     let mut messages = merge_runs(messages);
     if let Some(clock) = clock {
+        // Beside the newest message (small models otherwise repeat a wrong date from their own
+        // earlier replies), as part of it rather than a system message of its own.
         let note = format!(
-            "{clock} Earlier messages in this chat may give other dates or times; they are out of date or wrong."
+            "[{clock} Earlier messages in this chat may give other dates or times; they are out of date or wrong.]"
         );
-        let at = messages.iter().rposition(|m| m["role"] == "user").unwrap_or(messages.len());
-        messages.insert(at, json!({ "role": "system", "content": note }));
+        match messages.iter_mut().rev().find(|m| m["role"] == "user") {
+            Some(m) => {
+                let text = m["content"].as_str().unwrap_or_default().to_string();
+                m["content"] = Value::String(format!("{note}\n\n{text}"));
+            }
+            None => messages.push(json!({ "role": "system", "content": note })),
+        }
     }
     let mut body = json!({ "model": model, "messages": messages, "stream": true });
     // Only thinking models accept `think`; for them, follow the persona's switch.
@@ -506,12 +521,14 @@ mod tests {
         let system = format!("Be terse.\n\n{}", clock_line(now, sydney.as_ref()));
         let body = ollama_chat_body("m", &system, Some("The user is Dan."), &history, &HashMap::new(), &HashMap::new(), false, None);
         let m = body["messages"].as_array().unwrap();
-        assert_eq!(m[0]["content"], "Be terse.");
-        // The chat's summary of its older part comes next.
-        assert!(m[1]["content"].as_str().unwrap().ends_with("The user is Dan."));
-        assert_eq!(m[4]["role"], "system");
-        assert!(m[4]["content"].as_str().unwrap().starts_with("Current date and time for the user: Friday, 30 October 2026"));
-        assert_eq!(m[5]["content"], "and now?");
+        // One system message: the persona's, then the chat's summary of its older part.
+        let sys = m[0]["content"].as_str().unwrap();
+        assert!(sys.starts_with("Be terse.") && sys.ends_with("The user is Dan."), "{sys}");
+        assert_eq!(m.iter().filter(|x| x["role"] == "system").count(), 1);
+        // The clock goes at the start of the newest message.
+        let last = m[3]["content"].as_str().unwrap();
+        assert!(last.starts_with("[Current date and time for the user: Friday, 30 October 2026"), "{last}");
+        assert!(last.ends_with("and now?"));
         // Nonsense from an app is ignored.
         assert!(UserClock::from_app(Some(5000), None).is_none());
         assert_eq!(UserClock::from_app(Some(60), Some("Not a zone!")).unwrap().zone, None);
@@ -597,6 +614,22 @@ mod tests {
         assert_eq!(roles, vec!["user", "assistant", "tool", "assistant", "user"]);
         assert_eq!(b["messages"][1]["tool_calls"][0]["function"]["name"], "home_assistant__HassTurnOff");
         assert_eq!(b["messages"][3]["content"], "The lamp is off.");
+    }
+
+    #[test]
+    fn the_conversation_starts_with_the_user_and_takes_turns() {
+        // A failed reply earlier shifts the window so it would start with a reply.
+        let mut history = vec![msg(1, "user", "a"), msg(2, "user", "b (the first got no reply)")];
+        for i in 3..=(HISTORY as i64 + 2) {
+            history.push(msg(i, if i % 2 == 1 { "assistant" } else { "user" }, &format!("m{i}")));
+        }
+        let b = ollama_chat_body("devstral", "Be careful.", Some("Earlier stuff."), &history, &HashMap::new(), &HashMap::new(), false, None);
+        let m = b["messages"].as_array().unwrap();
+        assert_eq!(m[0]["role"], "system");
+        assert_eq!(m[1]["role"], "user", "{}", m[1]);
+        for pair in m[1..].windows(2) {
+            assert_ne!(pair[0]["role"], pair[1]["role"], "turns alternate");
+        }
     }
 
     #[test]
