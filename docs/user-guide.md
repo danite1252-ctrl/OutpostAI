@@ -246,6 +246,13 @@ PC: **Routines** in the sidebar; on the phone: **You › Routines**).
   until you resume it. A routine never runs twice at once, and a run is stopped after 30 minutes.
 - Routines use the persona's tools on the server, and its tools on your PC when that PC has
   Outpost open.
+- **Tell me**: each routine sends a notification to your phone and PC when it runs (**Every
+  time**), **Only when there's news** (the persona decides; when there's nothing new it says so
+  quietly in the chat, and failures are always told), **Only if it fails**, or **Never**.
+  Tapping the notification on the phone opens the routine's chat. The phone checks in every
+  15 minutes or so, so a notification can arrive up to about 15 minutes after the run (sooner
+  while Outpost is open or a job of yours is running). On the PC, notifications need
+  **Tell me when long jobs and routines finish** on in Settings.
 
 ## Create, Gallery and the queue
 

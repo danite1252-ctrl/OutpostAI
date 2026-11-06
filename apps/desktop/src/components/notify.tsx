@@ -90,8 +90,8 @@ export function NotificationsPanel() {
   const [on, setOn] = useState(notificationsOn);
   return (
     <ToggleRow
-      title="Tell me when long jobs finish"
-      hint="A Windows notification when a 3D model, video or training (or anything that took a minute or more) is ready or fails, unless Outpost is in front."
+      title="Tell me when long jobs and routines finish"
+      hint="A Windows notification when a 3D model, video or training (or anything that took a minute or more) is ready or fails, and when a routine has something for you, unless Outpost is in front."
       checked={on}
       onChange={(v) => {
         setOn(v);

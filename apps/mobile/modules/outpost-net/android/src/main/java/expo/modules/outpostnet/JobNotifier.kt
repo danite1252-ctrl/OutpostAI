@@ -155,7 +155,7 @@ object JobNotifier {
       val j = jobs!!.getJSONObject(i)
       val id = j.optString("id")
       if (id.isEmpty() || !seen.add(id)) continue
-      if (j.optBoolean("long") && !inFront) notify(ctx, id, j.optString("title"), j.optString("body"))
+      if (j.optBoolean("long") && !inFront) notify(ctx, id, j.optString("title"), j.optString("body"), j.optString("chat_id"))
     }
     val now = r.optLong("now", System.currentTimeMillis() / 1000)
     p.edit()
@@ -168,7 +168,7 @@ object JobNotifier {
   /** The small icon in the status bar. */
   internal val icon: Int get() = R.drawable.outpost_notify
 
-  private fun notify(ctx: Context, id: String, title: String, body: String) {
+  private fun notify(ctx: Context, id: String, title: String, body: String, chatId: String = "") {
     if (Build.VERSION.SDK_INT >= 33 &&
       ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
     ) return
@@ -176,12 +176,19 @@ object JobNotifier {
     if (Build.VERSION.SDK_INT >= 26 && manager.getNotificationChannel(CHANNEL) == null) {
       manager.createNotificationChannel(
         NotificationChannel(CHANNEL, "Finished jobs", NotificationManager.IMPORTANCE_DEFAULT).apply {
-          description = "When a 3D model, video, training or other long job is ready or fails"
+          description = "When a 3D model, video, training or other long job is ready or fails, and routines' results"
         }
       )
     }
-    val open = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)?.let {
-      PendingIntent.getActivity(ctx, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+    val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
+    // A routine's result: tapping opens its chat (outpost://chat/<id>, read by the app).
+    val target = if (chatId.isNotEmpty() && launch?.component != null) {
+      android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("outpost://chat/$chatId"))
+        .setComponent(launch.component)
+        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    } else launch
+    val open = target?.let {
+      PendingIntent.getActivity(ctx, id.hashCode(), it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
     val n = NotificationCompat.Builder(ctx, CHANNEL)
       .setSmallIcon(icon)

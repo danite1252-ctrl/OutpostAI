@@ -595,6 +595,9 @@ pub struct FinishedJob {
     /// It took a while (a minute or more) or is a kind that always does: worth a notification.
     pub long: bool,
     pub finished_at: i64,
+    /// A routine's run: its chat (where the full result is).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -625,6 +628,21 @@ pub async fn finished_jobs(State(state): State<AppState>, auth: Auth, Query(q): 
             let mut out = Vec::new();
             for job in found {
                 out.push(finished_view(&state, job).await);
+            }
+            // Routines' runs worth telling about, worded the same way.
+            for run in outpost_core::routines::told_since(&state.pool, &auth.account.id, q.since).await.unwrap_or_default() {
+                let ok = run.status == "ok";
+                out.push(FinishedJob {
+                    id: run.id,
+                    pack_id: String::new(),
+                    kind: "routine".into(),
+                    status: if ok { JobStatus::Done } else { JobStatus::Failed },
+                    title: if ok { run.name } else { format!("{} didn't work", run.name) },
+                    body: run.note.unwrap_or_default().chars().take(160).collect(),
+                    long: true,
+                    finished_at: run.finished_at,
+                    chat_id: run.chat_id,
+                });
             }
             return Ok(Json(FinishedJobs { jobs: out, unfinished, now }));
         }
@@ -682,6 +700,7 @@ async fn finished_view(state: &AppState, job: Job) -> FinishedJob {
         status: job.status,
         title,
         finished_at: job.finished_at.unwrap_or(0),
+        chat_id: None,
     }
 }
 

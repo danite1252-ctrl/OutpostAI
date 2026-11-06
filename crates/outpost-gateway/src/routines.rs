@@ -10,13 +10,17 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use outpost_core::accounts::Role;
-use outpost_core::routines::{self, Routine, RoutineInput, Run};
+use outpost_core::routines::{self, Notify, Routine, RoutineInput, Run};
 use outpost_core::sessions::{Session, SessionKind};
 use serde::Deserialize;
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::Auth;
 use crate::AppState;
+
+/// What the persona answers when there's nothing worth telling (routines that only tell you
+/// when there's something new).
+const NOTHING_NEW: &str = "NOTHING_NEW";
 
 /// Longest a run may take before it's stopped.
 const RUN_MAX: Duration = Duration::from_secs(30 * 60);
@@ -57,11 +61,17 @@ pub async fn run(state: AppState, r: Routine, reason: &'static str) {
     };
     tracing::info!(routine = %r.id, name = %r.name, reason, "routine running");
     let result = attempt(&state, &r).await;
-    let (ok, message_id, note) = match result {
-        Ok((id, note)) => (true, Some(id), Some(note)),
-        Err(why) => (false, None, Some(why)),
+    let (ok, news, message_id, note) = match result {
+        Ok((id, gist)) => {
+            // "Nothing new" (when it only tells you about news): recorded, not told.
+            let quiet = r.notify == Notify::Worth && gist.trim_start().starts_with(NOTHING_NEW);
+            let note = if quiet { "Nothing new this time.".to_string() } else { gist };
+            (true, !quiet, Some(id), Some(note))
+        }
+        Err(why) => (false, false, None, Some(why)),
     };
-    if let Err(e) = routines::finish_run(&state.pool, &r.id, &run_id, ok, message_id.as_deref(), note.as_deref()).await {
+    let tell = r.notify.tells(ok, news);
+    if let Err(e) = routines::finish_run(&state.pool, &r.id, &run_id, ok, message_id.as_deref(), note.as_deref(), tell).await {
         tracing::warn!(error = %e, "couldn't record a routine's run");
     }
     RUNNING.lock().unwrap_or_else(|p| p.into_inner()).remove(&r.id);
@@ -89,9 +99,17 @@ async fn attempt(state: &AppState, r: &Routine) -> Result<(String, String), Stri
             c
         }
     };
+    let only_news = if r.notify == Notify::Worth {
+        format!(
+            " The user is only told when there's something new or worth knowing: if there's nothing (no change, \
+             nothing found), reply with just {NOTHING_NEW} and nothing else."
+        )
+    } else {
+        String::new()
+    };
     let content = format!(
         "[Routine \"{}\": this runs on its own, on a schedule, and nobody is watching as it runs. Do the task below \
-         and give the result. Don't ask questions: if something's missing, do what you can and say what you couldn't.]\n\n{}",
+         and give the result. Don't ask questions: if something's missing, do what you can and say what you couldn't.{only_news}]\n\n{}",
         r.name, r.instructions
     );
     let auth = Auth {

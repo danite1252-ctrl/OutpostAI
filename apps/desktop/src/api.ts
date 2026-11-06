@@ -1883,6 +1883,8 @@ export interface Routine {
   time_zone: string | null;
   utc_offset_minutes: number | null;
   enabled: boolean;
+  /** When it tells you about a run. */
+  notify: Notify;
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -1890,8 +1892,12 @@ export interface Routine {
   last_note: string | null;
 }
 
+/** When a routine tells you: every run, only with news (and failures), only failures, never. */
+export type Notify = "always" | "worth" | "failures" | "never";
+
 export interface RoutineInput {
   name?: string;
+  notify?: Notify;
   persona_id?: string;
   instructions?: string;
   schedule?: Schedule;

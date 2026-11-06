@@ -7,6 +7,14 @@ import { ListState, message, Screen } from "./admin";
 import type { Outpost } from "./outpost";
 import { Avatar, Button, C, Chip, ErrorText, Field, P, s } from "./ui";
 
+type Notify = "always" | "worth" | "failures" | "never";
+const NOTIFY: { id: Notify; label: string; short: string }[] = [
+  { id: "always", label: "Every time", short: "tells you every run" },
+  { id: "worth", label: "Only with news", short: "tells you when there's news" },
+  { id: "failures", label: "Only if it fails", short: "tells you if it fails" },
+  { id: "never", label: "Never", short: "doesn't notify" },
+];
+
 type Schedule = { kind: "once"; at: number } | { kind: "days"; time: string; days: number[] } | { kind: "every"; hours: number };
 
 interface Routine {
@@ -16,6 +24,7 @@ interface Routine {
   instructions: string;
   schedule: Schedule;
   enabled: boolean;
+  notify: Notify;
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -135,7 +144,7 @@ export function RoutinesScreen({ api, onClose, onOpenChat }: { api: Outpost; onC
                 <Text style={{ color: C.ink, fontWeight: "600" }}>{r.name}</Text>
                 <Text style={{ color: C.muted, fontSize: 13 }}>
                   {describe(r.schedule)}
-                  {persona ? ` · ${persona.name}` : ""}
+                  {persona ? ` · ${persona.name}` : ""} · {NOTIFY.find((n) => n.id === r.notify)?.short}
                 </Text>
                 <Text style={{ color: !r.enabled ? C.muted : running ? C.amber : C.soft, fontSize: 13 }}>
                   {!r.enabled ? "Paused" : running ? "Running now…" : r.next_at ? `Next: ${when(r.next_at)}` : "Done (it ran once)"}
@@ -218,6 +227,7 @@ function RoutineEditor({
   const [hours, setHours] = useState(String(sch?.kind === "every" ? sch.hours : 4));
   const [date, setDate] = useState(`${onceAt.getFullYear()}-${pad(onceAt.getMonth() + 1)}-${pad(onceAt.getDate())}`);
   const [onceTime, setOnceTime] = useState(`${pad(onceAt.getHours())}:${pad(onceAt.getMinutes())}`);
+  const [notify, setNotify] = useState<Notify>(routine?.notify ?? "always");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -249,7 +259,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, ...myZone() };
+      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, notify, ...myZone() };
       onSaved(routine ? await api.json<Routine>("PUT", `/api/routines/${routine.id}`, body) : await api.json<Routine>("POST", "/api/routines", body));
     } catch (e) {
       setError(message(e));
@@ -314,6 +324,15 @@ function RoutineEditor({
         </>
       )}
       <P muted>Times are this phone's time zone, daylight saving included.</P>
+      <Text style={s.label}>Tell me (a notification on your phone and PC)</Text>
+      <View style={[s.row, { flexWrap: "wrap" }]}>
+        {NOTIFY.map((n) => (
+          <Chip key={n.id} label={n.label} active={notify === n.id} onPress={() => setNotify(n.id)} />
+        ))}
+      </View>
+      {notify === "worth" && (
+        <P muted>The persona decides: when there's nothing new it says so quietly in the chat. Failures are always told.</P>
+      )}
       <ErrorText>{error}</ErrorText>
       <Button
         title={routine ? "Save" : "Make the routine"}

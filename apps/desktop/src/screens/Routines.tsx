@@ -2,10 +2,17 @@
 // a morning brief"). Each run is a reply in the routine's own chat.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, routinesApi, type Persona, type Routine, type RoutineRun, type Schedule } from "../api";
+import { api, routinesApi, type Notify, type Persona, type Routine, type RoutineRun, type Schedule } from "../api";
 import { Avatar, Button, ErrorNote, Field, areYouSure } from "../components/ui";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+const NOTIFY: { id: Notify; label: string; short: string }[] = [
+  { id: "always", label: "Every time", short: "tells you every run" },
+  { id: "worth", label: "Only when there's news", short: "tells you when there's news" },
+  { id: "failures", label: "Only if it fails", short: "tells you if it fails" },
+  { id: "never", label: "Never", short: "doesn't notify" },
+];
 
 function message(e: unknown) {
   return e instanceof Error ? e.message : "Something went wrong.";
@@ -160,7 +167,7 @@ function RoutineCard({
           <p className="font-semibold">{r.name}</p>
           <p className="text-sm text-muted">
             {describe(r.schedule)}
-            {persona ? ` · ${persona.name}` : ""}
+            {persona ? ` · ${persona.name}` : ""} · {NOTIFY.find((n) => n.id === r.notify)?.short}
           </p>
           <p className="mt-1 text-sm">
             {!r.enabled ? (
@@ -286,6 +293,7 @@ function RoutineEditor({
   const [days, setDays] = useState<number[]>(s?.kind === "days" ? s.days : [1, 2, 3, 4, 5]);
   const [hours, setHours] = useState(s?.kind === "every" ? s.hours : 4);
   const [at, setAt] = useState(localInput(s?.kind === "once" ? s.at : Math.floor(Date.now() / 1000) + 3600));
+  const [notify, setNotify] = useState<Notify>(routine?.notify ?? "always");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -308,7 +316,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule() };
+      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule(), notify };
       onSaved(routine ? await routinesApi.update(token, routine.id, input) : await routinesApi.create(token, input));
     } catch (e) {
       setError(message(e));
@@ -401,6 +409,30 @@ function RoutineEditor({
         )}
         {kind === "once" && <Field label="On" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} />}
         <p className="text-xs text-muted">Times are this PC's time zone, daylight saving included, wherever the server is.</p>
+      </fieldset>
+
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-2 text-sm text-muted">Tell me (a notification on your phone and PC)</legend>
+        <div className="flex flex-wrap gap-2" role="radiogroup">
+          {NOTIFY.map((n) => (
+            <button
+              key={n.id}
+              type="button"
+              role="radio"
+              aria-checked={notify === n.id}
+              onClick={() => setNotify(n.id)}
+              className={`min-h-10 rounded-full border px-4 text-sm ${notify === n.id ? "border-ember bg-ember/10 text-ink" : "border-line text-soft hover:bg-raised"}`}
+            >
+              {n.label}
+            </button>
+          ))}
+        </div>
+        {notify === "worth" && (
+          <p className="text-xs text-muted">
+            The persona decides: when there's nothing new it says so quietly in the chat, and you aren't notified. Failures are
+            always told.
+          </p>
+        )}
       </fieldset>
 
       <ErrorNote>{error}</ErrorNote>

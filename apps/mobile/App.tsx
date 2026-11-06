@@ -2,7 +2,7 @@ import { inFront, setUpNotifications, watchIfRunning } from "./src/notify";
 import * as LocalAuthentication from "expo-local-authentication";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AppState, Keyboard, KeyboardAvoidingView, Pressable, Text, View } from "react-native";
+import { AppState, Keyboard, KeyboardAvoidingView, Linking, Pressable, Text, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { ApiError, Outpost } from "./src/outpost";
 import Chat from "./src/screens/Chat";
@@ -172,6 +172,19 @@ function Main({
   // A chat to open in the Chat tab (a routine's).
   const [chatToOpen, setChatToOpen] = useState<string | null>(null);
   const clearChatToOpen = useCallback(() => setChatToOpen(null), []);
+  // Tapping a routine's notification: open its chat.
+  useEffect(() => {
+    const open = (url: string | null) => {
+      const m = url?.match(/^outpost:\/\/chat\/([\w-]+)/);
+      if (m) {
+        setChatToOpen(m[1]);
+        setTab("chat");
+      }
+    };
+    void Linking.getInitialURL().then(open, () => undefined);
+    const sub = Linking.addEventListener("url", (e) => open(e.url));
+    return () => sub.remove();
+  }, []);
   const api = useMemo(() => new Outpost({ ...saved }), [saved]);
   const update = usePhoneUpdate(api);
   const [revoked, setRevoked] = useState(false);

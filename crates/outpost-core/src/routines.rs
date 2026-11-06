@@ -75,6 +75,49 @@ impl Schedule {
     }
 }
 
+/// When a routine tells you (a notification on your phone and PC) about a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Notify {
+    /// Every run.
+    #[default]
+    Always,
+    /// Only when there's something new or worth saying (the persona decides), and failures.
+    Worth,
+    /// Only when it fails.
+    Failures,
+    /// Never (look in its chat).
+    Never,
+}
+
+impl Notify {
+    fn as_str(self) -> &'static str {
+        match self {
+            Notify::Always => "always",
+            Notify::Worth => "worth",
+            Notify::Failures => "failures",
+            Notify::Never => "never",
+        }
+    }
+    fn parse(s: &str) -> Notify {
+        match s {
+            "worth" => Notify::Worth,
+            "failures" => Notify::Failures,
+            "never" => Notify::Never,
+            _ => Notify::Always,
+        }
+    }
+    /// Should this run be told? `ok`: it worked; `news`: it had something to say.
+    pub fn tells(self, ok: bool, news: bool) -> bool {
+        match self {
+            Notify::Always => true,
+            Notify::Worth => !ok || news,
+            Notify::Failures => !ok,
+            Notify::Never => false,
+        }
+    }
+}
+
 fn hour_minute(time: &str) -> Option<(i8, i8)> {
     let (h, m) = time.trim().split_once(':')?;
     let (h, m): (i8, i8) = (h.parse().ok()?, m.parse().ok()?);
@@ -104,6 +147,8 @@ pub struct Routine {
     pub time_zone: Option<String>,
     pub utc_offset_minutes: Option<i32>,
     pub enabled: bool,
+    /// When it tells you about a run.
+    pub notify: Notify,
     /// Its chat (where each run's reply goes), once it has run.
     pub chat_id: Option<String>,
     /// When it runs next (Unix seconds); none when paused or finished.
@@ -133,6 +178,7 @@ struct Row {
     time_zone: Option<String>,
     utc_offset_minutes: Option<i64>,
     enabled: i64,
+    notify: String,
     chat_id: Option<String>,
     next_at: Option<i64>,
     last_at: Option<i64>,
@@ -154,6 +200,7 @@ impl Row {
             time_zone: self.time_zone,
             utc_offset_minutes: self.utc_offset_minutes.map(|m| m as i32),
             enabled: self.enabled != 0,
+            notify: Notify::parse(&self.notify),
             chat_id: self.chat_id,
             next_at: self.next_at,
             last_at: self.last_at,
@@ -166,7 +213,7 @@ impl Row {
 }
 
 const COLUMNS: &str = "id, account_id, name, persona_id, instructions, schedule, time_zone, utc_offset_minutes, enabled, \
-                       chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
+                       notify, chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
 
 /// A new routine, or changes to one (fields left out stay as they are).
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
@@ -178,6 +225,8 @@ pub struct RoutineInput {
     pub instructions: Option<String>,
     pub schedule: Option<Schedule>,
     pub enabled: Option<bool>,
+    /// When it tells you about a run.
+    pub notify: Option<Notify>,
     /// The person's time zone ("Australia/Sydney"), from their app.
     pub time_zone: Option<String>,
     /// Minutes ahead of UTC, from their app (used when the zone's name isn't known).
@@ -269,7 +318,7 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: RoutineInput) ->
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO routines (id, account_id, name, persona_id, instructions, schedule, time_zone, utc_offset_minutes, \
-         enabled, next_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         enabled, notify, next_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(account_id)
@@ -280,6 +329,7 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: RoutineInput) ->
     .bind(&input.time_zone)
     .bind(input.utc_offset_minutes)
     .bind(enabled as i64)
+    .bind(input.notify.unwrap_or_default().as_str())
     .bind(next_at)
     .bind(t)
     .bind(t)
@@ -314,12 +364,13 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Routin
         None => r.persona_id.clone(),
     };
     let enabled = input.enabled.unwrap_or(r.enabled);
+    let notify = input.notify.unwrap_or(r.notify);
     let time_zone = input.time_zone.or(r.time_zone.clone());
     let offset = input.utc_offset_minutes.or(r.utc_offset_minutes);
     let next_at = next_for(&schedule, enabled, &zone(time_zone.as_deref(), offset), r.last_at);
     sqlx::query(
         "UPDATE routines SET name = ?, persona_id = ?, instructions = ?, schedule = ?, time_zone = ?, utc_offset_minutes = ?, \
-         enabled = ?, next_at = ?, updated_at = ? WHERE id = ? AND account_id = ?",
+         enabled = ?, notify = ?, next_at = ?, updated_at = ? WHERE id = ? AND account_id = ?",
     )
     .bind(&name)
     .bind(&persona_id)
@@ -328,6 +379,7 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Routin
     .bind(&time_zone)
     .bind(offset)
     .bind(enabled as i64)
+    .bind(notify.as_str())
     .bind(next_at)
     .bind(now())
     .bind(id)
@@ -384,13 +436,23 @@ pub async fn start_run(pool: &SqlitePool, r: &Routine, reason: &str) -> CoreResu
 }
 
 /// A run ended: `ok` (with the reply it made) or `failed` (and why).
-pub async fn finish_run(pool: &SqlitePool, routine_id: &str, run_id: &str, ok: bool, message_id: Option<&str>, note: Option<&str>) -> CoreResult<()> {
+/// `tell`: it's worth a notification.
+pub async fn finish_run(
+    pool: &SqlitePool,
+    routine_id: &str,
+    run_id: &str,
+    ok: bool,
+    message_id: Option<&str>,
+    note: Option<&str>,
+    tell: bool,
+) -> CoreResult<()> {
     let status = if ok { "ok" } else { "failed" };
-    sqlx::query("UPDATE routine_runs SET finished_at = ?, status = ?, message_id = ?, note = ? WHERE id = ?")
+    sqlx::query("UPDATE routine_runs SET finished_at = ?, status = ?, message_id = ?, note = ?, tell = ? WHERE id = ?")
         .bind(now())
         .bind(status)
         .bind(message_id)
         .bind(note)
+        .bind(tell as i64)
         .bind(run_id)
         .execute(pool)
         .await?;
@@ -429,6 +491,30 @@ pub struct Run {
     pub note: Option<String>,
     /// "schedule" or "now" (Run now).
     pub reason: String,
+}
+
+/// A finished run worth telling someone about (for notifications).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Told {
+    pub id: String,
+    pub name: String,
+    pub chat_id: Option<String>,
+    pub status: String,
+    pub note: Option<String>,
+    pub finished_at: i64,
+}
+
+/// My routines' runs that finished since a time and should be told.
+pub async fn told_since(pool: &SqlitePool, account_id: &str, since: i64) -> CoreResult<Vec<Told>> {
+    Ok(sqlx::query_as(
+        "SELECT rr.id, r.name, r.chat_id, rr.status, rr.note, rr.finished_at FROM routine_runs rr \
+         JOIN routines r ON r.id = rr.routine_id \
+         WHERE r.account_id = ? AND rr.tell = 1 AND rr.finished_at >= ? ORDER BY rr.finished_at LIMIT 20",
+    )
+    .bind(account_id)
+    .bind(since)
+    .fetch_all(pool)
+    .await?)
 }
 
 /// A routine's latest runs, newest first.
@@ -470,6 +556,14 @@ mod tests {
         assert!(Schedule::Days { time: "25:00".into(), days: vec![1] }.check().is_err());
         assert!(Schedule::Days { time: "07:30".into(), days: vec![] }.check().is_err());
         assert!(Schedule::Every { hours: 0 }.check().is_err());
+    }
+
+    #[test]
+    fn who_gets_told() {
+        assert!(Notify::Always.tells(true, false));
+        assert!(Notify::Worth.tells(true, true) && !Notify::Worth.tells(true, false) && Notify::Worth.tells(false, false));
+        assert!(Notify::Failures.tells(false, true) && !Notify::Failures.tells(true, true));
+        assert!(!Notify::Never.tells(false, true));
     }
 
     #[test]
