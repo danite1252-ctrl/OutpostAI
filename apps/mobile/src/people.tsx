@@ -150,6 +150,7 @@ export function PeopleScreen({ api, isOwner, myAccountId, onClose }: { api: Outp
                   <Chip label="New PIN (send a link)" onPress={() => void resetPin(a)} />
                   {a.id !== myAccountId && <Chip label="Delete" color={C.danger} onPress={() => removeAccount(a)} />}
                 </View>
+                {a.role !== "owner" && <ToolHoursRow api={api} id={a.id} name={a.name} />}
               </View>
             ))}
         </Section>
@@ -245,5 +246,59 @@ function CodeScreen({ view, onClose }: { view: PairingView; onClose: () => void 
       </P>
       <Button kind="ghost" title="Send the link" onPress={() => void Share.share({ message: `Join Outpost (${view.name}): ${view.link}` })} />
     </Screen>
+  );
+}
+
+/** Hours when someone's tools that do things are off (look-ups still work): bedtime for the kids. */
+function ToolHoursRow({ api, id, name }: { api: Outpost; id: string; name: string }) {
+  type Off = { from: string; to: string } | null;
+  const [open, setOpen] = useState(false);
+  const [off, setOff] = useState<Off | undefined>(undefined);
+  const [from, setFrom] = useState("21:00");
+  const [to, setTo] = useState("07:00");
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    api.get<{ off: Off }>(`/api/accounts/${id}/tool-hours`).then(
+      (h) => {
+        setOff(h.off);
+        if (h.off) {
+          setFrom(h.off.from);
+          setTo(h.off.to);
+        }
+      },
+      (e) => setError(message(e)),
+    );
+  }, [open, api, id]);
+  async function save(next: Off) {
+    setError(null);
+    try {
+      setOff((await api.json<{ off: Off }>("PUT", `/api/accounts/${id}/tool-hours`, { off: next })).off);
+    } catch (e) {
+      setError(message(e));
+    }
+  }
+  if (!open) return <Chip label="Tool hours…" onPress={() => setOpen(true)} />;
+  if (off === undefined) return <P muted>{error ?? "Loading…"}</P>;
+  const changed = !!off && (off.from !== from.trim() || off.to !== to.trim());
+  return (
+    <View style={{ gap: 6 }}>
+      <Chip
+        label={off ? `${name}'s tools are off ${off.from} to ${off.to}` : "Tools any time"}
+        active={!!off}
+        onPress={() => void save(off ? null : { from: from.trim(), to: to.trim() })}
+      />
+      <View style={s.row}>
+        <View style={{ flex: 1 }}>
+          <Field label="Off from" value={from} onChangeText={setFrom} keyboardType="numbers-and-punctuation" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Field label="Until" value={to} onChangeText={setTo} keyboardType="numbers-and-punctuation" />
+        </View>
+      </View>
+      {changed && <Button title="Save tool hours" onPress={() => void save({ from: from.trim(), to: to.trim() })} />}
+      <P muted>Then a persona can't turn things on or off for them; look-ups still work.</P>
+      <ErrorText>{error}</ErrorText>
+    </View>
   );
 }

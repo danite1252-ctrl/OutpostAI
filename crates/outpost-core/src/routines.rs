@@ -166,7 +166,7 @@ pub struct Quiet {
 }
 
 impl Quiet {
-    fn check(&self) -> CoreResult<()> {
+    pub fn check(&self) -> CoreResult<()> {
         if hour_minute(&self.from).is_none() || hour_minute(&self.to).is_none() {
             return Err(CoreError::Invalid("Give quiet hours like 22:00 to 07:00.".into()));
         }

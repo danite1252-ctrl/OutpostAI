@@ -85,6 +85,42 @@ pub async fn record(pool: &SqlitePool, e: NewEntry) {
     }
 }
 
+/// The most actions (not look-ups) a person's routines may take in an hour.
+pub const ROUTINE_ACTIONS_PER_HOUR: i64 = 30;
+
+/// Actions a person's routines took in the last hour (calls that did, or tried to do, something).
+pub async fn routine_actions_last_hour(pool: &SqlitePool, account_id: &str) -> CoreResult<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(*) FROM activity WHERE account_id = ? AND routine_id IS NOT NULL AND at > ? AND outcome IN ('done', 'failed')",
+    )
+    .bind(account_id)
+    .bind(now() - 3600)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// Hours when someone's tools that do things are off (an owner sets them; look-ups still work).
+pub async fn tools_off(pool: &SqlitePool, account_id: &str) -> CoreResult<Option<crate::routines::Quiet>> {
+    Ok(crate::settings::get(pool, &format!("tools.off.{account_id}"))
+        .await?
+        .and_then(|v| serde_json::from_str(&v).ok()))
+}
+
+/// Set (or take away, with `None`) someone's tools-off hours.
+pub async fn set_tools_off(pool: &SqlitePool, account_id: &str, off: Option<crate::routines::Quiet>) -> CoreResult<Option<crate::routines::Quiet>> {
+    crate::accounts::get(pool, account_id).await?;
+    let value = match &off {
+        Some(q) => {
+            q.check()?;
+            serde_json::to_string(&crate::routines::Quiet { from: q.from.trim().into(), to: q.to.trim().into() })
+                .map_err(|e| crate::CoreError::Internal(e.to_string()))?
+        }
+        None => String::new(),
+    };
+    crate::settings::set(pool, &format!("tools.off.{account_id}"), &value).await?;
+    tools_off(pool, account_id).await
+}
+
 /// What to show.
 #[derive(Debug, Clone, Default)]
 pub struct Filter {
@@ -164,5 +200,18 @@ mod tests {
         assert_eq!(hers.len(), 2);
         assert!(hers.iter().all(|e| e.account_id == sj.id));
         assert_eq!(prune(&pool).await.unwrap(), 0);
+
+        // Routines' actions are counted per person; chats' aren't.
+        let mut by_routine = call(&sj.id, "HassTurnOn", "{}", "done");
+        by_routine.routine_id = Some("r1".into());
+        record(&pool, by_routine).await;
+        assert_eq!(routine_actions_last_hour(&pool, &sj.id).await.unwrap(), 1);
+        assert_eq!(routine_actions_last_hour(&pool, &dan.id).await.unwrap(), 0);
+
+        // Tools-off hours are kept per person.
+        let night = crate::routines::Quiet { from: "21:00".into(), to: "07:00".into() };
+        assert_eq!(set_tools_off(&pool, &sj.id, Some(night.clone())).await.unwrap(), Some(night));
+        assert_eq!(tools_off(&pool, &dan.id).await.unwrap(), None);
+        assert_eq!(set_tools_off(&pool, &sj.id, None).await.unwrap(), None);
     }
 }

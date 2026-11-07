@@ -978,6 +978,11 @@ export const api = {
     request<Account>("POST", "/api/accounts", { token, body }),
   deleteAccount: (token: string, id: string) =>
     request<void>("DELETE", `/api/accounts/${encodeURIComponent(id)}`, { token }),
+  /** Hours when someone's tools that do things are off. */
+  toolHours: (token: string, id: string) =>
+    request<{ off: { from: string; to: string } | null }>("GET", `/api/accounts/${id}/tool-hours`, { token }),
+  setToolHours: (token: string, id: string, off: { from: string; to: string } | null) =>
+    request<{ off: { from: string; to: string } | null }>("PUT", `/api/accounts/${id}/tool-hours`, { token, body: { off } }),
   resetSecret: (token: string, id: string, secret: string) =>
     request<void>("PUT", `/api/accounts/${encodeURIComponent(id)}/secret`, { token, body: { secret } }),
   models: (token: string) => request<{ object: "list"; data: ModelEntry[] }>("GET", "/v1/models", { token }),
@@ -2016,7 +2021,7 @@ export interface ActivityEntry {
   tool: string;
   /** Exactly as the model sent them (JSON). */
   arguments: string;
-  outcome: "done" | "failed" | "not_allowed" | "skipped" | "needs_ok";
+  outcome: "done" | "failed" | "not_allowed" | "skipped" | "needs_ok" | "off_hours" | "over_limit";
   result: string;
 }
 

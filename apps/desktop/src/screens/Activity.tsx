@@ -16,6 +16,8 @@ const OUTCOME: Record<ActivityEntry["outcome"], { label: string; tone: string }>
   not_allowed: { label: "Not allowed", tone: "text-danger border-danger/40" },
   skipped: { label: "Skipped", tone: "text-amber border-amber/40" },
   needs_ok: { label: "Needed an OK", tone: "text-amber border-amber/40" },
+  off_hours: { label: "Off hours", tone: "text-amber border-amber/40" },
+  over_limit: { label: "Over the hourly limit", tone: "text-amber border-amber/40" },
 };
 
 function when(at: number): string {

@@ -132,6 +132,12 @@ servers, so any MCP server works.
   details **exactly as the model sent them** (so "it turned off the wrong light" shows the name
   it used), and what came of it: Done, Failed, Not allowed, Skipped or Needed an OK. Owners see
   everyone's and can pick a person or a tool; everyone else sees their own. Kept for 90 days.
+- **Tool hours** (Settings › Accounts on the PC, or People on the phone, for owners): hours when
+  someone's tools that do things are off, in their own time zone, say 21:00 to 07:00 for the
+  kids. Then a persona won't turn things on or off for them and says why; look-ups ("is the
+  door locked?") still work. It shows as **Off hours** in Activity.
+- **Routines are limited** to 30 actions an hour per person (look-ups don't count), so a
+  routine gone wrong can't keep switching things. More shows as **Over the hourly limit**.
 - **Keys and sign-ins on the server** are encrypted with a key kept in Outpost's data folder
   (`secrets.key`), beside the database: keep it in backups, or everyone signs in again.
 - **Signing in** happens on the PC you're using (the browser comes back to it), and the sign-in

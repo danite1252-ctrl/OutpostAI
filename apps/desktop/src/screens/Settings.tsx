@@ -111,6 +111,7 @@ function AccountsPanel({ token, selfId }: { token: string; selfId: string }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [resetFor, setResetFor] = useState<Account | null>(null);
+  const [hoursFor, setHoursFor] = useState<string | null>(null);
   // An invite to show: someone new, or a PIN reset they do on their own device.
   const [invite, setInvite] = useState<{ title: string; body: { name?: string; role?: Role; account_id?: string } } | null>(null);
 
@@ -156,6 +157,16 @@ function AccountsPanel({ token, selfId }: { token: string; selfId: string }) {
                 Set new PIN
               </Button>
             )}
+            {a.role !== "service" && a.role !== "owner" && (
+              <Button
+                variant="ghost"
+                title="Hours when this person's tools that do things are off"
+                onClick={() => setHoursFor(hoursFor === a.id ? null : a.id)}
+              >
+                Tool hours
+              </Button>
+            )}
+            {hoursFor === a.id && <ToolHours token={token} account={a} />}
             {a.id !== selfId && (
               <Button variant="danger" onClick={() => void remove(a)}>
                 Delete
@@ -345,5 +356,56 @@ function ChangeMySecret({ token, onChanged }: { token: string; onChanged: () => 
         Change
       </Button>
     </form>
+  );
+}
+
+/** Hours when someone's tools that do things are off (look-ups still work): bedtime for the kids. */
+function ToolHours({ token, account }: { token: string; account: Account }) {
+  const [off, setOff] = useState<{ from: string; to: string } | null | undefined>(undefined);
+  const [from, setFrom] = useState("21:00");
+  const [to, setTo] = useState("07:00");
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.toolHours(token, account.id).then(
+      (h) => {
+        setOff(h.off);
+        if (h.off) {
+          setFrom(h.off.from);
+          setTo(h.off.to);
+        }
+      },
+      (e) => setError(message(e)),
+    );
+  }, [token, account.id]);
+  async function save(next: { from: string; to: string } | null) {
+    setError(null);
+    try {
+      setOff((await api.setToolHours(token, account.id, next)).off);
+    } catch (e) {
+      setError(message(e));
+    }
+  }
+  if (off === undefined) return <p className="basis-full text-xs text-muted">{error ?? "Loading…"}</p>;
+  const time = "min-h-9 rounded-lg border border-line bg-surface px-2 text-sm text-ink";
+  const changed = !!off && (off.from !== from || off.to !== to);
+  return (
+    <div className="flex basis-full flex-wrap items-center gap-3 rounded-xl border border-line px-4 py-3 text-sm">
+      <label className="flex cursor-pointer items-center gap-2">
+        <input type="checkbox" checked={!!off} onChange={(e) => void save(e.target.checked ? { from, to } : null)} />
+        {account.name}'s tools are off from
+      </label>
+      <input type="time" aria-label="Off from" className={time} value={from} onChange={(e) => setFrom(e.target.value)} />
+      <span className="text-muted">to</span>
+      <input type="time" aria-label="Off until" className={time} value={to} onChange={(e) => setTo(e.target.value)} />
+      {changed && (
+        <Button variant="ghost" onClick={() => void save({ from, to })}>
+          Save
+        </Button>
+      )}
+      <span className="basis-full text-xs text-muted">
+        Then a persona can't turn things on or off for them (look-ups like "is the door locked?" still work), in their own time zone.
+      </span>
+      <ErrorNote>{error}</ErrorNote>
+    </div>
   );
 }

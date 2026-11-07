@@ -644,6 +644,15 @@ pub async fn start_reply(
     if let Some(w) = &workspace {
         system = format!("{system}\n\n{}", w.instructions());
     }
+    // Limits: this person's tools-off hours, in their own time zone.
+    let off_hours = outpost_core::activity::tools_off(&state.pool, &account_id).await.ok().flatten();
+    let person_zone = {
+        let saved = if off_hours.is_some() && req.utc_offset_minutes.is_none() { llm::UserClock::load(&state, &account_id).await } else { None };
+        outpost_core::routines::zone(
+            req.time_zone.as_deref().or(saved.as_ref().and_then(|c| c.zone.as_deref())),
+            req.utc_offset_minutes.or(saved.as_ref().map(|c| c.offset_minutes)),
+        )
+    };
     // MCP servers on the app's PC.
     let pc_tools = crate::pc_tools::PcTools::new(state.file_relay.clone(), &chat.id, tx.clone(), tool_servers, req.confirm_tools)
         .map(|t| {
@@ -651,6 +660,8 @@ pub async fn start_reply(
                 pool: state.pool.clone(),
                 account_id: account_id.clone(),
                 routine_id: req.routine_id.clone(),
+                off: off_hours.clone(),
+                zone: person_zone.clone(),
             })
         });
     if let Some(t) = &pc_tools {

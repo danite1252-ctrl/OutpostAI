@@ -107,6 +107,10 @@ pub struct LogTo {
     pub account_id: String,
     /// The routine running, if it's a routine's run.
     pub routine_id: Option<String>,
+    /// Hours this person's tools that do things are off (an owner set them).
+    pub off: Option<outpost_core::routines::Quiet>,
+    /// Their time zone, for those hours.
+    pub zone: jiff::tz::TimeZone,
 }
 
 /// A tool's name as words: `HassTurnOff` → "turn off", `search_files` → "search files".
@@ -349,6 +353,10 @@ impl PcTools {
             let note = out.action.note.as_deref().unwrap_or("");
             let outcome = if out.reply.starts_with("Not allowed:") {
                 "not_allowed"
+            } else if note == "off hours" {
+                "off_hours"
+            } else if note == "over the hourly limit" {
+                "over_limit"
             } else if note == "needs an OK (not in routines)" {
                 "needs_ok"
             } else if ["skipped", "Not confirmed", "no answer", "couldn't ask", "not made"].contains(&note) {
@@ -395,7 +403,37 @@ impl PcTools {
         // sensitive (locks, alarms, doors, covers), everywhere. Look-ups don't ask (unless hands-free).
         let read_only = server.tools.iter().find(|t| t.name == e.tool).and_then(|t| t.read_only);
         let outpost_own = matches!(self.routes[e.server], Via::Outpost(_));
-        let why = if reads(&e.tool, read_only) || outpost_own {
+        let looks = reads(&e.tool, read_only) || outpost_own;
+        // Limits (4d): off hours for this person, and how much routines may do in an hour.
+        if let (Some(to), false) = (&self.log, looks) {
+            if let Some(off) = &to.off {
+                if off.ends(&to.zone, outpost_core::now()).is_some() {
+                    return Outcome {
+                        reply: format!(
+                            "Not now: tools that do things are off for this user from {} to {} (an owner set this). Look-ups still \
+                             work. Tell the user, without trying another way.",
+                            off.from, off.to
+                        ),
+                        action: FileAction { op: "mcp".into(), path: shown, note: Some("off hours".into()), change_id: None, failed: true },
+                        more: Vec::new(),
+                    };
+                }
+            }
+            if to.routine_id.is_some() {
+                let done = outpost_core::activity::routine_actions_last_hour(&to.pool, &to.account_id).await.unwrap_or(0);
+                if done >= outpost_core::activity::ROUTINE_ACTIONS_PER_HOUR {
+                    return Outcome {
+                        reply: format!(
+                            "Not done: this user's routines have taken {} actions in the last hour, the most allowed. Say so in your answer.",
+                            outpost_core::activity::ROUTINE_ACTIONS_PER_HOUR
+                        ),
+                        action: FileAction { op: "mcp".into(), path: shown, note: Some("over the hourly limit".into()), change_id: None, failed: true },
+                        more: Vec::new(),
+                    };
+                }
+            }
+        }
+        let why = if looks {
             None
         } else if let Some(kind) = sensitive(&e.tool, &args) {
             Some(format!("{kind} always asks first"))
@@ -661,6 +699,52 @@ mod tests {
         let t = PcTools::new(Relay::default(), "chat2", tx, vec![(ha, Via::App)], false).unwrap().unattended(true);
         let out = t.run("home_assistant__hassturnon", &json!({ "name": "heater" })).await;
         assert!(out.action.failed && out.reply.contains("set to ask first") && out.reply.contains("routine"), "{}", out.reply);
+    }
+
+    #[tokio::test]
+    async fn off_hours_and_the_routine_limit_stop_actions_but_not_look_ups() {
+        use outpost_core::accounts::{self, NewAccount, Role};
+        let pool = outpost_core::db::open_in_memory().await.unwrap();
+        let noah = accounts::create(&pool, NewAccount { name: "Noah".into(), role: Role::Restricted, secret: Some("1234".into()) }).await.unwrap();
+        // Off all day (from one minute past now's hour... simply: a window covering now).
+        let utc = jiff::tz::TimeZone::UTC;
+        let h = (outpost_core::now() / 3600) % 24;
+        let off = outpost_core::routines::Quiet { from: format!("{:02}:00", h), to: format!("{:02}:00", (h + 1) % 24) };
+        let log = LogTo { pool: pool.clone(), account_id: noah.id.clone(), routine_id: None, off: Some(off), zone: utc.clone() };
+        let (tx, _rx) = mpsc::channel(8);
+        let t = PcTools::new(Relay::default(), "c", tx, vec![(server("Home Assistant", &["HassTurnOn", "GetLiveContext"]), Via::App)], false)
+            .unwrap()
+            .logged(log);
+        let out = t.run("home_assistant__hassturnon", &json!({ "name": "tv" })).await;
+        assert!(out.action.failed && out.reply.starts_with("Not now:"), "{}", out.reply);
+        let seen = outpost_core::activity::list(&pool, &noah.id, false, &outpost_core::activity::Filter { limit: 10, ..Default::default() }).await.unwrap();
+        assert_eq!(seen[0].outcome, "off_hours");
+        assert_eq!(seen[0].arguments, r#"{"name":"tv"}"#);
+
+        // A routine over its hourly limit doesn't act.
+        for _ in 0..outpost_core::activity::ROUTINE_ACTIONS_PER_HOUR {
+            outpost_core::activity::record(
+                &pool,
+                outpost_core::activity::NewEntry {
+                    account_id: noah.id.clone(),
+                    routine_id: Some("r".into()),
+                    source: "routine".into(),
+                    server: "Home Assistant".into(),
+                    tool: "HassTurnOn".into(),
+                    arguments: "{}".into(),
+                    outcome: "done".into(),
+                    ..Default::default()
+                },
+            )
+            .await;
+        }
+        let log = LogTo { pool: pool.clone(), account_id: noah.id.clone(), routine_id: Some("r".into()), off: None, zone: utc };
+        let (tx, _rx) = mpsc::channel(8);
+        let t = PcTools::new(Relay::default(), "c2", tx, vec![(server("Home Assistant", &["HassTurnOn"]), Via::App)], false)
+            .unwrap()
+            .logged(log);
+        let out = t.run("home_assistant__hassturnon", &json!({ "name": "tv" })).await;
+        assert!(out.action.failed && out.reply.contains("the most allowed"), "{}", out.reply);
     }
 
     #[test]

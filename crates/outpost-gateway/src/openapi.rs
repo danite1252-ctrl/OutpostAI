@@ -154,6 +154,8 @@ use crate::routes::{
         crate::routines::set_link,
         crate::routines::hook,
         crate::activity::list,
+        crate::activity::get_hours,
+        crate::activity::set_hours,
         crate::routines::get_quiet,
         crate::routines::set_quiet,
         crate::persona_templates::add,

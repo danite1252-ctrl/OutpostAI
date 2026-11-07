@@ -18,7 +18,7 @@ interface Entry {
   server: string;
   tool: string;
   arguments: string;
-  outcome: "done" | "failed" | "not_allowed" | "skipped" | "needs_ok";
+  outcome: "done" | "failed" | "not_allowed" | "skipped" | "needs_ok" | "off_hours" | "over_limit";
   result: string;
 }
 
@@ -28,6 +28,8 @@ const OUTCOME: Record<Entry["outcome"], { label: string; color: string }> = {
   not_allowed: { label: "Not allowed", color: C.danger },
   skipped: { label: "Skipped", color: C.amber },
   needs_ok: { label: "Needed an OK", color: C.amber },
+  off_hours: { label: "Off hours", color: C.amber },
+  over_limit: { label: "Over the hourly limit", color: C.amber },
 };
 
 function when(at: number): string {
