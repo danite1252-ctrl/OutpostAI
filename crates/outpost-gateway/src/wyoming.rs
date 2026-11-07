@@ -11,6 +11,7 @@
 //! Wyoming has no sign-in, so it's off until an owner turns it on, and then answers only this
 //! home network (or the addresses the owner lists).
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -49,11 +50,22 @@ pub struct WyomingSettings {
     /// Only these addresses may connect (empty: anything on this home network).
     #[serde(default)]
     pub allow: Vec<String>,
+    /// A persona answering as Home Assistant's conversation agent, as this person (their tools
+    /// and rules). None: only listening and voices are offered.
+    #[serde(default)]
+    pub agent: Option<VoiceAgent>,
+}
+
+/// Who answers Home Assistant: a person and one of their personas.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct VoiceAgent {
+    pub account_id: String,
+    pub persona_id: String,
 }
 
 impl Default for WyomingSettings {
     fn default() -> Self {
-        WyomingSettings { on: false, port: DEFAULT_PORT, allow: Vec::new() }
+        WyomingSettings { on: false, port: DEFAULT_PORT, allow: Vec::new(), agent: None }
     }
 }
 
@@ -67,6 +79,10 @@ impl WyomingSettings {
         }
         if let Some(bad) = self.allow.iter().find(|a| a.trim().parse::<IpAddr>().is_err()) {
             return Err(format!("\"{bad}\" isn't an address like 192.168.1.20."));
+        }
+        // A persona acts for someone: only Home Assistant itself may ask (Wyoming has no sign-in).
+        if self.agent.is_some() && self.allow.is_empty() {
+            return Err("For a persona to answer, put Home Assistant's address in \"Only from\" (Wyoming has no sign-in).".into());
         }
         Ok(())
     }
@@ -98,6 +114,11 @@ pub async fn settings(state: &AppState) -> WyomingSettings {
 
 pub async fn save(state: &AppState, s: &WyomingSettings) -> Result<(), String> {
     s.check()?;
+    if let Some(a) = &s.agent {
+        outpost_core::personas::get_usable(&state.pool, &a.account_id, &a.persona_id)
+            .await
+            .map_err(|_| "That persona isn't there any more.".to_string())?;
+    }
     let clean = WyomingSettings { allow: s.allow.iter().map(|a| a.trim().to_string()).collect(), ..s.clone() };
     outpost_core::settings::set(&state.pool, SETTING, &serde_json::to_string(&clean).map_err(|e| e.to_string())?)
         .await
@@ -265,8 +286,8 @@ fn voice_language(id: &str) -> &'static str {
     }
 }
 
-/// `info`: our listening model and our voices.
-pub fn info(voices: &[String]) -> Value {
+/// `info`: our listening model, our voices, and the persona answering (if one is).
+pub fn info(voices: &[String], agent: Option<&str>) -> Value {
     let version = env!("CARGO_PKG_VERSION");
     let voices: Vec<Value> = voices
         .iter()
@@ -314,7 +335,27 @@ pub fn info(voices: &[String]) -> Value {
             "supports_transcript_streaming": false,
         }],
         "tts": tts,
-        "handle": [],
+        "handle": match agent {
+            Some(name) => json!([{
+                "name": "outpost-agent",
+                "description": format!("Outpost ({name})"),
+                "attribution": attribution(),
+                "installed": true,
+                "version": version,
+                "models": [{
+                    "name": "persona",
+                    "description": name,
+                    "attribution": attribution(),
+                    "installed": true,
+                    "version": version,
+                    // Any language: the persona answers in the one it's spoken to in.
+                    "languages": [],
+                }],
+                "supports_handled_streaming": false,
+                "supports_home_control": true,
+            }]),
+            None => json!([]),
+        },
         "intent": [],
         "wake": [],
         "mic": [],
@@ -350,7 +391,31 @@ pub async fn serve<S: tokio::io::AsyncRead + AsyncWrite + Unpin>(state: &AppStat
         match e.kind.as_str() {
             "describe" => {
                 let voices = crate::routes::voice::voice_ids().await;
-                write(&mut w, Event::new("info", info(&voices))).await?;
+                let agent = agent_name(state).await;
+                write(&mut w, Event::new("info", info(&voices, agent.as_deref()))).await?;
+            }
+            // What was said to the conversation agent (never sent to speech-to-text).
+            "transcript" => {
+                let text = e.str("text").unwrap_or_default().trim().to_string();
+                let reply = match settings(state).await.agent {
+                    None => Err("Outpost isn't set up to answer here: choose a persona in its Home Assistant voice settings.".to_string()),
+                    Some(_) if text.is_empty() => Err("I didn't catch that.".to_string()),
+                    Some(agent) => answer(state, &agent, &text).await,
+                };
+                match reply {
+                    Ok((said, asking)) => {
+                        let mut data = json!({ "text": said });
+                        if asking {
+                            // Keep the device listening for the yes or no.
+                            data["continue_conversation"] = json!(true);
+                        }
+                        if let Some(c) = e.data.get("context") {
+                            data["context"] = c.clone();
+                        }
+                        write(&mut w, Event::new("handled", data)).await?;
+                    }
+                    Err(why) => write(&mut w, Event::new("not-handled", json!({ "text": why }))).await?,
+                }
             }
             "ping" => write(&mut w, Event::new("pong", json!({}))).await?,
             "transcribe" => {
@@ -421,6 +486,128 @@ pub async fn serve<S: tokio::io::AsyncRead + AsyncWrite + Unpin>(state: &AppStat
             _ => {} // Not ours (wake words, satellites...).
         }
         w.flush().await?;
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// The conversation agent.
+
+/// How long Home Assistant waits for a spoken reply before being told it's still going.
+const ANSWER_WITHIN: Duration = Duration::from_secs(90);
+
+/// Chats with a voice reply running, and when each started.
+static REPLYING: Mutex<Option<HashMap<String, i64>>> = Mutex::new(None);
+
+fn replying(chat_id: &str) -> Option<i64> {
+    REPLYING.lock().unwrap_or_else(|p| p.into_inner()).as_ref().and_then(|m| m.get(chat_id).copied())
+}
+
+fn set_replying(chat_id: &str, started: Option<i64>) {
+    let mut g = REPLYING.lock().unwrap_or_else(|p| p.into_inner());
+    let m = g.get_or_insert_with(HashMap::new);
+    match started {
+        Some(t) => m.insert(chat_id.to_string(), t),
+        None => m.remove(chat_id),
+    };
+}
+
+/// The persona answering, by name (for Home Assistant's list).
+async fn agent_name(state: &AppState) -> Option<String> {
+    let a = settings(state).await.agent?;
+    let p = outpost_core::personas::get_usable(&state.pool, &a.account_id, &a.persona_id).await.ok()?;
+    Some(p.name)
+}
+
+/// A spoken yes ("yes", "yeah, go ahead", "do it"). Anything else is a no.
+pub fn is_yes(text: &str) -> bool {
+    let t: String = text.to_lowercase().chars().map(|c| if c.is_ascii_lowercase() || c == '\'' { c } else { ' ' }).collect();
+    let words: Vec<&str> = t.split_whitespace().collect();
+    let has = |list: &[&str]| words.iter().any(|w| list.contains(w));
+    let phrase = |p: &str| format!(" {} ", words.join(" ")).contains(&format!(" {p} "));
+    if has(&["no", "nope", "don't", "dont", "stop", "cancel", "wait", "not"]) {
+        return false;
+    }
+    has(&["yes", "yeah", "yea", "yep", "yup", "ya", "yah", "aye", "sure", "ok", "okay", "please", "correct", "right", "affirmative", "absolutely", "definitely", "confirm", "confirmed"])
+        || ["go ahead", "do it", "go for it"].iter().any(|p| phrase(p))
+}
+
+/// The chat the voice device talks in (one per person and persona, made when first needed).
+async fn voice_chat(state: &AppState, agent: &VoiceAgent) -> Result<String, String> {
+    let key = format!("voice.wyoming.chat.{}.{}", agent.account_id, agent.persona_id);
+    if let Some(id) = outpost_core::settings::get(&state.pool, &key).await.ok().flatten() {
+        if outpost_core::chats::get(&state.pool, &agent.account_id, &id).await.is_ok() {
+            return Ok(id);
+        }
+    }
+    let c = outpost_core::chats::create(&state.pool, &agent.account_id, Some(&agent.persona_id), Some("Home Assistant voice"))
+        .await
+        .map_err(|e| format!("Couldn't make the voice chat: {e}"))?;
+    let _ = outpost_core::settings::set(&state.pool, &key, &c.id).await;
+    Ok(c.id)
+}
+
+/// Answer something said to a voice device: the reply to speak, and whether it's a question
+/// waiting for a yes or no (Allow or Skip, said aloud). The persona works as it does in a typed
+/// chat, as the chosen person: their tools, allowed actions, ask-first and tool hours.
+pub async fn answer(state: &AppState, agent: &VoiceAgent, text: &str) -> Result<(String, bool), String> {
+    let account = outpost_core::accounts::get(&state.pool, &agent.account_id).await.map_err(|_| "Its person isn't there any more.".to_string())?;
+    let chat_id = voice_chat(state, agent).await?;
+    // An answer to the question it asked: yes or no, and the reply carries on.
+    let mut answered: Option<String> = None;
+    if let Some((id, _)) = state.file_relay.question_in(&chat_id) {
+        state.file_relay.answer(&chat_id, &id, json!({ "ok": is_yes(text) }));
+        answered = Some(id);
+    } else if replying(&chat_id).is_none() {
+        let auth = crate::extract::Auth {
+            session: outpost_core::sessions::Session {
+                id: format!("voice-{}", account.id),
+                account_id: account.id.clone(),
+                kind: outpost_core::sessions::SessionKind::App,
+                label: "Home Assistant voice".into(),
+                created_at: outpost_core::now(),
+                last_used_at: outpost_core::now(),
+            },
+            account: account.clone(),
+        };
+        let clock = crate::llm::UserClock::load(state, &account.id).await;
+        let req = crate::routes::chat::SendRequest {
+            content: text.chars().take(4000).collect(),
+            time_zone: clock.as_ref().and_then(|c| c.zone.clone()),
+            utc_offset_minutes: clock.as_ref().map(|c| c.offset_minutes),
+            use_pc_tools: true,
+            ..Default::default()
+        };
+        crate::live::take_failure(&chat_id);
+        let started = outpost_core::now();
+        let mut rx = crate::routes::chat::start_reply(state, &auth, &chat_id, req).await.map_err(|e| e.message)?;
+        set_replying(&chat_id, Some(started));
+        let id = chat_id.clone();
+        tokio::spawn(async move {
+            while rx.recv().await.is_some() {}
+            set_replying(&id, None);
+        });
+    }
+    let started = replying(&chat_id).unwrap_or_else(outpost_core::now);
+    let until = std::time::Instant::now() + ANSWER_WITHIN;
+    loop {
+        // It needs a yes or no: ask aloud, and keep the device listening.
+        if let Some((id, q)) = state.file_relay.question_in(&chat_id) {
+            if answered.as_deref() != Some(id.as_str()) {
+                return Ok((format!("{} Say yes or no.", crate::routes::voice::speakable(&q)), true));
+            }
+        }
+        if replying(&chat_id).is_none() {
+            break;
+        }
+        if std::time::Instant::now() > until {
+            return Ok(("That's taking a while. I'll carry on, and the answer will be in the Home Assistant voice chat.".into(), false));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let messages = outpost_core::chats::messages(&state.pool, &chat_id).await.map_err(|e| e.to_string())?;
+    match messages.iter().rev().find(|m| m.role == "assistant" && m.created_at >= started) {
+        Some(m) if !m.content.trim().is_empty() => Ok((crate::routes::voice::speakable(&m.content), false)),
+        _ => Err(crate::live::take_failure(&chat_id).unwrap_or_else(|| "I couldn't answer that.".into())),
     }
 }
 
@@ -540,6 +727,11 @@ pub async fn set_settings(
 ) -> crate::error::ApiResult<axum::Json<WyomingStatus>> {
     auth.require_owner()?;
     auth.require_person("Changing Home Assistant voice")?;
+    // A persona answers as the owner who chose it.
+    let mut input = input;
+    if let Some(a) = input.agent.as_mut() {
+        a.account_id = auth.account.id.clone();
+    }
     save(&state, &input).await.map_err(|why| crate::error::ApiError::new(axum::http::StatusCode::BAD_REQUEST, "invalid", why))?;
     apply(&state).await;
     Ok(axum::Json(status_now(&state).await))
@@ -589,11 +781,28 @@ mod tests {
 
     #[test]
     fn info_lists_listening_and_the_voices() {
-        let i = info(&["af_heart".into(), "bm_george".into()]);
+        let i = info(&["af_heart".into(), "bm_george".into()], None);
         assert_eq!(i["asr"][0]["models"][0]["installed"], true);
         assert_eq!(i["tts"][0]["voices"][0]["name"], "af_heart");
         assert_eq!(i["tts"][0]["voices"][1]["languages"][0], "en_GB");
         assert!(i["handle"].as_array().unwrap().is_empty());
-        assert!(info(&[])["tts"].as_array().unwrap().is_empty(), "no voices: none offered");
+        assert!(info(&[], None)["tts"].as_array().unwrap().is_empty(), "no voices: none offered");
+        let with = info(&[], Some("Assistant"));
+        assert_eq!(with["handle"][0]["description"], "Outpost (Assistant)");
+        assert_eq!(with["handle"][0]["supports_home_control"], true);
+    }
+
+    #[test]
+    fn a_spoken_yes_is_a_yes_and_anything_else_a_no() {
+        for yes in ["Yes.", "yeah go ahead", "Yep!", "do it", "Okay", "sure, please"] {
+            assert!(is_yes(yes), "{yes}");
+        }
+        for no in ["No.", "no, don't", "wait", "not now", "turn on the lounge lamp", ""] {
+            assert!(!is_yes(no), "{no}");
+        }
+        // A persona answering needs Home Assistant's address.
+        let agent = Some(VoiceAgent { account_id: "a".into(), persona_id: "p".into() });
+        assert!(WyomingSettings { on: true, agent: agent.clone(), ..Default::default() }.check().is_err());
+        assert!(WyomingSettings { on: true, agent, allow: vec!["192.168.1.20".into()], ..Default::default() }.check().is_ok());
     }
 }

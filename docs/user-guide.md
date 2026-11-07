@@ -388,7 +388,15 @@ Edition, an ESP32 satellite, the Assist button in its app):
    for your assistant.
 
 Speech is heard by Outpost's Whisper and spoken by its voices, so they work offline and sound
-the same as in Outpost. (The persona as Home Assistant's conversation agent comes next.)
+the same as in Outpost.
+
+**A persona as Home Assistant's agent**: in the same card, choose a persona under **Answer as
+Home Assistant's conversation agent** (first type Home Assistant's address in **Only from**:
+Wyoming has no sign-in). In Home Assistant, reload the Wyoming integration, then pick
+**Outpost** as your assistant's **Conversation agent**. What you say goes to that persona, as
+you: your tools, allowed actions and tool hours. Anything that asks first (a lock, an alarm, a
+door, an action set to ask) is asked aloud, and the device keeps listening for your yes or no.
+The conversation is kept in a chat called **Home Assistant voice**, where you can read it back.
 
 ## The phone app
 

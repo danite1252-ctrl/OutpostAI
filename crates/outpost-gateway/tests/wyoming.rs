@@ -41,6 +41,25 @@ async fn home_assistant_asks_what_we_offer_and_gets_an_answer_to_each_request() 
     w.write_all(&encode(&Event::new("synthesize", json!({ "text": "Hello", "voice": { "name": "af_heart" } })))).await.unwrap();
     let spoke = read_event(&mut r).await.unwrap().unwrap();
     assert!(spoke.kind == "audio-start" || spoke.kind == "error", "{spoke:?}");
+    if spoke.kind == "audio-start" {
+        // The voice service is running here: the audio, then its end.
+        loop {
+            let e = read_event(&mut r).await.unwrap().unwrap();
+            if e.kind == "audio-stop" {
+                break;
+            }
+            assert_eq!(e.kind, "audio-chunk");
+            assert!(!e.payload.is_empty());
+        }
+    }
+
+    // Said to the conversation agent with no persona chosen: not handled, with why.
+    w.write_all(&encode(&Event::new("transcript", json!({ "text": "turn off the kitchen lamp", "context": { "conversation_id": "c1" } }))))
+        .await
+        .unwrap();
+    let handled = read_event(&mut r).await.unwrap().unwrap();
+    assert_eq!(handled.kind, "not-handled");
+    assert!(handled.data["text"].as_str().unwrap().contains("choose a persona"));
 
     // Closing ends it cleanly.
     drop(w);

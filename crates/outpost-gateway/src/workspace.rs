@@ -73,6 +73,9 @@ async fn until_stopped(chat_id: &str) {
 #[derive(Clone, Default)]
 pub struct Relay {
     waiting: Arc<Mutex<HashMap<String, (String, oneshot::Sender<Value>)>>>,
+    /// Questions waiting for a yes or no: id → (chat, question). A voice device answers them
+    /// with what's said next.
+    questions: Arc<Mutex<HashMap<String, (String, String)>>>,
 }
 
 impl Relay {
@@ -87,6 +90,16 @@ impl Relay {
             }
             None => false,
         }
+    }
+
+    /// A yes-or-no question waiting in this chat: its id and the question.
+    pub fn question_in(&self, chat_id: &str) -> Option<(String, String)> {
+        self.questions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|(_, (chat, _))| chat == chat_id)
+            .map(|(id, (_, q))| (id.clone(), q.clone()))
     }
 
     /// Requests still waiting for an answer (for tests).
@@ -113,6 +126,11 @@ impl Relay {
             .insert(id.clone(), (chat_id.to_string(), tx));
         let mut body = request;
         body["id"] = json!(id);
+        if event == "confirm" {
+            if let Some(q) = body.get("question").and_then(Value::as_str) {
+                self.questions.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone(), (chat_id.to_string(), q.to_string()));
+            }
+        }
         let sent = events.send(Event::default().event(event).data(body.to_string())).await;
         let answer = if sent.is_err() {
             Err("The app closed the chat.".to_string())
@@ -123,6 +141,7 @@ impl Relay {
             }
         };
         self.waiting.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+        self.questions.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
         if event == "confirm" {
             // Answered (on one device) or given up on: every device showing it puts it away.
             let _ = events.send(Event::default().event("answered").data(json!({ "id": id }).to_string())).await;

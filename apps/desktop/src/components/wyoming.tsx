@@ -3,7 +3,7 @@
 // then only this home network (or the addresses listed) may use it.
 
 import { useEffect, useState } from "react";
-import { ApiError, voiceApi, type WyomingStatus } from "../api";
+import { api, ApiError, voiceApi, type Persona, type WyomingStatus } from "../api";
 import { Button, ErrorNote, Toggle } from "./ui";
 
 function message(e: unknown) {
@@ -16,6 +16,11 @@ export function HomeAssistantVoice({ token }: { token: string }) {
   const [allow, setAllow] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [personas, setPersonas] = useState<Persona[]>([]);
+
+  useEffect(() => {
+    api.personas(token).then(setPersonas, () => undefined);
+  }, [token]);
 
   useEffect(() => {
     voiceApi.wyoming(token).then(
@@ -28,7 +33,7 @@ export function HomeAssistantVoice({ token }: { token: string }) {
     );
   }, [token]);
 
-  async function save(on: boolean) {
+  async function save(on: boolean, agentPersona?: string | null) {
     setError(null);
     setBusy(true);
     try {
@@ -36,7 +41,13 @@ export function HomeAssistantVoice({ token }: { token: string }) {
         .split(/[\s,]+/)
         .map((a) => a.trim())
         .filter(Boolean);
-      const w = await voiceApi.setWyoming(token, { on, port: Number(port) || 10700, allow: list });
+      const persona = agentPersona === undefined ? (s?.agent?.persona_id ?? null) : agentPersona;
+      const w = await voiceApi.setWyoming(token, {
+        on,
+        port: Number(port) || 10700,
+        allow: list,
+        agent: persona ? { account_id: "", persona_id: persona } : null,
+      });
       setS(w);
       setPort(String(w.port));
       setAllow(w.allow.join(", "));
@@ -76,11 +87,40 @@ export function HomeAssistantVoice({ token }: { token: string }) {
           </Button>
         )}
       </div>
+      <label className="flex flex-wrap items-center gap-3 text-sm">
+        <span className="text-muted">Answer as Home Assistant's conversation agent, as you, with</span>
+        <select
+          aria-label="Persona that answers"
+          className={field}
+          value={s.agent?.persona_id ?? ""}
+          disabled={busy}
+          onChange={(e) => void save(s.on, e.target.value || null)}
+        >
+          <option value="">Nobody (listening and voices only)</option>
+          {personas.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {s.agent && (
+        <p className="text-xs text-muted">
+          It uses your tools and rules. Anything that asks first (locks, alarms, doors, actions set to ask) is asked aloud: say yes or
+          no. The conversation is kept in a chat called "Home Assistant voice". Only Home Assistant's address (above) can use it.
+        </p>
+      )}
       {s.on && s.running && (
         <p className="rounded-xl bg-raised px-4 py-3 text-sm">
           In Home Assistant: Settings › Devices &amp; services › Add integration › <b>Wyoming Protocol</b>, host{" "}
           <span className="font-mono">{s.host ?? "this server's address"}</span>, port <span className="font-mono">{s.port}</span> (it may
-          also find it by itself). Then in Settings › Voice assistants, choose <b>Outpost speech-to-text</b> and an <b>Outpost voice</b>.
+          also find it by itself). Then in Settings › Voice assistants, choose <b>Outpost speech-to-text</b> and an <b>Outpost voice</b>
+          {s.agent ? (
+            <>
+              , and <b>Outpost</b> as the conversation agent
+            </>
+          ) : null}
+          .
         </p>
       )}
       {s.on && !s.running && <ErrorNote>{s.problem ?? "It isn't running. Try turning it off and on."}</ErrorNote>}

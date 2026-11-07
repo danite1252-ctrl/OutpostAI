@@ -1900,6 +1900,8 @@ export interface WyomingStatus {
   port: number;
   /** Only these addresses may connect (empty: anything on this home network). */
   allow: string[];
+  /** A persona answering as Home Assistant's conversation agent (as the owner who chose it). */
+  agent: { account_id: string; persona_id: string } | null;
   running: boolean;
   problem: string | null;
   /** This server's address on the home network, for Home Assistant. */
@@ -1908,7 +1910,7 @@ export interface WyomingStatus {
 
 export const voiceApi = {
   wyoming: (token: string) => request<WyomingStatus>("GET", "/api/voice/wyoming", { token }),
-  setWyoming: (token: string, s: { on: boolean; port: number; allow: string[] }) =>
+  setWyoming: (token: string, s: { on: boolean; port: number; allow: string[]; agent: { account_id: string; persona_id: string } | null }) =>
     request<WyomingStatus>("PUT", "/api/voice/wyoming", { token, body: s }),
   status: (token: string) => request<VoiceStatus>("GET", "/api/voice", { token }),
   setListening: (token: string, model: string) => request<VoiceStatus>("PUT", "/api/voice/listening", { token, body: { model } }),
