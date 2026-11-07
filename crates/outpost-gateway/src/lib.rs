@@ -400,6 +400,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/tools/runtimes/{which}", post(server_tools::install_runtime))
         .route("/api/tools/{id}", patch(server_tools::update).delete(server_tools::remove))
         .route("/api/tools/{id}/tools", get(server_tools::test))
+        .route("/api/tools/{id}/people", get(server_tools::people))
+        .route("/api/tools/{id}/people/{account_id}", put(server_tools::set_person))
         .route(
             "/api/tools/{id}/sign-in",
             get(server_tools::sign_in_info).put(server_tools::sign_in_save).delete(server_tools::sign_out),

@@ -161,6 +161,8 @@ use crate::routes::{
         crate::server_tools::update,
         crate::server_tools::remove,
         crate::server_tools::test,
+        crate::server_tools::people,
+        crate::server_tools::set_person,
         crate::server_tools::sign_in_info,
         crate::server_tools::sign_in_save,
         crate::server_tools::sign_in_start,

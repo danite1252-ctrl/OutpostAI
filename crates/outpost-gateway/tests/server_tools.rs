@@ -132,8 +132,26 @@ async fn tools_on_the_server_are_per_person_and_shared_ones_reach_everyone() {
     let servers = outpost_gateway::server_tools::for_chat(&state, &sj_id, false, &chat_id).await;
     assert_eq!(servers.len(), 1);
     assert_eq!(servers[0].tools[0].name, "HassTurnOff");
-    let r = outpost_gateway::server_tools::call(&state, &id, "HassTurnOff", json!({ "name": "kitchen lamp" })).await.unwrap();
+    let sj_who = outpost_gateway::server_tools::Who { account_id: sj_id.clone(), restricted: false };
+    let r = outpost_gateway::server_tools::call(&state, &id, "HassTurnOff", json!({ "name": "kitchen lamp" }), &sj_who).await.unwrap();
     assert_eq!(r.text, "Turned off kitchen lamp");
+
+    // Dan lets SJ use only another action: HassTurnOff is gone from her chat, and refused
+    // when called anyway (the server checks, whatever the model sends).
+    let (s, people) = call(&app, "PUT", &format!("/api/tools/{id}/people/{sj_id}"), Some(&dan), Some(json!({ "access": "some", "actions": ["GetLiveContext"] }))).await;
+    assert_eq!(s, StatusCode::OK, "{people}");
+    assert!(people.as_array().unwrap().iter().any(|p| p["name"] == "SJ" && p["access"] == "some" && p["chosen"] == true), "{people}");
+    let servers = outpost_gateway::server_tools::for_chat(&state, &sj_id, false, &chat_id).await;
+    assert!(servers.is_empty(), "none of its actions are left for her");
+    let r = outpost_gateway::server_tools::call(&state, &id, "HassTurnOff", json!({ "name": "kitchen lamp" }), &sj_who).await.unwrap();
+    assert!(r.is_error && r.text.starts_with("Not allowed: Dan hasn't allowed HassTurnOff"), "{}", r.text);
+    // Only Dan sets it.
+    let (s, _) = call(&app, "PUT", &format!("/api/tools/{id}/people/{sj_id}"), Some(&sj), Some(json!({ "access": "all" }))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    // Taken away: she can't call it at all.
+    call(&app, "PUT", &format!("/api/tools/{id}/people/{sj_id}"), Some(&dan), Some(json!({ "access": "none" }))).await;
+    assert!(outpost_gateway::server_tools::call(&state, &id, "GetLiveContext", json!({}), &sj_who).await.is_err());
+    call(&app, "PUT", &format!("/api/tools/{id}/people/{sj_id}"), Some(&dan), Some(json!({ "access": "all" }))).await;
 
     // A wrong key: Test says to sign in (or check the key).
     call(&app, "PATCH", &format!("/api/tools/{id}"), Some(&dan), Some(json!({ "secrets": { "headers": { "Authorization": "Bearer wrong" } } }))).await;

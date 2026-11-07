@@ -114,6 +114,13 @@ servers, so any MCP server works.
   Google; nobody else can use yours or see its keys. An owner can **Share with everyone** (Home
   Assistant, search), and allow **Restricted accounts too** (the kids). Only owners can add tools
   that run programs on the server.
+- **Who can use which actions**: under a shared tool, **Who can use it, and which actions** lists
+  everyone else: **All of it**, **Only some** (pick their actions: SJ can turn lights and the AC
+  on and off but not unlock doors; the kids can ask what's on but not change the heating) or
+  **None**. Press **Test** first to list the tool's actions. Outpost checks this on every call,
+  so a model can't use an action someone isn't allowed, and the persona is told what they can't
+  do, so it says to ask you instead. Restricted accounts get none of a tool unless you pick for
+  them (or turn on Restricted accounts too).
 - **Keys and sign-ins on the server** are encrypted with a key kept in Outpost's data folder
   (`secrets.key`), beside the database: keep it in backups, or everyone signs in again.
 - **Signing in** happens on the PC you're using (the browser comes back to it), and the sign-in
@@ -262,6 +269,9 @@ PC: **Routines** in the sidebar; on the phone: **You › Routines**).
   or carry on talking about one. The list shows when it runs next and how the last run went.
 - **Run now** runs it straight away (its schedule carries on as before). **Pause** stops it
   until you resume it. A routine never runs twice at once, and a run is stopped after 30 minutes.
+- The list is in sections (on a schedule; reminders and one-offs; from a link or an event),
+  each folding away with its arrow. A one-off routine that ran fine clears itself away an hour
+  after it told you (its chat stays); one that failed stays, so you can see why.
 - Routines use the persona's tools on the server, and its tools on your PC when that PC has
   Outpost open.
 - **While it runs on its own**, nobody is there to say OK, so each routine says what it may do:

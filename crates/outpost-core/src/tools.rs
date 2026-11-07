@@ -210,22 +210,36 @@ pub async fn save_oauth(pool: &SqlitePool, id: &str, sealed: Option<&str>, signe
     Ok(())
 }
 
-const USABLE: &str = "(account_id = ? OR (shared = 1 AND (? = 0 OR restricted_ok = 1)))";
+/// A tool `t` I can use: mine, or shared and not taken away from me (restricted accounts only
+/// when the tool allows them, or its owner gave them some of it). Binds: account, account,
+/// restricted, account.
+fn usable_sql(t: &str) -> String {
+    format!(
+        "({t}.account_id = ? OR ({t}.shared = 1 \
+         AND NOT EXISTS (SELECT 1 FROM tool_people p WHERE p.tool_id = {t}.id AND p.account_id = ? AND p.access = 'none') \
+         AND (? = 0 OR {t}.restricted_ok = 1 \
+              OR EXISTS (SELECT 1 FROM tool_people p WHERE p.tool_id = {t}.id AND p.account_id = ? AND p.access <> 'none'))))"
+    )
+}
 
 /// Every tool I can use: mine, and others' shared ones.
 pub async fn usable(pool: &SqlitePool, account_id: &str, restricted: bool) -> CoreResult<Vec<Tool>> {
-    Ok(sqlx::query_as::<_, Tool>(&format!("SELECT {COLS} FROM tools WHERE {USABLE} ORDER BY name COLLATE NOCASE"))
+    Ok(sqlx::query_as::<_, Tool>(&format!("SELECT {COLS} FROM tools WHERE {} ORDER BY name COLLATE NOCASE", usable_sql("tools")))
+        .bind(account_id)
         .bind(account_id)
         .bind(restricted)
+        .bind(account_id)
         .fetch_all(pool)
         .await?)
 }
 
 pub async fn get_usable(pool: &SqlitePool, account_id: &str, restricted: bool, id: &str) -> CoreResult<Tool> {
-    sqlx::query_as::<_, Tool>(&format!("SELECT {COLS} FROM tools WHERE id = ? AND {USABLE}"))
+    sqlx::query_as::<_, Tool>(&format!("SELECT {COLS} FROM tools WHERE id = ? AND {}", usable_sql("tools")))
         .bind(id)
         .bind(account_id)
+        .bind(account_id)
         .bind(restricted)
+        .bind(account_id)
         .fetch_optional(pool)
         .await?
         .ok_or(CoreError::NotFound)
@@ -261,13 +275,16 @@ pub async fn delete(pool: &SqlitePool, account_id: &str, id: &str) -> CoreResult
 /// A persona's tools that I can use (a shared persona's personal tools aren't mine).
 pub async fn persona_tools(pool: &SqlitePool, account_id: &str, restricted: bool, persona_id: &str) -> CoreResult<Vec<String>> {
     let ids: Vec<(String,)> = sqlx::query_as(&format!(
-        "SELECT p.tool_id FROM persona_tools p JOIN tools t ON t.id = p.tool_id
-         WHERE p.persona_id = ? AND (t.account_id = ? OR (t.shared = 1 AND (? = 0 OR t.restricted_ok = 1)))
-         ORDER BY t.name COLLATE NOCASE"
+        "SELECT pt.tool_id FROM persona_tools pt JOIN tools t ON t.id = pt.tool_id
+         WHERE pt.persona_id = ? AND {}
+         ORDER BY t.name COLLATE NOCASE",
+        usable_sql("t")
     ))
     .bind(persona_id)
     .bind(account_id)
+    .bind(account_id)
     .bind(restricted)
+    .bind(account_id)
     .fetch_all(pool)
     .await?;
     Ok(ids.into_iter().map(|(i,)| i).collect())
@@ -303,13 +320,15 @@ pub async fn chat_tools(pool: &SqlitePool, account_id: &str, restricted: bool, c
         Some(p) => persona_tools(pool, account_id, restricted, p).await?,
         None => Vec::new(),
     };
-    let own: Vec<(String, bool)> = sqlx::query_as(
-        "SELECT c.tool_id, c.is_on FROM chat_tools c JOIN tools t ON t.id = c.tool_id
-         WHERE c.chat_id = ? AND (t.account_id = ? OR (t.shared = 1 AND (? = 0 OR t.restricted_ok = 1)))",
-    )
+    let own: Vec<(String, bool)> = sqlx::query_as(&format!(
+        "SELECT c.tool_id, c.is_on FROM chat_tools c JOIN tools t ON t.id = c.tool_id WHERE c.chat_id = ? AND {}",
+        usable_sql("t")
+    ))
     .bind(chat_id)
     .bind(account_id)
+    .bind(account_id)
     .bind(restricted)
+    .bind(account_id)
     .fetch_all(pool)
     .await?;
     for (id, on) in own {
@@ -351,6 +370,142 @@ pub async fn set_chat_tools(pool: &SqlitePool, account_id: &str, restricted: boo
 pub async fn reset_chat_tools(pool: &SqlitePool, account_id: &str, chat_id: &str) -> CoreResult<()> {
     crate::chats::get(pool, account_id, chat_id).await?;
     sqlx::query("DELETE FROM chat_tools WHERE chat_id = ?").bind(chat_id).execute(pool).await?;
+    Ok(())
+}
+
+/// How much of a shared tool someone may use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Access {
+    /// All its actions (the ones switched on).
+    All,
+    /// Only the actions listed.
+    Some,
+    /// None of it.
+    None,
+}
+
+impl Access {
+    fn as_str(self) -> &'static str {
+        match self {
+            Access::All => "all",
+            Access::Some => "some",
+            Access::None => "none",
+        }
+    }
+    fn parse(s: &str) -> Access {
+        match s {
+            "some" => Access::Some,
+            "none" => Access::None,
+            _ => Access::All,
+        }
+    }
+}
+
+/// Which of a tool's actions someone may use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Allowed {
+    Everything,
+    Only(Vec<String>),
+    Nothing,
+}
+
+impl Allowed {
+    pub fn allows(&self, action: &str) -> bool {
+        match self {
+            Allowed::Everything => true,
+            Allowed::Only(list) => list.iter().any(|a| a == action),
+            Allowed::Nothing => false,
+        }
+    }
+}
+
+/// What the owner set for this person, if anything.
+async fn person_row(pool: &SqlitePool, tool_id: &str, account_id: &str) -> CoreResult<Option<(Access, Vec<String>)>> {
+    let row: Option<(String, String)> = sqlx::query_as("SELECT access, actions FROM tool_people WHERE tool_id = ? AND account_id = ?")
+        .bind(tool_id)
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|(a, list)| (Access::parse(&a), serde_json::from_str(&list).unwrap_or_default())))
+}
+
+/// Which of this tool's actions someone may use: all of their own; of a shared one, what its
+/// owner allowed them (by default all, restricted accounts only when the tool allows them).
+pub async fn allowed(pool: &SqlitePool, t: &Tool, account_id: &str, restricted: bool) -> CoreResult<Allowed> {
+    if t.account_id == account_id {
+        return Ok(Allowed::Everything);
+    }
+    if !t.shared {
+        return Ok(Allowed::Nothing);
+    }
+    Ok(match person_row(pool, &t.id, account_id).await? {
+        Some((Access::All, _)) => Allowed::Everything,
+        Some((Access::Some, list)) => Allowed::Only(list),
+        Some((Access::None, _)) => Allowed::Nothing,
+        None if restricted && !t.restricted_ok => Allowed::Nothing,
+        None => Allowed::Everything,
+    })
+}
+
+/// One person and what they may use of a shared tool (for its owner).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PersonAccess {
+    pub account_id: String,
+    pub name: String,
+    /// owner, member or restricted.
+    pub role: String,
+    pub access: Access,
+    /// For some: the actions allowed.
+    pub actions: Vec<String>,
+    /// The owner chose this (else it's the default).
+    pub chosen: bool,
+}
+
+/// Everyone else in the household and what they may use of my tool.
+pub async fn people(pool: &SqlitePool, owner_id: &str, tool_id: &str) -> CoreResult<Vec<PersonAccess>> {
+    let t = get_own(pool, owner_id, tool_id).await?;
+    let mut out = Vec::new();
+    for a in crate::accounts::list(pool).await? {
+        if a.id == owner_id || a.role == crate::accounts::Role::Service {
+            continue;
+        }
+        let restricted = a.role == crate::accounts::Role::Restricted;
+        let row = person_row(pool, &t.id, &a.id).await?;
+        let (access, actions) = match (&row, allowed(pool, &t, &a.id, restricted).await?) {
+            (Some((Access::Some, list)), _) => (Access::Some, list.clone()),
+            (_, Allowed::Everything) => (Access::All, Vec::new()),
+            (_, Allowed::Only(list)) => (Access::Some, list),
+            (_, Allowed::Nothing) => (Access::None, Vec::new()),
+        };
+        out.push(PersonAccess { account_id: a.id, name: a.name, role: a.role.as_str().into(), access, actions, chosen: row.is_some() });
+    }
+    Ok(out)
+}
+
+/// Set what someone may use of my tool.
+pub async fn set_person(pool: &SqlitePool, owner_id: &str, tool_id: &str, account_id: &str, access: Access, actions: &[String]) -> CoreResult<()> {
+    let t = get_own(pool, owner_id, tool_id).await?;
+    if account_id == owner_id {
+        return Err(CoreError::Invalid("It's yours: you can always use all of it.".into()));
+    }
+    crate::accounts::get(pool, account_id).await?;
+    let mut list: Vec<String> = actions.iter().map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect();
+    list.sort();
+    list.dedup();
+    if list.len() > 500 {
+        return Err(CoreError::Invalid("That's too many actions.".into()));
+    }
+    sqlx::query(
+        "INSERT INTO tool_people (tool_id, account_id, access, actions) VALUES (?, ?, ?, ?) \
+         ON CONFLICT(tool_id, account_id) DO UPDATE SET access = excluded.access, actions = excluded.actions",
+    )
+    .bind(&t.id)
+    .bind(account_id)
+    .bind(access.as_str())
+    .bind(serde_json::to_string(&list).unwrap_or_else(|_| "[]".into()))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -434,5 +589,45 @@ mod tests {
 
         delete(&pool, &dan, &google.id).await.unwrap();
         assert_eq!(chat_tools(&pool, &dan, false, &chat.id).await.unwrap(), vec![ha.id.clone()]);
+    }
+
+    #[tokio::test]
+    async fn an_owner_chooses_which_actions_each_person_may_use() {
+        let pool = crate::db::open_in_memory().await.unwrap();
+        let dan = account(&pool, "Dan", Role::Owner).await;
+        let sj = account(&pool, "SJ", Role::Member).await;
+        let noah = account(&pool, "Noah", Role::Restricted).await;
+        let mut ha = new_tool(&dan, &http("Home Assistant")).unwrap();
+        ha.shared = true;
+        insert(&pool, &ha).await.unwrap();
+
+        // By default: SJ all of it, Noah none (restricted).
+        assert_eq!(allowed(&pool, &ha, &dan, false).await.unwrap(), Allowed::Everything);
+        assert_eq!(allowed(&pool, &ha, &sj, false).await.unwrap(), Allowed::Everything);
+        assert_eq!(allowed(&pool, &ha, &noah, true).await.unwrap(), Allowed::Nothing);
+
+        // SJ: lights and the AC, not locks.
+        let some = vec!["HassTurnOn".to_string(), "HassTurnOff".to_string()];
+        set_person(&pool, &dan, &ha.id, &sj, Access::Some, &some).await.unwrap();
+        let sj_has = allowed(&pool, &ha, &sj, false).await.unwrap();
+        assert!(sj_has.allows("HassTurnOn") && !sj_has.allows("HassUnlock"));
+        assert_eq!(usable(&pool, &sj, false).await.unwrap().len(), 1);
+
+        // Noah: given the weather only, though the tool isn't open to restricted accounts.
+        set_person(&pool, &dan, &ha.id, &noah, Access::Some, &["GetLiveContext".to_string()]).await.unwrap();
+        assert_eq!(usable(&pool, &noah, true).await.unwrap().len(), 1);
+        assert!(allowed(&pool, &ha, &noah, true).await.unwrap().allows("GetLiveContext"));
+
+        // Taken away: gone from SJ's tools and chats.
+        set_person(&pool, &dan, &ha.id, &sj, Access::None, &[]).await.unwrap();
+        assert!(usable(&pool, &sj, false).await.unwrap().is_empty());
+        assert!(get_usable(&pool, &sj, false, &ha.id).await.is_err());
+
+        // Only the owner sets it, and the list says who has what.
+        assert!(set_person(&pool, &sj, &ha.id, &noah, Access::All, &[]).await.is_err());
+        let list = people(&pool, &dan, &ha.id).await.unwrap();
+        assert_eq!(list.len(), 2);
+        let n = list.iter().find(|p| p.name == "Noah").unwrap();
+        assert_eq!((n.access, n.actions.clone(), n.chosen), (Access::Some, vec!["GetLiveContext".to_string()], true));
     }
 }

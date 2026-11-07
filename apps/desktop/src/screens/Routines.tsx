@@ -1,7 +1,7 @@
 // Routines: a persona doing something on its own, on a schedule ("weekdays at 7:30, give me
 // a morning brief"). Each run is a reply in the routine's own chat.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, GATEWAY, SERVER, routinesApi, type Notify, type Persona, type QuietHours, type Routine, type RoutineAllow, type RoutineRun, type Schedule } from "../api";
 import { Avatar, Button, ErrorNote, Field, areYouSure } from "../components/ui";
 
@@ -54,6 +54,54 @@ export function describe(s: Schedule) {
   if (days.join() === "1,2,3,4,5") return `Weekdays at ${at}`;
   if (days.join() === "0,6") return `Weekends at ${at}`;
   return `${days.map((d) => DAY_NAMES[d]).join(", ")} at ${at}`;
+}
+
+/** The list's sections, each folding away. */
+const GROUPS: { id: string; title: string; has: (s: Schedule) => boolean }[] = [
+  { id: "schedule", title: "On a schedule", has: (s) => s.kind === "days" || s.kind === "every" },
+  { id: "once", title: "Reminders and one-offs", has: (s) => s.kind === "once" },
+  { id: "triggers", title: "From a link or when something happens", has: (s) => s.kind === "link" || s.kind === "event" },
+];
+
+function folded(id: string): boolean {
+  try {
+    return localStorage.getItem(`routines.folded.${id}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** A section of the list that folds away (remembered on this PC). */
+function Group({ id, title, count, children }: { id: string; title: string; count: number; children: ReactNode }) {
+  const [shut, setShut] = useState(() => folded(id));
+  function toggle() {
+    setShut((v) => {
+      try {
+        localStorage.setItem(`routines.folded.${id}`, v ? "0" : "1");
+      } catch {
+        /* not kept: fine */
+      }
+      return !v;
+    });
+  }
+  return (
+    <section className="flex flex-col gap-3">
+      <button
+        type="button"
+        aria-expanded={!shut}
+        onClick={toggle}
+        className="flex min-h-12 items-center gap-3 rounded-2xl border border-line bg-surface px-4 text-left hover:bg-raised"
+      >
+        <span className="flex-1 font-medium">
+          {title} <span className="text-sm text-muted">({count})</span>
+        </span>
+        <svg aria-hidden viewBox="0 0 20 20" className={`size-4 text-muted transition-transform ${shut ? "" : "rotate-180"}`}>
+          <path d="M5 8l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {!shut && <ul className="flex flex-col gap-3">{children}</ul>}
+    </section>
+  );
 }
 
 export default function Routines({ token, onOpenChat }: { token: string; onOpenChat: (chatId: string) => void }) {
@@ -126,21 +174,29 @@ export default function Routines({ token, onOpenChat }: { token: string; onOpenC
           </p>
         </div>
       ) : (
-        <ul className="flex flex-col gap-3">
-          {routines.map((r) => (
-            <RoutineCard
-              key={r.id}
-              token={token}
-              routine={r}
-              persona={personas.find((p) => p.id === r.persona_id) ?? null}
-              onEdit={() => setEditing(r)}
-              onOpenChat={onOpenChat}
-              onChanged={replace}
-              onDeleted={() => setRoutines((list) => (list ?? []).filter((x) => x.id !== r.id))}
-              act={act}
-            />
-          ))}
-        </ul>
+        <div className="flex flex-col gap-3">
+          {GROUPS.map((g) => {
+            const mine = routines.filter((r) => g.has(r.schedule));
+            if (mine.length === 0) return null;
+            return (
+              <Group key={g.id} id={g.id} title={g.title} count={mine.length}>
+                {mine.map((r) => (
+                  <RoutineCard
+                    key={r.id}
+                    token={token}
+                    routine={r}
+                    persona={personas.find((p) => p.id === r.persona_id) ?? null}
+                    onEdit={() => setEditing(r)}
+                    onOpenChat={onOpenChat}
+                    onChanged={replace}
+                    onDeleted={() => setRoutines((list) => (list ?? []).filter((x) => x.id !== r.id))}
+                    act={act}
+                  />
+                ))}
+              </Group>
+            );
+          })}
+        </div>
       )}
     </div>
   );

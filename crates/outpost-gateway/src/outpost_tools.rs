@@ -63,6 +63,8 @@ pub fn server() -> PcToolServer {
                 read_only: Some(true),
             },
         ],
+        withheld: Vec::new(),
+        withheld_by: None,
     }
 }
 

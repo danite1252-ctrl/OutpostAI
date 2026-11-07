@@ -10,7 +10,9 @@ import {
   signInServerTool,
   type McpServer,
   type McpTool,
+  type PersonAccess,
   type Runtimes,
+  type ToolAccess,
   type ServerTool,
   type ServerToolInput,
 } from "../api";
@@ -264,6 +266,7 @@ export function ServerToolRow({ token, tool, onChanged }: { token: string; tool:
           )}
         </div>
       )}
+      {tool.mine && tool.shared && <PeoplePanel token={token} tool={tool} actions={tools} onTest={() => void test()} />}
       {need && runtimes && !runtimes[need] && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="text-amber">
@@ -462,5 +465,98 @@ function EditServerTool({ tool, onSave }: { tool: ServerTool; onSave: (body: Ser
         <Button onClick={save}>Save</Button>
       </div>
     </div>
+  );
+}
+
+const ACCESS: { id: ToolAccess; label: string }[] = [
+  { id: "all", label: "All of it" },
+  { id: "some", label: "Only some" },
+  { id: "none", label: "None" },
+];
+
+/** Who may use a shared tool, and which of its actions (its owner chooses, per person). */
+function PeoplePanel({ token, tool, actions, onTest }: { token: string; tool: ServerTool; actions: McpTool[] | null; onTest: () => void }) {
+  const [people, setPeople] = useState<PersonAccess[] | null>(null);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (open && !people) serverTools.people(token, tool.id).then(setPeople, (e) => setError(message(e)));
+  }, [open, people, token, tool.id]);
+  async function set(p: PersonAccess, access: ToolAccess, list: string[]) {
+    setError(null);
+    try {
+      setPeople(await serverTools.setPerson(token, tool.id, p.account_id, access, list));
+    } catch (e) {
+      setError(message(e));
+    }
+  }
+  const usable = (actions ?? []).filter((a) => !tool.disabled_tools.includes(a.name));
+  return (
+    <details className="text-xs" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary className="cursor-pointer text-muted">Who can use it, and which actions</summary>
+      <div className="mt-2 flex flex-col gap-3">
+        {people === null ? (
+          <p className="text-muted">Loading…</p>
+        ) : people.length === 0 ? (
+          <p className="text-muted">There's nobody else in the household yet.</p>
+        ) : (
+          people.map((p) => (
+            <div key={p.account_id} className="flex flex-col gap-2 rounded-xl border border-line px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="min-w-28 font-medium text-ink">
+                  {p.name}
+                  {p.role === "restricted" && <span className="ml-1 text-muted">(restricted)</span>}
+                </span>
+                {ACCESS.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    aria-pressed={p.access === a.id}
+                    onClick={() => void set(p, a.id, a.id === "some" ? (p.actions.length ? p.actions : []) : [])}
+                    className={`min-h-8 rounded-full border px-3 ${p.access === a.id ? "border-ember bg-raised text-ink" : "border-line text-muted hover:text-ink"}`}
+                  >
+                    {a.label}
+                  </button>
+                ))}
+                {!p.chosen && <span className="text-muted">(the default)</span>}
+              </div>
+              {p.access === "some" &&
+                (actions === null ? (
+                  <div className="flex items-center gap-2 text-muted">
+                    Press Test to list its actions, then pick theirs.
+                    <Button variant="ghost" onClick={onTest}>
+                      Test
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {usable.map((a) => {
+                      const on = p.actions.includes(a.name);
+                      return (
+                        <button
+                          key={a.name}
+                          type="button"
+                          aria-pressed={on}
+                          title={a.description}
+                          onClick={() => void set(p, "some", on ? p.actions.filter((x) => x !== a.name) : [...p.actions, a.name])}
+                          className={`min-h-8 rounded-full border px-3 font-mono ${on ? "border-ember bg-raised text-ink" : "border-line text-muted hover:text-ink"}`}
+                        >
+                          {a.name}
+                          {a.read_only === true ? " ·reads" : ""}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
+            </div>
+          ))
+        )}
+        <p className="text-muted">
+          Outpost checks this on every call, so a model can't use an action someone isn't allowed, and it tells them to ask you.
+          Restricted accounts get none of it unless you pick for them (or turn on Restricted accounts too).
+        </p>
+        <ErrorNote>{error}</ErrorNote>
+      </div>
+    </details>
   );
 }

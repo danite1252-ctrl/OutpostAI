@@ -607,12 +607,30 @@ export interface SignInInfo {
   previous: unknown;
 }
 
+/** How much of a shared tool someone may use. */
+export type ToolAccess = "all" | "some" | "none";
+
+export interface PersonAccess {
+  account_id: string;
+  name: string;
+  role: "owner" | "member" | "restricted";
+  access: ToolAccess;
+  /** For "some": the actions allowed. */
+  actions: string[];
+  /** The tool's owner chose this (else it's the default). */
+  chosen: boolean;
+}
+
 export const serverTools = {
   list: (token: string) => request<ServerTool[]>("GET", "/api/tools", { token }),
   create: (token: string, body: ServerToolInput) => request<ServerTool>("POST", "/api/tools", { token, body }),
   update: (token: string, id: string, body: ServerToolInput) => request<ServerTool>("PATCH", `/api/tools/${id}`, { token, body }),
   remove: (token: string, id: string) => request<void>("DELETE", `/api/tools/${id}`, { token }),
   test: (token: string, id: string) => request<McpTool[]>("GET", `/api/tools/${id}/tools`, { token }),
+  /** Who may use my shared tool, and which of its actions. */
+  people: (token: string, id: string) => request<PersonAccess[]>("GET", `/api/tools/${id}/people`, { token }),
+  setPerson: (token: string, id: string, accountId: string, access: ToolAccess, actions: string[] = []) =>
+    request<PersonAccess[]>("PUT", `/api/tools/${id}/people/${accountId}`, { token, body: { access, actions } }),
   signInInfo: (token: string, id: string) => request<SignInInfo>("GET", `/api/tools/${id}/sign-in`, { token }),
   signInSave: (token: string, id: string, state: unknown) => request<ServerTool>("PUT", `/api/tools/${id}/sign-in`, { token, body: state }),
   signOut: (token: string, id: string) => request<void>("DELETE", `/api/tools/${id}/sign-in`, { token }),

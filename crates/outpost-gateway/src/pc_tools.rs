@@ -27,7 +27,7 @@ const CONFIRM_WITHIN: Duration = Duration::from_secs(60);
 const ANSWER_LIMIT: usize = 16_000;
 
 /// One MCP server on the PC, with its tools (as MCP's `tools/list` gives them).
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct PcToolServer {
     /// The app's id for it.
     pub id: String,
@@ -35,6 +35,13 @@ pub struct PcToolServer {
     pub name: String,
     #[serde(default)]
     pub tools: Vec<PcTool>,
+    /// A shared tool's actions this person may not use (its owner's choice): the model is
+    /// told, so it says so rather than trying.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub withheld: Vec<String>,
+    /// Whose choice that was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub withheld_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -58,7 +65,8 @@ pub struct PcTool {
 pub enum Via {
     App,
     Device { tools: crate::device_tools::DeviceTools, session_id: String },
-    Server(crate::AppState),
+    /// On this server, for this person (what they may use of it is checked on each call).
+    Server { state: crate::AppState, who: crate::server_tools::Who },
     /// Outpost's own tools (making routines), for this person.
     Outpost(crate::outpost_tools::Context),
 }
@@ -218,7 +226,33 @@ impl PcTools {
              means, look it up with a tool or ask, rather than guessing.{}",
             names.join(", "),
             if self.has_home_assistant() { HOME_ASSISTANT_NOTE } else { "" }
-        ) + if outpost { crate::outpost_tools::NOTE } else { "" }
+        ) + &self.withheld_note()
+            + if outpost { crate::outpost_tools::NOTE } else { "" }
+    }
+
+    /// The actions of shared tools this person may not use, so the model says so.
+    fn withheld_note(&self) -> String {
+        let lines: Vec<String> = self
+            .servers
+            .iter()
+            .filter(|s| !s.withheld.is_empty())
+            .map(|s| {
+                let words: Vec<String> = s.withheld.iter().take(30).map(|w| tool_words(w)).collect();
+                format!(
+                    "- {}: not allowed for this user: {} ({} chose this). If they ask for one of these, say it isn't \
+                     allowed for them and they can ask {}; don't try another way.",
+                    s.name,
+                    words.join(", "),
+                    s.withheld_by.as_deref().unwrap_or("its owner"),
+                    s.withheld_by.as_deref().unwrap_or("its owner"),
+                )
+            })
+            .collect();
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!("\n\nSome actions are switched off for this user:\n{}", lines.join("\n"))
+        }
     }
 
     /// Home Assistant's tools are here (their names start "Hass", plus GetLiveContext).
@@ -292,7 +326,7 @@ impl PcTools {
             Via::App => self.relay.ask_within(&self.events, &self.chat_id, request, CALL_WITHIN, "file_request").await,
             Via::Device { tools, session_id } => tools.call(session_id, request, CALL_WITHIN).await,
             Via::Outpost(_) => unreachable!("handled above"),
-            Via::Server(state) => match tokio::time::timeout(CALL_WITHIN, crate::server_tools::call(state, &server.id, &e.tool, args)).await {
+            Via::Server { state, who } => match tokio::time::timeout(CALL_WITHIN, crate::server_tools::call(state, &server.id, &e.tool, args, who)).await {
                 Ok(Ok(r)) => Ok(json!({ "text": r.text, "is_error": r.is_error })),
                 Ok(Err(err)) => Err(err.trim_start_matches("needs sign-in: ").to_string()),
                 Err(_) => Err("The tool took too long.".into()),
@@ -384,6 +418,8 @@ mod tests {
                 .iter()
                 .map(|t| PcTool { name: (*t).into(), description: format!("Does {t}"), input_schema: Value::Null, read_only: None })
                 .collect(),
+            withheld: Vec::new(),
+            withheld_by: None,
         }
     }
 
@@ -412,6 +448,14 @@ mod tests {
         let (tx, _rx) = mpsc::channel(1);
         let ha = PcTools::new(Relay::default(), "c", tx, vec![(server("Home Assistant", &["HassTurnOff", "GetLiveContext"]), Via::App)], false).unwrap();
         assert!(ha.instructions().contains("call GetLiveContext first"));
+        // Actions its owner didn't allow this person: the model is told.
+        let (tx, _rx) = mpsc::channel(1);
+        let mut limited = server("Home Assistant", &["HassTurnOn"]);
+        limited.withheld = vec!["HassUnlock".into()];
+        limited.withheld_by = Some("Dan".into());
+        let t = PcTools::new(Relay::default(), "c", tx, vec![(limited, Via::App)], false).unwrap();
+        assert!(t.instructions().contains("Home Assistant: not allowed for this user: unlock (Dan chose this)"), "{}", t.instructions());
+        assert_eq!(t.tools().len(), 1);
     }
 
     #[tokio::test]

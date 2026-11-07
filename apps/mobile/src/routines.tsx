@@ -1,8 +1,8 @@
 // Routines on the phone: a persona doing something on its own, on a schedule. Make, change,
 // pause and run them; see how each went, and open its chat for the full result.
 
-import { useCallback, useEffect, useState } from "react";
-import { Alert, Share, Text, View } from "react-native";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Alert, Pressable, Share, Text, View } from "react-native";
 import { ListState, message, Screen } from "./admin";
 import type { Outpost } from "./outpost";
 import { Avatar, Button, C, Chip, ErrorText, Field, P, s } from "./ui";
@@ -146,6 +146,33 @@ function myZone() {
   return { time_zone: zone, utc_offset_minutes: -new Date().getTimezoneOffset() };
 }
 
+/** The list's sections, each folding away. */
+const GROUPS: { id: string; title: string; has: (s: Schedule) => boolean }[] = [
+  { id: "schedule", title: "On a schedule", has: (s) => s.kind === "days" || s.kind === "every" },
+  { id: "once", title: "Reminders and one-offs", has: (s) => s.kind === "once" },
+  { id: "triggers", title: "From a link or an event", has: (s) => s.kind === "link" || s.kind === "event" },
+];
+
+function Group({ title, count, children }: { title: string; count: number; children: ReactNode }) {
+  const [shut, setShut] = useState(false);
+  return (
+    <View style={{ gap: 10 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: !shut }}
+        onPress={() => setShut((v) => !v)}
+        style={[s.card, { flexDirection: "row", alignItems: "center", minHeight: 48 }]}
+      >
+        <Text style={{ color: C.ink, fontWeight: "600", flex: 1 }}>
+          {title} <Text style={{ color: C.muted, fontWeight: "400" }}>({count})</Text>
+        </Text>
+        <Text style={{ color: C.muted, fontSize: 16 }}>{shut ? "⌄" : "⌃"}</Text>
+      </Pressable>
+      {!shut && children}
+    </View>
+  );
+}
+
 export function RoutinesScreen({ api, onClose, onOpenChat }: { api: Outpost; onClose: () => void; onOpenChat: (chatId: string) => void }) {
   const [routines, setRoutines] = useState<Routine[] | null>(null);
   const [personas, setPersonas] = useState<Persona[]>([]);
@@ -203,7 +230,12 @@ export function RoutinesScreen({ api, onClose, onOpenChat }: { api: Outpost; onC
         empty={routines?.length === 0}
         emptyText='None yet. Try "Every weekday at 7:30: give me the weather and my calendar for today."'
       />
-      {(routines ?? []).map((r) => {
+      {GROUPS.map((g) => {
+        const mine = (routines ?? []).filter((r) => g.has(r.schedule));
+        if (mine.length === 0) return null;
+        return (
+          <Group key={g.id} title={g.title} count={mine.length}>
+      {mine.map((r) => {
         const persona = personas.find((p) => p.id === r.persona_id);
         const running = r.last_status === "running";
         return (
@@ -265,6 +297,9 @@ export function RoutinesScreen({ api, onClose, onOpenChat }: { api: Outpost; onC
               />
             </View>
           </View>
+        );
+      })}
+          </Group>
         );
       })}
     </Screen>

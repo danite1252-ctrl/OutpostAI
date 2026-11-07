@@ -144,11 +144,31 @@ pub async fn tool_list(state: &AppState, t: &Tool) -> Result<Vec<ToolInfo>, Stri
     }
 }
 
-/// Run one of a tool's tools.
-pub async fn call(state: &AppState, tool_id: &str, name: &str, args: Value) -> Result<CallResult, String> {
-    let t = tools::get_any(&state.pool, tool_id).await.map_err(|_| "That tool isn't on the server any more.".to_string())?;
+/// Who a call is for (what they may use is checked on every call, whatever the model sent).
+#[derive(Debug, Clone)]
+pub struct Who {
+    pub account_id: String,
+    pub restricted: bool,
+}
+
+/// Run one of a tool's tools, for someone.
+pub async fn call(state: &AppState, tool_id: &str, name: &str, args: Value, who: &Who) -> Result<CallResult, String> {
+    let t = tools::get_usable(&state.pool, &who.account_id, who.restricted, tool_id)
+        .await
+        .map_err(|_| "That tool isn't on the server any more, or isn't shared with this user.".to_string())?;
     if !t.enabled || t.disabled_tools().iter().any(|d| d == name) {
         return Ok(CallResult { text: format!("{name} is switched off."), is_error: true });
+    }
+    let allowed = tools::allowed(&state.pool, &t, &who.account_id, who.restricted).await.map_err(|e| e.to_string())?;
+    if !allowed.allows(name) {
+        let owner = outpost_core::accounts::get(&state.pool, &t.account_id).await.map(|a| a.name).unwrap_or_else(|_| "its owner".into());
+        return Ok(CallResult {
+            text: format!(
+                "Not allowed: {owner} hasn't allowed {name} in {} for this user, so it wasn't done. Tell the user they can ask {owner}.",
+                t.name
+            ),
+            is_error: true,
+        });
     }
     let st = renewed(state, &t, false).await?;
     if is_google(&t) {
@@ -177,23 +197,44 @@ pub async fn for_chat(state: &AppState, account_id: &str, restricted: bool, chat
     let mut rows = Vec::new();
     for id in ids {
         if let Ok(t) = tools::get_usable(&state.pool, account_id, restricted, &id).await {
-            if t.enabled {
-                rows.push(t);
+            if !t.enabled {
+                continue;
+            }
+            // What its owner lets this person use.
+            match tools::allowed(&state.pool, &t, account_id, restricted).await {
+                Ok(tools::Allowed::Nothing) | Err(_) => {}
+                Ok(allowed) => {
+                    let owner = if t.account_id == account_id {
+                        None
+                    } else {
+                        outpost_core::accounts::get(&state.pool, &t.account_id).await.ok().map(|a| a.name)
+                    };
+                    rows.push((t, allowed, owner));
+                }
             }
         }
     }
-    let jobs = rows.into_iter().map(|t| async move {
+    let jobs = rows.into_iter().map(|(t, allowed, owner)| async move {
         let off = t.disabled_tools();
         match tokio::time::timeout(LIST_WITHIN, tool_list(state, &t)).await {
-            Ok(Ok(list)) => Some(PcToolServer {
-                id: t.id.clone(),
-                name: t.name.clone(),
-                tools: list
-                    .into_iter()
-                    .filter(|x| !off.contains(&x.name))
-                    .map(|x| PcTool { name: x.name, description: x.description, input_schema: x.input_schema, read_only: x.read_only })
-                    .collect(),
-            }),
+            Ok(Ok(list)) => {
+                let (kept, withheld): (Vec<ToolInfo>, Vec<ToolInfo>) =
+                    list.into_iter().filter(|x| !off.contains(&x.name)).partition(|x| allowed.allows(&x.name));
+                if kept.is_empty() {
+                    return None;
+                }
+                let withheld: Vec<String> = withheld.into_iter().map(|x| x.name).collect();
+                Some(PcToolServer {
+                    id: t.id.clone(),
+                    name: t.name.clone(),
+                    tools: kept
+                        .into_iter()
+                        .map(|x| PcTool { name: x.name, description: x.description, input_schema: x.input_schema, read_only: x.read_only })
+                        .collect(),
+                    withheld_by: if withheld.is_empty() { None } else { owner },
+                    withheld,
+                })
+            }
             Ok(Err(e)) => {
                 tracing::warn!(tool = %t.name, error = %e, "a tool on the server didn't start");
                 None
@@ -646,4 +687,36 @@ pub async fn install_runtime(State(state): State<AppState>, auth: Auth, Path(whi
         });
     });
     Ok(StatusCode::ACCEPTED)
+}
+
+/// Who may use my shared tool, and which of its actions (everyone else in the household).
+#[utoipa::path(get, path = "/api/tools/{id}/people", tag = "tools", security(("bearer" = [])),
+    params(("id" = String, Path, description = "The tool (yours)")),
+    responses((status = 200, description = "Each person", body = [tools::PersonAccess]), (status = 404, description = "Not yours", body = ErrorBody)))]
+pub async fn people(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<Vec<tools::PersonAccess>>> {
+    Ok(Json(tools::people(&state.pool, &auth.account.id, &id).await?))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PersonInput {
+    pub access: tools::Access,
+    /// For some: the actions they may use.
+    #[serde(default)]
+    pub actions: Vec<String>,
+}
+
+/// Set what someone may use of my shared tool. Takes effect on their next message.
+#[utoipa::path(put, path = "/api/tools/{id}/people/{account_id}", tag = "tools", security(("bearer" = [])),
+    params(("id" = String, Path, description = "The tool (yours)"), ("account_id" = String, Path, description = "The person")),
+    request_body = PersonInput,
+    responses((status = 200, description = "Everyone, as it is now", body = [tools::PersonAccess]), (status = 404, description = "Not yours", body = ErrorBody)))]
+pub async fn set_person(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path((id, account_id)): Path<(String, String)>,
+    Json(input): Json<PersonInput>,
+) -> ApiResult<Json<Vec<tools::PersonAccess>>> {
+    auth.require_person("Choosing who may use a tool")?;
+    tools::set_person(&state.pool, &auth.account.id, &id, &account_id, input.access, &input.actions).await?;
+    Ok(Json(tools::people(&state.pool, &auth.account.id, &id).await?))
 }

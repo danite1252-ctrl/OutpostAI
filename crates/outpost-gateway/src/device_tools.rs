@@ -214,7 +214,7 @@ mod tests {
     use crate::pc_tools::PcTool;
 
     fn server(id: &str) -> PcToolServer {
-        PcToolServer { id: id.into(), name: id.to_uppercase(), tools: vec![PcTool { name: "t".into(), description: String::new(), input_schema: Value::Null, read_only: None }] }
+        PcToolServer { id: id.into(), name: id.to_uppercase(), tools: vec![PcTool { name: "t".into(), description: String::new(), input_schema: Value::Null, read_only: None }], withheld: Vec::new(), withheld_by: None }
     }
 
     #[tokio::test]

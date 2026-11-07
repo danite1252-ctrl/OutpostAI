@@ -48,6 +48,10 @@ pub async fn scheduler(state: AppState) {
             }
             Err(e) => tracing::warn!(error = %e, "couldn't check routines"),
         }
+        // Reminders that have been and gone are cleared away.
+        if let Err(e) = routines::remove_finished_once(&state.pool, outpost_core::now()).await {
+            tracing::warn!(error = %e, "couldn't clear finished one-off routines");
+        }
         tokio::time::sleep(Duration::from_secs(30)).await;
     }
 }

@@ -559,7 +559,8 @@ pub async fn start_reply(
     if resolved.can_use_tools && may_use_tools {
         let restricted = auth.account.role == outpost_core::accounts::Role::Restricted;
         for s in crate::server_tools::for_chat(&state, &account_id, restricted, &chat.id).await {
-            tool_servers.push((s, Via::Server(state.clone())));
+            let who = crate::server_tools::Who { account_id: account_id.clone(), restricted };
+            tool_servers.push((s, Via::Server { state: state.clone(), who }));
         }
         // Outpost's own (making routines): for owners and members, not in a routine's own run.
         if unattended.is_none() && matches!(auth.account.role, outpost_core::accounts::Role::Owner | outpost_core::accounts::Role::Member) {

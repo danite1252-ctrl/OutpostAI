@@ -711,6 +711,20 @@ pub async fn finish_run(
     Ok(())
 }
 
+/// One-off routines that ran fine are removed an hour after they've been told (so the list
+/// isn't cluttered with old reminders; a failed one stays, to see why). Their chats stay.
+pub async fn remove_finished_once(pool: &SqlitePool, at: i64) -> CoreResult<u64> {
+    let done = sqlx::query(
+        "DELETE FROM routines WHERE json_extract(schedule, '$.kind') = 'once' AND next_at IS NULL AND last_status = 'ok' \
+         AND NOT EXISTS (SELECT 1 FROM routine_runs rr WHERE rr.routine_id = routines.id \
+                         AND (rr.status = 'running' OR COALESCE(rr.tell_at, rr.finished_at, 0) > ?))",
+    )
+    .bind(at - 3600)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected())
+}
+
 /// Runs left "running" by a restart are failed (they can't finish now).
 pub async fn fail_interrupted(pool: &SqlitePool) -> CoreResult<()> {
     let note = "Outpost restarted while this was running.";
@@ -996,5 +1010,42 @@ mod tests {
         assert_eq!(describe(&Schedule::Days { time: "07:30".into(), days: vec![5, 1, 2, 3, 4] }, &sydney), "weekdays at 07:30");
         assert_eq!(describe(&Schedule::Days { time: "18:00".into(), days: vec![0] }, &sydney), "Sun at 18:00");
         assert_eq!(describe(&Schedule::Every { hours: 6 }, &sydney), "every 6 hours");
+    }
+
+    #[tokio::test]
+    async fn a_one_off_that_ran_is_cleared_away_after_its_told() {
+        let pool = crate::db::open_in_memory().await.unwrap();
+        let me = crate::accounts::create(
+            &pool,
+            crate::accounts::NewAccount { name: "Dan".into(), role: crate::accounts::Role::Owner, secret: Some("4821".into()) },
+        )
+        .await
+        .unwrap();
+        let once = |name: &str| RoutineInput {
+            name: Some(name.into()),
+            instructions: Some("Remind me.".into()),
+            schedule: Some(Schedule::Once { at: now() + 600 }),
+            ..Default::default()
+        };
+        let ok = create(&pool, &me.id, once("Stretch")).await.unwrap();
+        let failed = create(&pool, &me.id, once("Oven")).await.unwrap();
+        let daily = create(
+            &pool,
+            &me.id,
+            RoutineInput { schedule: Some(Schedule::Days { time: "07:00".into(), days: vec![1] }), ..once("Brief") },
+        )
+        .await
+        .unwrap();
+        let t = now();
+        for (r, worked) in [(&ok, true), (&failed, false), (&daily, true)] {
+            let run = start_run(&pool, r, "schedule").await.unwrap();
+            finish_run(&pool, &r.id, &run, worked, None, None, true, t).await.unwrap();
+        }
+        // Not yet: it's only just been told.
+        assert_eq!(remove_finished_once(&pool, t).await.unwrap(), 0);
+        // An hour on: the reminder that worked goes; the failed one and the daily one stay.
+        assert_eq!(remove_finished_once(&pool, t + 3601).await.unwrap(), 1);
+        let left: Vec<String> = list(&pool, &me.id).await.unwrap().into_iter().map(|r| r.name).collect();
+        assert_eq!(left, vec!["Brief".to_string(), "Oven".to_string()]);
     }
 }

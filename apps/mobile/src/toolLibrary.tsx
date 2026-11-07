@@ -205,6 +205,7 @@ function ToolCard({ api, tool, isOwner, onChanged }: { api: Outpost; tool: Serve
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [runtime, setRuntime] = useState<"node" | "uv" | null>(null);
+  const [actions, setActions] = useState<{ name: string; read_only?: boolean | null }[] | null>(null);
   const [wantsSignIn, setWantsSignIn] = useState(false);
   const [askClient, setAskClient] = useState(false);
   const [clientId, setClientId] = useState("");
@@ -247,7 +248,8 @@ function ToolCard({ api, tool, isOwner, onChanged }: { api: Outpost; tool: Serve
     setResult(null);
     setRuntime(null);
     try {
-      const list = await api.get<{ name: string }[]>(`/api/tools/${tool.id}/tools`);
+      const list = await api.get<{ name: string; read_only?: boolean | null }[]>(`/api/tools/${tool.id}/tools`);
+      setActions(list);
       setResult(`Working: ${list.length} tools.`);
     } catch (e) {
       setRuntime(needsRuntime(e));
@@ -340,6 +342,9 @@ function ToolCard({ api, tool, isOwner, onChanged }: { api: Outpost; tool: Serve
         )}
         {tool.mine && <Chip label="Remove" color={C.danger} onPress={remove} />}
       </View>
+      {tool.mine && tool.shared && (
+        <PeopleRow api={api} tool={tool} actions={actions} onTest={() => void test()} />
+      )}
       {result && <Text style={{ color: C.ok, fontSize: 13 }}>{result}</Text>}
       {error && <Text style={{ color: C.danger, fontSize: 13 }}>{error}</Text>}
       {runtime && isOwner && (
@@ -535,5 +540,88 @@ function AddEntry({
         </>
       )}
     </ScrollView>
+  );
+}
+
+type ToolAccess = "all" | "some" | "none";
+interface PersonAccess {
+  account_id: string;
+  name: string;
+  role: string;
+  access: ToolAccess;
+  actions: string[];
+  chosen: boolean;
+}
+
+/** Who may use a shared tool, and which of its actions (its owner chooses, per person). */
+function PeopleRow({
+  api,
+  tool,
+  actions,
+  onTest,
+}: {
+  api: Outpost;
+  tool: ServerTool;
+  actions: { name: string; read_only?: boolean | null }[] | null;
+  onTest: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [people, setPeople] = useState<PersonAccess[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (open && !people) api.get<PersonAccess[]>(`/api/tools/${tool.id}/people`).then(setPeople, (e) => setError(message(e)));
+  }, [open, people, api, tool.id]);
+  async function set(p: PersonAccess, access: ToolAccess, list: string[]) {
+    setError(null);
+    try {
+      setPeople(await api.json<PersonAccess[]>("PUT", `/api/tools/${tool.id}/people/${p.account_id}`, { access, actions: list }));
+    } catch (e) {
+      setError(message(e));
+    }
+  }
+  if (!open) return <Chip label="Who can use it…" onPress={() => setOpen(true)} />;
+  const usable = (actions ?? []).filter((a) => !tool.disabled_tools.includes(a.name));
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={s.label}>Who can use it, and which actions</Text>
+      {people === null && <Text style={{ color: C.muted, fontSize: 13 }}>Loading…</Text>}
+      {people?.length === 0 && <Text style={{ color: C.muted, fontSize: 13 }}>There's nobody else in the household yet.</Text>}
+      {(people ?? []).map((p) => (
+        <View key={p.account_id} style={{ gap: 6, borderTopWidth: 1, borderTopColor: C.line, paddingTop: 6 }}>
+          <Text style={{ color: C.ink }}>
+            {p.name}
+            {p.role === "restricted" ? " (restricted)" : ""}
+            {!p.chosen ? <Text style={{ color: C.muted }}> · the default</Text> : null}
+          </Text>
+          <View style={[s.row, { flexWrap: "wrap" }]}>
+            <Chip label="All of it" active={p.access === "all"} onPress={() => void set(p, "all", [])} />
+            <Chip label="Only some" active={p.access === "some"} onPress={() => void set(p, "some", p.actions)} />
+            <Chip label="None" active={p.access === "none"} onPress={() => void set(p, "none", [])} />
+          </View>
+          {p.access === "some" &&
+            (actions === null ? (
+              <Chip label="Test, to list its actions" onPress={onTest} />
+            ) : (
+              <View style={[s.row, { flexWrap: "wrap" }]}>
+                {usable.map((a) => {
+                  const on = p.actions.includes(a.name);
+                  return (
+                    <Chip
+                      key={a.name}
+                      label={a.name}
+                      active={on}
+                      onPress={() => void set(p, "some", on ? p.actions.filter((x) => x !== a.name) : [...p.actions, a.name])}
+                    />
+                  );
+                })}
+              </View>
+            ))}
+        </View>
+      ))}
+      <Text style={{ color: C.muted, fontSize: 12 }}>
+        Outpost checks this on every call, and tells them to ask you. Restricted accounts get none of it unless you pick for them.
+      </Text>
+      {error && <Text style={{ color: C.danger, fontSize: 13 }}>{error}</Text>}
+    </View>
   );
 }
