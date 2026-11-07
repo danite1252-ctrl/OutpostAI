@@ -13,6 +13,7 @@ import { ModelsScreen } from "../modelsScreen";
 import { PeopleScreen } from "../people";
 import { ServerCard } from "../server";
 import { DocsMemoryScreen } from "../docsMemory";
+import { ActivityScreen } from "../activity";
 import { RoutinesScreen } from "../routines";
 
 export default function Me({
@@ -45,7 +46,7 @@ export default function Me({
   }, []);
   const u = update.state;
   const [toolsOpen, setToolsOpen] = useState(false);
-  const [page, setPage] = useState<"personas" | "routines" | "models" | "people" | "docs" | null>(null);
+  const [page, setPage] = useState<"personas" | "routines" | "activity" | "models" | "people" | "docs" | null>(null);
   const [checked, setChecked] = useState<{ host: string; ok: boolean; problem?: string }[] | null>(null);
   const [checking, setChecking] = useState(false);
   async function checkConnection() {
@@ -117,6 +118,7 @@ export default function Me({
         <Button kind="ghost" title="Personas" onPress={() => setPage("personas")} />
         {role !== "restricted" && <Button kind="ghost" title="Routines" onPress={() => setPage("routines")} />}
         <Button kind="ghost" title="Tools" onPress={() => setToolsOpen(true)} />
+        <Button kind="ghost" title="Activity" onPress={() => setPage("activity")} />
         <Button kind="ghost" title="Documents and memory" onPress={() => setPage("docs")} />
         <Button kind="ghost" title="Models" onPress={() => setPage("models")} />
         <Button kind="ghost" title={role === "owner" ? "People and devices" : "Your devices"} onPress={() => setPage("people")} />
@@ -126,6 +128,7 @@ export default function Me({
         <ToolsScreen api={api} isOwner={role === "owner"} canAdd={role !== "restricted"} onClose={() => setToolsOpen(false)} />
       )}
       {page === "personas" && <PersonasScreen api={api} onClose={() => setPage(null)} />}
+      {page === "activity" && <ActivityScreen api={api} isOwner={role === "owner"} onClose={() => setPage(null)} />}
       {page === "routines" && (
         <RoutinesScreen
           api={api}

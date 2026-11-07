@@ -48,6 +48,10 @@ pub async fn scheduler(state: AppState) {
             }
             Err(e) => tracing::warn!(error = %e, "couldn't check routines"),
         }
+        // The activity log keeps 90 days.
+        if let Err(e) = outpost_core::activity::prune(&state.pool).await {
+            tracing::warn!(error = %e, "couldn't prune the activity log");
+        }
         // Reminders that have been and gone are cleared away.
         if let Err(e) = routines::remove_finished_once(&state.pool, outpost_core::now()).await {
             tracing::warn!(error = %e, "couldn't clear finished one-off routines");
@@ -209,6 +213,7 @@ async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result
         // The chat's tools on your PC, if one with Outpost open offers them.
         use_pc_tools: r.allow.tools,
         routine: Some(r.allow),
+        routine_id: Some(r.id.clone()),
         ..Default::default()
     };
     let started = outpost_core::now();

@@ -127,6 +127,11 @@ servers, so any MCP server works.
   switch on **Ask first** for any other action of their tool (turning the heater on, say), and
   then it asks everyone, every time. Look-ups never ask. Routines can't ask anyone, so they
   don't do these: the routine says what it would have done instead.
+- **Activity** (in the sidebar on the PC; You › Activity on the phone) lists every tool call a
+  persona made: when, who for, from which chat or routine (or hands-free), the action and its
+  details **exactly as the model sent them** (so "it turned off the wrong light" shows the name
+  it used), and what came of it: Done, Failed, Not allowed, Skipped or Needed an OK. Owners see
+  everyone's and can pick a person or a tool; everyone else sees their own. Kept for 90 days.
 - **Keys and sign-ins on the server** are encrypted with a key kept in Outpost's data folder
   (`secrets.key`), beside the database: keep it in backups, or everyone signs in again.
 - **Signing in** happens on the PC you're using (the browser comes back to it), and the sign-in

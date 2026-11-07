@@ -2001,6 +2001,36 @@ function myZone(): Pick<RoutineInput, "time_zone" | "utc_offset_minutes"> {
   return { time_zone: zone, utc_offset_minutes: -new Date().getTimezoneOffset() };
 }
 
+/** One tool call a persona made (the activity log). */
+export interface ActivityEntry {
+  id: string;
+  at: number;
+  account_id: string;
+  person: string | null;
+  chat_id: string | null;
+  chat_title: string | null;
+  routine_id: string | null;
+  routine_name: string | null;
+  source: "chat" | "hands_free" | "routine";
+  server: string;
+  tool: string;
+  /** Exactly as the model sent them (JSON). */
+  arguments: string;
+  outcome: "done" | "failed" | "not_allowed" | "skipped" | "needs_ok";
+  result: string;
+}
+
+export const activityApi = {
+  list: (token: string, q: { person?: string; before?: number; server?: string } = {}) => {
+    const p = new URLSearchParams();
+    if (q.person) p.set("person", q.person);
+    if (q.before) p.set("before", String(q.before));
+    if (q.server) p.set("server", q.server);
+    p.set("limit", "50");
+    return request<ActivityEntry[]>("GET", `/api/activity?${p}`, { token });
+  },
+};
+
 export const routinesApi = {
   list: (token: string) => request<Routine[]>("GET", "/api/routines", { token }),
   create: (token: string, input: RoutineInput) => request<Routine>("POST", "/api/routines", { token, body: { ...input, ...myZone() } }),

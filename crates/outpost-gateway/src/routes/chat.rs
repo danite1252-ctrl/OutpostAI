@@ -344,6 +344,9 @@ pub struct SendRequest {
     /// A routine's run (nobody watching): what it may do. Never from an app.
     #[serde(skip)]
     pub routine: Option<outpost_core::routines::Allow>,
+    /// That routine (for the activity log).
+    #[serde(skip)]
+    pub routine_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -643,7 +646,13 @@ pub async fn start_reply(
     }
     // MCP servers on the app's PC.
     let pc_tools = crate::pc_tools::PcTools::new(state.file_relay.clone(), &chat.id, tx.clone(), tool_servers, req.confirm_tools)
-        .map(|t| t.unattended(unattended.is_some()));
+        .map(|t| {
+            t.unattended(unattended.is_some()).logged(crate::pc_tools::LogTo {
+                pool: state.pool.clone(),
+                account_id: account_id.clone(),
+                routine_id: req.routine_id.clone(),
+            })
+        });
     if let Some(t) = &pc_tools {
         system = format!("{system}\n\n{}", t.instructions());
     }

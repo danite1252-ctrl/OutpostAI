@@ -23,6 +23,7 @@ pub mod mcp_client;
 pub mod mcp_oauth;
 pub mod memory;
 pub mod openapi;
+pub mod activity;
 pub mod outpost_tools;
 pub mod pc_tools;
 pub mod persona_templates;
@@ -252,6 +253,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/chats/{id}/live", get(chat::live))
         .route("/api/chats/{id}/watch", get(chat::watch))
         .route("/api/routines", get(routines::list).post(routines::create))
+        .route("/api/activity", get(activity::list))
         .route("/api/routines/quiet", get(routines::get_quiet).put(routines::set_quiet))
         .route("/api/routines/{id}", put(routines::update).delete(routines::delete))
         .route("/api/routines/{id}/run", post(routines::run_now))

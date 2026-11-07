@@ -96,6 +96,17 @@ pub struct PcTools {
     confirm: bool,
     /// A routine's run: nobody is there to ask, so what must ask first isn't done.
     unattended: bool,
+    /// Where calls are recorded (the activity log).
+    log: Option<LogTo>,
+}
+
+/// Who the calls are for, for the activity log.
+#[derive(Clone)]
+pub struct LogTo {
+    pub pool: sqlx::SqlitePool,
+    pub account_id: String,
+    /// The routine running, if it's a routine's run.
+    pub routine_id: Option<String>,
 }
 
 /// A tool's name as words: `HassTurnOff` → "turn off", `search_files` → "search files".
@@ -236,7 +247,7 @@ impl PcTools {
                 entries.push(Entry { call, server: i, tool: t.name.clone() });
             }
         }
-        (!entries.is_empty()).then(|| Self { relay, chat_id: chat_id.into(), events, servers, routes, entries, confirm, unattended: false })
+        (!entries.is_empty()).then(|| Self { relay, chat_id: chat_id.into(), events, servers, routes, entries, confirm, unattended: false, log: None })
     }
 
     /// The system prompt's part about them.
@@ -317,12 +328,63 @@ impl PcTools {
         self
     }
 
+    /// Record each call in the activity log.
+    pub fn logged(mut self, to: LogTo) -> Self {
+        self.log = Some(to);
+        self
+    }
+
     pub fn has(&self, call: &str) -> bool {
         self.entries.iter().any(|e| e.call == call)
     }
 
-    /// Run one call on the PC.
+    /// Run one call (on the PC, the server or Outpost itself), and record it.
     pub async fn run(&self, call: &str, args: &Value) -> Outcome {
+        let out = self.run_call(call, args).await;
+        if let Some(to) = &self.log {
+            let (server, tool) = match self.entries.iter().find(|e| e.call == call) {
+                Some(e) => (self.servers[e.server].name.clone(), e.tool.clone()),
+                None => ("?".to_string(), call.to_string()),
+            };
+            let note = out.action.note.as_deref().unwrap_or("");
+            let outcome = if out.reply.starts_with("Not allowed:") {
+                "not_allowed"
+            } else if note == "needs an OK (not in routines)" {
+                "needs_ok"
+            } else if ["skipped", "Not confirmed", "no answer", "couldn't ask", "not made"].contains(&note) {
+                "skipped"
+            } else if out.action.failed {
+                "failed"
+            } else {
+                "done"
+            };
+            let source = if to.routine_id.is_some() {
+                "routine"
+            } else if self.confirm {
+                "hands_free"
+            } else {
+                "chat"
+            };
+            outpost_core::activity::record(
+                &to.pool,
+                outpost_core::activity::NewEntry {
+                    account_id: to.account_id.clone(),
+                    chat_id: Some(self.chat_id.clone()),
+                    routine_id: to.routine_id.clone(),
+                    source: source.into(),
+                    server,
+                    tool,
+                    arguments: args.to_string(),
+                    outcome: outcome.into(),
+                    result: out.reply.clone(),
+                },
+            )
+            .await;
+        }
+        out
+    }
+
+    async fn run_call(&self, call: &str, args: &Value) -> Outcome {
         let Some(e) = self.entries.iter().find(|e| e.call == call) else {
             return fail("mcp", call, format!("There's no tool called {call}."));
         };

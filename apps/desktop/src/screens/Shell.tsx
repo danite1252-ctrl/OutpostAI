@@ -11,6 +11,7 @@ import Gallery from "./Gallery";
 import Connections from "./Connections";
 import Train from "./Train";
 import Api from "./Api";
+import Activity from "./Activity";
 import Routines from "./Routines";
 import { DownloadsButton } from "../components/downloads";
 import { useJobNotifications } from "../components/notify";
@@ -20,7 +21,7 @@ import { QueueButton } from "../components/queue";
 import { CrashNotice, UpdateBanner } from "../components/system";
 import type { CreateRequest } from "../components/gallery";
 
-type Section = "chat" | "create" | "gallery" | "train" | "routines" | "models" | "personas" | "connections" | "api" | "settings";
+type Section = "chat" | "create" | "gallery" | "train" | "routines" | "models" | "personas" | "connections" | "activity" | "api" | "settings";
 
 const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "chat", label: "Chat", icon: icons.chat },
@@ -31,6 +32,7 @@ const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "models", label: "Models", icon: icons.models },
   { id: "personas", label: "Personas", icon: icons.personas },
   { id: "connections", label: "Connections", icon: icons.connections },
+  { id: "activity", label: "Activity", icon: icons.activity },
   { id: "api", label: "API", icon: icons.api },
   { id: "settings", label: "Settings", icon: icons.settings },
 ];
@@ -153,6 +155,16 @@ export default function Shell({
         )}
         <main className={`min-h-0 flex-1 overflow-auto p-8 ${section === "chat" ? "hidden" : ""}`}>
           {section === "personas" && <Personas token={auth.token} />}
+          {section === "activity" && (
+            <Activity
+              token={auth.token}
+              isOwner={auth.account.role === "owner"}
+              onOpenChat={(id) => {
+                setChatToOpen(id);
+                setSection("chat");
+              }}
+            />
+          )}
           {section === "routines" && auth.account.role !== "restricted" && (
             <Routines
               token={auth.token}

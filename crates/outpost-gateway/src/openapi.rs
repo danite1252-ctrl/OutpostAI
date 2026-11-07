@@ -153,6 +153,7 @@ use crate::routes::{
         crate::routines::runs,
         crate::routines::set_link,
         crate::routines::hook,
+        crate::activity::list,
         crate::routines::get_quiet,
         crate::routines::set_quiet,
         crate::persona_templates::add,
@@ -240,6 +241,7 @@ use crate::routes::{
     tags(
         (name = "system", description = "Health, settings, diagnostics (logs and crash reports on this PC) and updates"),
         (name = "routines", description = "Routines: a persona doing something on its own, on a schedule"),
+        (name = "activity", description = "The activity log: every tool call a persona made"),
         (name = "engines", description = "Ollama and ComfyUI: install, start, stop"),
         (name = "models", description = "Hardware, model catalogue and downloads"),
         (name = "chat", description = "Personas, chats with streamed replies, memory"),
