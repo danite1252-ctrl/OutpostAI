@@ -105,7 +105,7 @@ pub async fn job_finished(state: &AppState, job_id: &str) {
     if status != "cancelled" {
         let event = if job.pack_id == crate::train::PACK_ID { "training_finished" } else { "job_finished" };
         let seen = crate::routes::create::finished_view(state, job.clone()).await;
-        let details = format!("{}. {}", seen.title, seen.body).trim().to_string();
+        let details = event_details(&job, &seen);
         crate::routines::happened(state, &job.account_id, event, &job.id, details).await;
     }
     if job.pack_id == crate::train::PACK_ID {
@@ -170,4 +170,31 @@ mod tests {
         assert_eq!(m["id"].as_str().unwrap().len(), 36);
         assert!(m["at"].as_i64().unwrap() > 0);
     }
+}
+
+/// What a routine started by a finished job is told: what was made, with what, and from what.
+fn event_details(job: &jobs::Job, seen: &crate::routes::create::FinishedJob) -> String {
+    let mut lines = vec![format!("{}.", seen.title)];
+    if let Some(p) = outpost_engines::packs::find(&job.pack_id) {
+        lines.push(format!("Made with: {}", p.name));
+    }
+    let inputs: Value = serde_json::from_str(&job.inputs).unwrap_or(Value::Null);
+    if let Some(map) = inputs.as_object() {
+        if let Some(p) = map.get("prompt").and_then(Value::as_str).filter(|p| !p.trim().is_empty()) {
+            lines.push(format!("Prompt: {}", p.chars().take(400).collect::<String>()));
+        }
+        for (key, value) in map.iter().filter(|(k, _)| k.as_str() != "prompt").take(8) {
+            let shown = match value {
+                Value::String(s) if !s.is_empty() && s.len() <= 200 => s.clone(),
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                _ => continue,
+            };
+            lines.push(format!("{key}: {shown}"));
+        }
+    }
+    if seen.status != JobStatus::Done && !seen.body.is_empty() {
+        lines.push(format!("What went wrong: {}", seen.body));
+    }
+    lines.join("\n")
 }
