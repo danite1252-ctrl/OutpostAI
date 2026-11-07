@@ -41,6 +41,7 @@ pub mod updates;
 pub mod vault;
 pub mod webhooks;
 pub mod workspace;
+pub mod wyoming;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, OnceLock};
@@ -350,6 +351,7 @@ pub fn router(state: AppState) -> Router {
             post(voice::transcribe).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
         )
         .route("/api/voice/speak", post(voice::speak))
+        .route("/api/voice/wyoming", get(wyoming::get_settings).put(wyoming::set_settings))
         .route("/v1/audio/speech", post(voice::openai_speech))
         .route(
             "/v1/audio/transcriptions",
@@ -482,6 +484,11 @@ pub async fn serve_state(state: AppState) -> anyhow::Result<()> {
     // The one call to the internet: a daily look for a newer release (can be switched off).
     tokio::spawn(updates::background(state.clone()));
     tokio::spawn(routines::scheduler(state.clone()));
+    // Home Assistant voice (Wyoming), when an owner has turned it on.
+    {
+        let state = state.clone();
+        tokio::spawn(async move { wyoming::apply(&state).await });
+    }
     // With network access on, phones get the encrypted port next door, and the
     // Outpost announces itself on the network.
     let background = start_remote_access(&state).await;

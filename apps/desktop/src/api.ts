@@ -1894,7 +1894,22 @@ export interface ListeningModel {
   downloaded: boolean;
 }
 
+/** Home Assistant voice (Wyoming): Outpost's listening and voices offered to Home Assistant. */
+export interface WyomingStatus {
+  on: boolean;
+  port: number;
+  /** Only these addresses may connect (empty: anything on this home network). */
+  allow: string[];
+  running: boolean;
+  problem: string | null;
+  /** This server's address on the home network, for Home Assistant. */
+  host: string | null;
+}
+
 export const voiceApi = {
+  wyoming: (token: string) => request<WyomingStatus>("GET", "/api/voice/wyoming", { token }),
+  setWyoming: (token: string, s: { on: boolean; port: number; allow: string[] }) =>
+    request<WyomingStatus>("PUT", "/api/voice/wyoming", { token, body: s }),
   status: (token: string) => request<VoiceStatus>("GET", "/api/voice", { token }),
   setListening: (token: string, model: string) => request<VoiceStatus>("PUT", "/api/voice/listening", { token, body: { model } }),
   transcribe: (token: string, audio: string, language?: string) =>

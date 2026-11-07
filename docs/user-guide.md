@@ -375,6 +375,21 @@ Install **Voice** in **Settings › Engines**, then:
 Speech is recognised by Whisper on your PC. The phone's **Mic** button uses the phone's own
 recogniser (on the phone where it can, otherwise the phone's speech service).
 
+### Home Assistant voice devices
+
+Outpost can be the ears and the voice of Home Assistant's voice assistants (a Voice Preview
+Edition, an ESP32 satellite, the Assist button in its app):
+
+1. On the PC: **Settings › Voice › Home Assistant voice**, turn it on. Only this home network
+   can use it; to allow just Home Assistant, type its address in **Only from**.
+2. In Home Assistant: **Settings › Devices & services › Add integration › Wyoming Protocol**,
+   with the host and port Outpost shows (it may find Outpost by itself).
+3. In **Settings › Voice assistants**, pick **Outpost speech-to-text** and an **Outpost voice**
+   for your assistant.
+
+Speech is heard by Outpost's Whisper and spoken by its voices, so they work offline and sound
+the same as in Outpost. (The persona as Home Assistant's conversation agent comes next.)
+
 ## The phone app
 
 1. Install **`Outpost-<version>.apk`** from

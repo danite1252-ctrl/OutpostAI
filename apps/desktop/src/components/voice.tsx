@@ -292,6 +292,8 @@ interface EarEvents {
  */
 class Ear {
   muted = false;
+  /** Waiting for a yes or no: a short word counts (otherwise under 0.3 s is dropped as a cough). */
+  brief = false;
   private ctx: AudioContext;
   private node: ScriptProcessorNode;
   private pending: number[] = [];
@@ -397,7 +399,7 @@ class Ear {
       this.loudRun = 0;
       const said = this.said;
       this.said = [];
-      if (this.spoken >= 15) this.on.utterance(wavDataUrl(said));
+      if (this.spoken >= (this.brief ? 5 : 15)) this.on.utterance(wavDataUrl(said));
       else this.on.discard();
     }
   }
@@ -411,7 +413,7 @@ let talkOverReplies = true;
 export function isYes(text: string) {
   const t = text.toLowerCase().replace(/[^a-z' ]/g, " ").trim();
   if (/\b(no|nope|don't|dont|stop|cancel|wait|not)\b/.test(t)) return false;
-  return /\b(yes|yeah|yep|yup|sure|ok|okay|please|correct|right|go ahead|do it|go for it|affirmative|absolutely|definitely)\b/.test(t);
+  return /\b(yes|yeah|yea|yep|yup|ya|yah|aye|sure|ok|okay|please|correct|right|go ahead|do it|go for it|affirmative|absolutely|definitely|confirm|confirmed)\b/.test(t);
 }
 
 function isEcho(heard: string, reply: string) {
@@ -551,6 +553,9 @@ export function HandsFree({
                 confirm: async (question) => {
                   if (!alive()) return false;
                   queue.current = [];
+                  // A quick "yes" is short: don't drop it as a cough.
+                  if (ear.current) ear.current.brief = true;
+                  try {
                   setDoing(question);
                   go("speaking");
                   speaking.current = question;
@@ -572,6 +577,9 @@ export function HandsFree({
                   }
                   setDoing("No answer: not doing it.");
                   return false;
+                  } finally {
+                    if (ear.current) ear.current.brief = false;
+                  }
                 },
               },
               undefined,

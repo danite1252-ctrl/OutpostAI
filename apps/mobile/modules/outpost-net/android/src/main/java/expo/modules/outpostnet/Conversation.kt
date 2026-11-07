@@ -40,6 +40,8 @@ class Conversation(
   @Volatile private var running = false
   /** Paused: the microphone stays open but nothing is heard. */
   @Volatile var muted = false
+  /** Waiting for a yes or no: a short word counts (otherwise under 300 ms is dropped as a cough). */
+  @Volatile var brief = false
   private var thread: Thread? = null
   private var record: AudioRecord? = null
   private var echo: AcousticEchoCanceler? = null
@@ -238,7 +240,7 @@ class Conversation(
         if (silent >= END_FRAMES * 85 / 100 || said.size >= MAX_FRAMES) {
           inSpeech = false
           loudRun = 0
-          if (spoken >= MIN_SPEECH_FRAMES) {
+          if (spoken >= (if (brief) BRIEF_SPEECH_FRAMES else MIN_SPEECH_FRAMES)) {
             emit("onConverse", mapOf("type" to "utterance", "audio" to wav(said)))
           } else {
             emit("onConverse", mapOf("type" to "discard"))
@@ -276,6 +278,7 @@ class Conversation(
     const val BARGE_IN_FRAMES = 18 // ~360 ms of speech to pause a reply
     const val END_FRAMES = 40 // 800 ms of quiet ends it
     const val MIN_SPEECH_FRAMES = 15 // under 300 ms of speech is a cough or a bump
+    const val BRIEF_SPEECH_FRAMES = 5 // 100 ms: a quick "yes" when one is asked for
     const val MAX_FRAMES = 750 // 15 s
   }
 }

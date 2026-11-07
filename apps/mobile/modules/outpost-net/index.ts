@@ -124,6 +124,8 @@ declare class OutpostNetModule extends NativeModule<Events> {
   /** Open the microphone for a hands-free conversation; with bargeIn, talking stops a reply. */
   converse(bargeIn: boolean): void;
   converseMuted(muted: boolean): void;
+  /** Waiting for a yes or no: short answers count. */
+  converseBrief?(brief: boolean): void;
   stopConversation(): void;
   /** Whether Outpost may install apps, and whether its own updates can skip the prompt. */
   updateStatus(): { canInstall: boolean; silent: boolean; sdk: number };

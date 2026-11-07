@@ -35,7 +35,7 @@ function isEcho(heard: string, reply: string) {
 function isYes(text: string) {
   const t = text.toLowerCase().replace(/[^a-z' ]/g, " ").trim();
   if (/\b(no|nope|don't|dont|stop|cancel|wait|not)\b/.test(t)) return false;
-  return /\b(yes|yeah|yep|yup|sure|ok|okay|please|correct|right|go ahead|do it|go for it|affirmative|absolutely|definitely)\b/.test(t);
+  return /\b(yes|yeah|yea|yep|yup|ya|yah|aye|sure|ok|okay|please|correct|right|go ahead|do it|go for it|affirmative|absolutely|definitely|confirm|confirmed)\b/.test(t);
 }
 
 /** Something said: a recording to work out, or words already worked out. */
@@ -132,6 +132,8 @@ export default function HandsFree({
       setDoing(question);
       go("speaking");
       speaking.current = question;
+      // A quick "yes" is short: don't drop it as a cough.
+      OutpostNet.converseBrief?.(true);
       try {
         await say(api, question, persona?.id ?? null, "hands-free");
       } catch {
@@ -143,6 +145,7 @@ export default function HandsFree({
       }
       const text = await Promise.race([answered, new Promise<string>((r) => setTimeout(() => r(""), 20_000))]);
       confirming.current = null;
+      OutpostNet.converseBrief?.(false);
       const ok = live.current && isYes(text);
       setDoing(ok ? "Going ahead…" : text ? "Not doing it." : "No answer: not doing it.");
       go("thinking");

@@ -210,6 +210,9 @@ class PhoneVoice(
 
   fun converseMuted(muted: Boolean) = main.post { conversation?.muted = muted }
 
+  /** Waiting for a yes or no: short answers count. */
+  fun converseBrief(brief: Boolean) = main.post { conversation?.brief = brief }
+
   fun stopConversation() = main.post { stopConversationNow() }
 
   private fun stopConversationNow() {

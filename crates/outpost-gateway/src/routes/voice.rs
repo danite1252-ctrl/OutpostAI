@@ -131,6 +131,18 @@ pub async fn listening_in_use(state: &AppState) -> String {
     }
 }
 
+/// The voice service's voices (none when it isn't answering).
+pub async fn voice_ids() -> Vec<String> {
+    let Ok(client) = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(60)).build() else {
+        return Vec::new();
+    };
+    let Ok(r) = client.get(voice_url("/voices")).send().await else {
+        return Vec::new();
+    };
+    let v: Value = r.json().await.unwrap_or(Value::Null);
+    v["voices"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect()
+}
+
 /// Whether voice is ready, and its voices.
 #[utoipa::path(get, path = "/api/voice", tag = "voice", security(("bearer" = [])),
     responses((status = 200, description = "Voice status", body = VoiceStatus)))]
@@ -142,22 +154,9 @@ pub async fn status(State(state): State<AppState>, _auth: Auth) -> Json<VoiceSta
         .find(|e| e.id == EngineId::Voice)
         .map(|e| e.state)
         .unwrap_or(EngineState::NotInstalled);
-    let mut voices = Vec::new();
+    let mut voices: Vec<VoiceInfo> = Vec::new();
     if matches!(st, EngineState::Running | EngineState::External) {
-        let client = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(60)).build();
-        if let Ok(client) = client {
-            if let Ok(r) = client.get(voice_url("/voices")).send().await {
-                if let Ok(v) = r.json::<Value>().await {
-                    voices = v["voices"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str)
-                        .map(describe_voice)
-                        .collect();
-                }
-            }
-        }
+        voices = voice_ids().await.iter().map(|v| describe_voice(v)).collect();
     }
     // English first, then by language and name.
     voices.sort_by_key(|v| (!v.language.ends_with("English"), v.language.clone(), v.name.clone()));

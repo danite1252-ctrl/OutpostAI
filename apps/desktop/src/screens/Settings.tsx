@@ -1,3 +1,4 @@
+import { HomeAssistantVoice } from "../components/wyoming";
 import { NotificationsPanel } from "../components/notify";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, SERVER, secretProblem, type Account, type EnginesStatus, type Role, type SignInResponse } from "../api";
@@ -84,8 +85,9 @@ export default function Settings({
         <EnginesPanel token={auth.token} canManage={isOwner} status={engines} onChanged={onEnginesChanged} />
       </Section>
 
-      <Section id="voice" title="Voice" summary="How Outpost listens">
+      <Section id="voice" title="Voice" summary="How Outpost listens, and Home Assistant">
         <ListeningPanel token={auth.token} canManage={isOwner} />
+        {isOwner && <HomeAssistantVoice token={auth.token} />}
       </Section>
 
       <Section id="app" title="Updates, notifications and this window" summary={`Outpost ${version}`}>

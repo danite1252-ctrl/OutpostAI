@@ -113,8 +113,15 @@ pub struct LogTo {
     pub zone: jiff::tz::TimeZone,
 }
 
+/// A tool's own name, without a namespace some servers put in front: Home Assistant names
+/// its tools `intent__HassTurnOff` and `homeassistant__GetLiveContext`.
+pub fn base_tool(name: &str) -> &str {
+    name.rsplit("__").next().filter(|b| !b.is_empty()).unwrap_or(name)
+}
+
 /// A tool's name as words: `HassTurnOff` → "turn off", `search_files` → "search files".
 pub fn tool_words(name: &str) -> String {
+    let name = base_tool(name);
     let mut words: Vec<String> = Vec::new();
     let mut cur = String::new();
     let chars: Vec<char> = name.chars().collect();
@@ -140,6 +147,75 @@ pub fn tool_words(name: &str) -> String {
         words.remove(0);
     }
     words.join(" ")
+}
+
+/// One of Home Assistant's tools (its names start "Hass", plus GetLiveContext).
+fn is_home_assistant(tool: &str) -> bool {
+    let b = base_tool(tool);
+    b.starts_with("Hass") || b == "GetLiveContext"
+}
+
+/// The devices in GetLiveContext's answer: (name, domain, areas).
+pub fn live_devices(text: &str) -> Vec<(String, String, String)> {
+    let mut out: Vec<(String, String, String)> = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        let field = |key: &str| t.strip_prefix(key).map(|v| v.trim().trim_matches(['\'', '"']).to_string());
+        if let Some(name) = field("- names:") {
+            out.push((name, String::new(), String::new()));
+        } else if let (Some(last), Some(d)) = (out.last_mut(), field("domain:")) {
+            last.1 = d;
+        } else if let (Some(last), Some(a)) = (out.last_mut(), field("areas:")) {
+            last.2 = a;
+        }
+    }
+    out
+}
+
+/// After "no device matched": the devices Home Assistant has (in the area asked, of the kind
+/// asked), so even a small model can try again with the right name.
+pub fn devices_hint(live: &str, args: &Value) -> Option<String> {
+    let want = |key: &str| -> Option<String> {
+        match args.get(key)? {
+            Value::String(s) => Some(s.to_lowercase()),
+            Value::Array(a) => a.first().and_then(Value::as_str).map(str::to_lowercase),
+            _ => None,
+        }
+    };
+    let (area, domain) = (want("area"), want("domain"));
+    let all = live_devices(live);
+    let pick = |by_area: bool| -> Vec<&(String, String, String)> {
+        all.iter()
+            .filter(|(_, d, a)| {
+                (!by_area || area.as_ref().map_or(true, |x| a.to_lowercase().contains(x.as_str())))
+                    && domain.as_ref().map_or(true, |x| d.to_lowercase() == *x)
+            })
+            .collect()
+    };
+    // In that area if any are; else everywhere.
+    let mut found = pick(true);
+    let mut place = area.clone().map(|a| format!(" in {a}")).unwrap_or_default();
+    if found.is_empty() {
+        found = pick(false);
+        place.clear();
+    }
+    if found.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = found
+        .iter()
+        .take(30)
+        .map(|(n, d, a)| match (d.is_empty(), a.is_empty()) {
+            (false, false) => format!("\"{n}\" ({d}, {a})"),
+            (false, true) => format!("\"{n}\" ({d})"),
+            _ => format!("\"{n}\""),
+        })
+        .collect();
+    Some(format!(
+        "\n\nThe devices Home Assistant has{place}: {}. Call the same tool again with the exact name of the one the user \
+         meant (and no area). If more than one could be meant, ask which.",
+        names.join(", ")
+    ))
 }
 
 /// The arguments, briefly, for saying aloud ("kitchen lamp, 50").
@@ -303,7 +379,7 @@ impl PcTools {
 
     /// Home Assistant's tools are here (their names start "Hass", plus GetLiveContext).
     fn has_home_assistant(&self) -> bool {
-        self.servers.iter().any(|s| s.tools.iter().any(|t| t.name.starts_with("Hass") || t.name == "GetLiveContext"))
+        self.servers.iter().any(|s| s.tools.iter().any(|t| is_home_assistant(&t.name)))
     }
 
     /// The tool definitions for Ollama.
@@ -490,17 +566,7 @@ impl PcTools {
         if let Via::Outpost(ctx) = &self.routes[e.server] {
             return self.outpost(ctx, &e.tool, &args, shown).await;
         }
-        let request = json!({ "op": "mcp", "server": server.id, "tool": e.tool, "arguments": args.clone() });
-        let answer = match &self.routes[e.server] {
-            Via::App => self.relay.ask_within(&self.events, &self.chat_id, request, CALL_WITHIN, "file_request").await,
-            Via::Device { tools, session_id } => tools.call(session_id, request, CALL_WITHIN).await,
-            Via::Outpost(_) => unreachable!("handled above"),
-            Via::Server { state, who } => match tokio::time::timeout(CALL_WITHIN, crate::server_tools::call(state, &server.id, &e.tool, args, who)).await {
-                Ok(Ok(r)) => Ok(json!({ "text": r.text, "is_error": r.is_error })),
-                Ok(Err(err)) => Err(err.trim_start_matches("needs sign-in: ").to_string()),
-                Err(_) => Err("The tool took too long.".into()),
-            },
-        };
+        let answer = self.dispatch(e.server, &e.tool, args.clone()).await;
         match answer {
             Ok(v) => {
                 let text = v.get("text").and_then(Value::as_str).unwrap_or_default();
@@ -508,6 +574,17 @@ impl PcTools {
                 let mut reply: String = text.chars().take(ANSWER_LIMIT).collect();
                 if text.chars().count() > ANSWER_LIMIT {
                     reply.push_str("\n[... the rest was cut off]");
+                }
+                // Home Assistant found no device by that name: say which it has (small models
+                // often guess "lamp" for "Kitchen Lamp" and give up).
+                if is_error && is_home_assistant(&e.tool) && text.to_lowercase().contains("no entities matched") {
+                    if let Some(live) = server.tools.iter().find(|t| base_tool(&t.name) == "GetLiveContext").map(|t| t.name.clone()) {
+                        if let Ok(v) = self.dispatch(e.server, &live, json!({})).await {
+                            if let Some(hint) = v.get("text").and_then(Value::as_str).and_then(|t| devices_hint(t, &args)) {
+                                reply.push_str(&hint);
+                            }
+                        }
+                    }
                 }
                 if reply.trim().is_empty() {
                     reply = "(no output)".into();
@@ -525,6 +602,22 @@ impl PcTools {
 }
 
 impl PcTools {
+    /// Send one call to where its server lives; the answer as `{text, is_error}`.
+    async fn dispatch(&self, server: usize, tool: &str, args: Value) -> Result<Value, String> {
+        let id = &self.servers[server].id;
+        let request = json!({ "op": "mcp", "server": id, "tool": tool, "arguments": args.clone() });
+        match &self.routes[server] {
+            Via::App => self.relay.ask_within(&self.events, &self.chat_id, request, CALL_WITHIN, "file_request").await,
+            Via::Device { tools, session_id } => tools.call(session_id, request, CALL_WITHIN).await,
+            Via::Outpost(_) => Err("Not a tool server.".into()),
+            Via::Server { state, who } => match tokio::time::timeout(CALL_WITHIN, crate::server_tools::call(state, id, tool, args, who)).await {
+                Ok(Ok(r)) => Ok(json!({ "text": r.text, "is_error": r.is_error })),
+                Ok(Err(err)) => Err(err.trim_start_matches("needs sign-in: ").to_string()),
+                Err(_) => Err("The tool took too long.".into()),
+            },
+        }
+    }
+
     /// Outpost's own tools: a routine is made only once the person says yes (in the chat, or
     /// aloud when hands-free already asked).
     async fn outpost(&self, ctx: &crate::outpost_tools::Context, tool: &str, args: &Value, shown: String) -> Outcome {
@@ -653,6 +746,30 @@ mod tests {
         assert!(!out.action.failed);
         let missing = t.run("nope", &json!({})).await;
         assert!(missing.action.failed);
+    }
+
+    #[test]
+    fn home_assistants_namespaced_tools_are_known() {
+        assert_eq!(base_tool("intent__HassTurnOff"), "HassTurnOff");
+        assert_eq!(base_tool("HassTurnOff"), "HassTurnOff");
+        assert_eq!(tool_words("intent__HassTurnOff"), "turn off");
+        assert!(reads("homeassistant__GetLiveContext", None), "a look-up, so it never asks");
+        assert!(!reads("intent__HassTurnOn", None));
+        assert!(is_home_assistant("homeassistant__GetLiveContext") && is_home_assistant("intent__HassTurnOff"));
+        let (tx, _rx) = mpsc::channel(1);
+        let ha = PcTools::new(Relay::default(), "c", tx, vec![(server("Home Assistant", &["intent__HassTurnOff", "homeassistant__GetLiveContext"]), Via::App)], false).unwrap();
+        assert!(ha.instructions().contains("call GetLiveContext first"));
+    }
+
+    #[test]
+    fn no_device_matched_brings_the_names_home_assistant_has() {
+        let live = "Live Context: An overview of the areas and the devices in this smart home:\n- names: Kitchen Lamp\n  domain: light\n  state: 'off'\n  areas: Kitchen\n- names: Kitchen AC\n  domain: climate\n  areas: Kitchen\n- names: Lounge Lamp\n  domain: light\n  areas: Lounge\n";
+        assert_eq!(live_devices(live).len(), 3);
+        let hint = devices_hint(live, &json!({ "area": "kitchen", "name": "lamp" })).unwrap();
+        assert!(hint.contains("\"Kitchen Lamp\" (light, Kitchen)") && hint.contains("Kitchen AC") && !hint.contains("Lounge"), "{hint}");
+        let lights = devices_hint(live, &json!({ "name": "lamp", "domain": ["light"] })).unwrap();
+        assert!(lights.contains("Lounge Lamp") && !lights.contains("Kitchen AC"), "{lights}");
+        assert!(devices_hint("nothing here", &json!({})).is_none());
     }
 
     #[test]

@@ -335,6 +335,7 @@ class OutpostNetModule : Module() {
     Function("resumePlaying") { voice.resumePlaying(); Unit }
     Function("converse") { bargeIn: Boolean -> voice.converse(bargeIn); Unit }
     Function("converseMuted") { muted: Boolean -> voice.converseMuted(muted); Unit }
+    Function("converseBrief") { brief: Boolean -> voice.converseBrief(brief); Unit }
     Function("stopConversation") { voice.stopConversation(); Unit }
 
     /** The SHA-256 of the certificate an address presents, before anything is trusted. */
