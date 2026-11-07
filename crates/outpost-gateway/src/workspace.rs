@@ -148,6 +148,15 @@ pub struct Workspace {
     pub events: mpsc::Sender<Event>,
     /// Commands may run in server folders for this account (owners; others when sandboxed).
     pub server_commands: bool,
+    /// A routine's run: nobody is there to answer questions.
+    pub unattended: Option<Unattended>,
+}
+
+/// How a routine's run (nobody watching) works with folders.
+#[derive(Debug, Clone, Copy)]
+pub struct Unattended {
+    /// Commands already allowed "always" in the folder may run (never others).
+    pub commands: bool,
 }
 
 /// What a tool call came to: the model's answer, and what to show under the reply.
@@ -206,6 +215,13 @@ impl Workspace {
              need the user's OK each time). The user may be asked to allow a command first; if they skip it, don't run \
              it again. Never say a build passed unless run_command showed it.",
         );
+        if self.unattended.is_some() {
+            t.push_str(
+                "\n\nThis is a routine running on its own: only commands the user has already allowed \"always\" in \
+                 that folder run, and nobody can be asked to allow others. If one is refused, don't try it again: \
+                 say in your answer which command needs allowing.",
+            );
+        }
         if self.server_commands && self.folders.iter().any(|f| f.kind != "pc") {
             t.push_str(
                 "\n\nFolders on the Outpost server run on Linux: use `./gradlew build` (or `gradlew build`, which \
@@ -447,6 +463,9 @@ impl Workspace {
 
     /// Commands can run: a folder on a PC, or a server folder this account may run them in.
     pub fn has_commands(&self) -> bool {
+        if self.unattended.is_some_and(|u| !u.commands) {
+            return false;
+        }
         self.folders.iter().any(|f| f.kind == "pc" || self.server_commands)
     }
 
@@ -718,6 +737,17 @@ impl Workspace {
         let rules = CommandRules::load(&self.state, &folder.id).await;
         if rules.allows(command) {
             return Ok(());
+        }
+        // A routine: nobody to ask.
+        if self.unattended.is_some() {
+            return Err(Outcome {
+                reply: format!(
+                    "`{command}` didn't run: this routine runs on its own, and only commands allowed \"always\" in {shown} \
+                     run then. Don't try it again; tell the user to run it once in this chat and choose Always if it should run."
+                ),
+                action: note("not allowed in routines"),
+                more: Vec::new(),
+            });
         }
         let always = always_label(command);
         let question = format!("{verb} `{command}` in {shown}?");

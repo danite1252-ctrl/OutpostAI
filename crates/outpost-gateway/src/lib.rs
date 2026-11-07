@@ -251,6 +251,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/chats/{id}/live", get(chat::live))
         .route("/api/chats/{id}/watch", get(chat::watch))
         .route("/api/routines", get(routines::list).post(routines::create))
+        .route("/api/routines/quiet", get(routines::get_quiet).put(routines::set_quiet))
         .route("/api/routines/{id}", put(routines::update).delete(routines::delete))
         .route("/api/routines/{id}/run", post(routines::run_now))
         .route("/api/routines/{id}/runs", get(routines::runs))

@@ -2,7 +2,7 @@
 // a morning brief"). Each run is a reply in the routine's own chat.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, GATEWAY, SERVER, routinesApi, type Notify, type Persona, type Routine, type RoutineRun, type Schedule } from "../api";
+import { api, GATEWAY, SERVER, routinesApi, type Notify, type Persona, type QuietHours, type Routine, type RoutineAllow, type RoutineRun, type Schedule } from "../api";
 import { Avatar, Button, ErrorNote, Field, areYouSure } from "../components/ui";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -101,6 +101,7 @@ export default function Routines({ token, onOpenChat }: { token: string; onOpenC
         <Button onClick={() => setEditing("new")}>New routine</Button>
       </header>
       <ErrorNote>{error}</ErrorNote>
+      <QuietPanel token={token} act={act} />
 
       {editing && (
         <RoutineEditor
@@ -180,7 +181,7 @@ function RoutineCard({
             {!r.enabled ? (
               <span className="text-muted">Paused</span>
             ) : running ? (
-              <span className="text-amber">Running now…</span>
+              <span className="text-amber">{r.last_note ? r.last_note : "Running now…"}</span>
             ) : r.next_at ? (
               <span className="text-soft">Next: {when(r.next_at)}</span>
             ) : r.schedule.kind === "link" || r.schedule.kind === "event" ? (
@@ -395,6 +396,7 @@ function RoutineEditor({
   const [at, setAt] = useState(localInput(s?.kind === "once" ? s.at : Math.floor(Date.now() / 1000) + 3600));
   const [notify, setNotify] = useState<Notify>(routine?.notify ?? "always");
   const [event, setEvent] = useState<"job_finished" | "training_finished">(s?.kind === "event" ? s.event : "job_finished");
+  const [allow, setAllow] = useState<RoutineAllow>(routine?.allow ?? { tools: true, changes: "wait", commands: true });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -421,7 +423,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule(), notify };
+      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule(), notify, allow };
       onSaved(routine ? await routinesApi.update(token, routine.id, input) : await routinesApi.create(token, input));
     } catch (e) {
       setError(message(e));
@@ -559,6 +561,30 @@ function RoutineEditor({
         )}
       </fieldset>
 
+      <fieldset className="flex flex-col gap-2 text-sm">
+        <legend className="mb-2 text-sm text-muted">While it runs on its own (nobody is there to say OK)</legend>
+        <label className="flex cursor-pointer items-center gap-2">
+          <input type="checkbox" checked={allow.tools} onChange={(e) => setAllow({ ...allow, tools: e.target.checked })} />
+          Use its chat's tools (web search, Google, the tools on your PC)
+        </label>
+        <label className="flex cursor-pointer items-center gap-2">
+          <input
+            type="checkbox"
+            checked={allow.changes === "apply"}
+            onChange={(e) => setAllow({ ...allow, changes: e.target.checked ? "apply" : "wait" })}
+          />
+          Make file changes in its chat's folders straight away (otherwise they wait for you to apply them)
+        </label>
+        <label className="flex cursor-pointer items-center gap-2">
+          <input type="checkbox" checked={allow.commands} onChange={(e) => setAllow({ ...allow, commands: e.target.checked })} />
+          Run commands, but only ones you've allowed "Always" in that folder
+        </label>
+        <p className="text-xs text-muted">
+          To let it run a command, run it once in the routine's chat and choose Always. If its model runs on a lent PC that's off
+          or paused, it waits up to an hour and tries again.
+        </p>
+      </fieldset>
+
       <ErrorNote>{error}</ErrorNote>
       <div className="flex gap-2">
         <Button disabled={busy || !name.trim() || !instructions.trim()} onClick={() => void save()}>
@@ -569,5 +595,58 @@ function RoutineEditor({
         </Button>
       </div>
     </section>
+  );
+}
+
+/** Quiet hours: news from runs that finish in them is told when they end. */
+function QuietPanel({ token, act }: { token: string; act: (work: () => Promise<unknown>) => Promise<void> }) {
+  const [quiet, setQuiet] = useState<QuietHours | null | undefined>(undefined);
+  const [from, setFrom] = useState("22:00");
+  const [to, setTo] = useState("07:00");
+  useEffect(() => {
+    routinesApi.quiet(token).then(
+      (q) => {
+        setQuiet(q.quiet);
+        if (q.quiet) {
+          setFrom(q.quiet.from);
+          setTo(q.quiet.to);
+        }
+      },
+      () => setQuiet(null),
+    );
+  }, [token]);
+  if (quiet === undefined) return null;
+  const save = (q: QuietHours | null) => act(async () => setQuiet((await routinesApi.setQuiet(token, q)).quiet));
+  const changed = quiet && (quiet.from !== from || quiet.to !== to);
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line px-4 py-3 text-sm">
+      <label className="flex cursor-pointer items-center gap-2">
+        <input type="checkbox" checked={!!quiet} onChange={(e) => void save(e.target.checked ? { from, to } : null)} />
+        Quiet hours
+      </label>
+      <input
+        type="time"
+        aria-label="Quiet from"
+        className="min-h-9 rounded-lg border border-line bg-surface px-2 text-ink"
+        value={from}
+        onChange={(e) => setFrom(e.target.value)}
+      />
+      <span className="text-muted">to</span>
+      <input
+        type="time"
+        aria-label="Quiet until"
+        className="min-h-9 rounded-lg border border-line bg-surface px-2 text-ink"
+        value={to}
+        onChange={(e) => setTo(e.target.value)}
+      />
+      {changed && (
+        <Button variant="ghost" onClick={() => void save({ from, to })}>
+          Save
+        </Button>
+      )}
+      <span className="basis-full text-xs text-muted">
+        Routines still run, but you're only told when quiet hours end.
+      </span>
+    </div>
   );
 }

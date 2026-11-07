@@ -36,11 +36,22 @@ interface Routine {
   enabled: boolean;
   notify: Notify;
   has_link: boolean;
+  allow: Allow;
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
   last_status: "ok" | "failed" | "running" | null;
   last_note: string | null;
+}
+/** What a routine may do while nobody's watching. */
+interface Allow {
+  tools: boolean;
+  changes: "wait" | "apply";
+  commands: boolean;
+}
+interface Quiet {
+  from: string;
+  to: string;
 }
 interface Persona {
   id: string;
@@ -140,6 +151,7 @@ export function RoutinesScreen({ api, onClose, onOpenChat }: { api: Outpost; onC
       <P muted>A persona doing something on its own, on a schedule. Each run is a reply in the routine's own chat.</P>
       <Button title="New routine" onPress={() => setEditing("new")} />
       <ErrorText>{error}</ErrorText>
+      <QuietRow api={api} act={act} />
       <ListState
         loading={routines === null}
         error={null}
@@ -163,7 +175,7 @@ export function RoutinesScreen({ api, onClose, onOpenChat }: { api: Outpost; onC
                   {!r.enabled
                     ? "Paused"
                     : running
-                      ? "Running now…"
+                      ? (r.last_note ?? "Running now…")
                       : r.next_at
                         ? `Next: ${when(r.next_at)}`
                         : r.schedule.kind === "link" || r.schedule.kind === "event"
@@ -302,6 +314,7 @@ function RoutineEditor({
   const [onceTime, setOnceTime] = useState(`${pad(onceAt.getHours())}:${pad(onceAt.getMinutes())}`);
   const [notify, setNotify] = useState<Notify>(routine?.notify ?? "always");
   const [event, setEvent] = useState<"job_finished" | "training_finished">(sch?.kind === "event" ? sch.event : "job_finished");
+  const [allow, setAllow] = useState<Allow>(routine?.allow ?? { tools: true, changes: "wait", commands: true });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -337,7 +350,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, notify, ...myZone() };
+      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, notify, allow, ...myZone() };
       onSaved(routine ? await api.json<Routine>("PUT", `/api/routines/${routine.id}`, body) : await api.json<Routine>("POST", "/api/routines", body));
     } catch (e) {
       setError(message(e));
@@ -421,6 +434,20 @@ function RoutineEditor({
       {notify === "worth" && (
         <P muted>The persona decides: when there's nothing new it says so quietly in the chat. Failures are always told.</P>
       )}
+      <Text style={s.label}>While it runs on its own (nobody is there to say OK)</Text>
+      <View style={{ gap: 6 }}>
+        <Chip label="Use its chat's tools (web search, your PC's tools)" active={allow.tools} onPress={() => setAllow({ ...allow, tools: !allow.tools })} />
+        <Chip
+          label="Make file changes straight away"
+          active={allow.changes === "apply"}
+          onPress={() => setAllow({ ...allow, changes: allow.changes === "apply" ? "wait" : "apply" })}
+        />
+        <Chip label={'Run commands allowed "Always" in the folder'} active={allow.commands} onPress={() => setAllow({ ...allow, commands: !allow.commands })} />
+      </View>
+      <P muted>
+        File changes otherwise wait for you to apply them. If its model runs on a lent PC that's off or paused, it waits up to an hour and
+        tries again.
+      </P>
       <ErrorText>{error}</ErrorText>
       <Button
         title={routine ? "Save" : "Make the routine"}
@@ -429,5 +456,43 @@ function RoutineEditor({
         onPress={() => void save()}
       />
     </Screen>
+  );
+}
+
+/** Quiet hours: news from runs that finish in them is told when they end. */
+function QuietRow({ api, act }: { api: Outpost; act: (work: () => Promise<unknown>) => Promise<void> }) {
+  const [quiet, setQuiet] = useState<Quiet | null | undefined>(undefined);
+  const [from, setFrom] = useState("22:00");
+  const [to, setTo] = useState("07:00");
+  useEffect(() => {
+    api.get<{ quiet: Quiet | null }>("/api/routines/quiet").then(
+      (q) => {
+        setQuiet(q.quiet);
+        if (q.quiet) {
+          setFrom(q.quiet.from);
+          setTo(q.quiet.to);
+        }
+      },
+      () => setQuiet(null),
+    );
+  }, [api]);
+  if (quiet === undefined) return null;
+  const save = (q: Quiet | null) =>
+    act(async () => setQuiet((await api.json<{ quiet: Quiet | null }>("PUT", "/api/routines/quiet", { quiet: q })).quiet));
+  const changed = !!quiet && (quiet.from !== from.trim() || quiet.to !== to.trim());
+  return (
+    <View style={[s.card, { gap: 8 }]}>
+      <Chip label={quiet ? `Quiet hours on (${quiet.from} to ${quiet.to})` : "Quiet hours off"} active={!!quiet} onPress={() => void save(quiet ? null : { from: from.trim(), to: to.trim() })} />
+      <View style={s.row}>
+        <View style={{ flex: 1 }}>
+          <Field label="From" value={from} onChangeText={setFrom} keyboardType="numbers-and-punctuation" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Field label="To" value={to} onChangeText={setTo} keyboardType="numbers-and-punctuation" />
+        </View>
+      </View>
+      {changed && <Button title="Save quiet hours" onPress={() => void save({ from: from.trim(), to: to.trim() })} />}
+      <P muted>Routines still run, but you're only told when quiet hours end.</P>
+    </View>
   );
 }

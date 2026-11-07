@@ -1908,6 +1908,8 @@ export interface Routine {
   notify: Notify;
   /** It can be started from its secret link. */
   has_link: boolean;
+  /** What it may do while it runs on its own. */
+  allow: RoutineAllow;
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -1918,7 +1920,24 @@ export interface Routine {
 /** When a routine tells you: every run, only with news (and failures), only failures, never. */
 export type Notify = "always" | "worth" | "failures" | "never";
 
+/** What a routine may do while nobody's watching. */
+export interface RoutineAllow {
+  /** The chat's tools (web search, Google, the tools on your PC...). */
+  tools: boolean;
+  /** File changes in its chat's folders: wait for you to apply them, or made straight away. */
+  changes: "wait" | "apply";
+  /** Commands, only those already allowed "always" in the folder. */
+  commands: boolean;
+}
+
+/** Quiet hours: news from runs that finish in them waits until they end. */
+export interface QuietHours {
+  from: string;
+  to: string;
+}
+
 export interface RoutineInput {
+  allow?: RoutineAllow;
   name?: string;
   notify?: Notify;
   persona_id?: string;
@@ -1961,4 +1980,7 @@ export const routinesApi = {
   /** A new secret link (the old one stops working), or none. The token is shown this once. */
   setLink: (token: string, id: string, on: boolean) =>
     request<{ routine: Routine; token: string | null }>("PUT", `/api/routines/${id}/link`, { token, body: { on } }),
+  quiet: (token: string) => request<{ quiet: QuietHours | null }>("GET", "/api/routines/quiet", { token }),
+  setQuiet: (token: string, quiet: QuietHours | null) =>
+    request<{ quiet: QuietHours | null }>("PUT", "/api/routines/quiet", { token, body: { quiet } }),
 };

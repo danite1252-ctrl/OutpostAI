@@ -130,6 +130,109 @@ impl Notify {
     }
 }
 
+/// What happens to file changes a routine makes in its chat's folders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Changes {
+    /// They wait for you to apply them (and builds wait for them).
+    #[default]
+    Wait,
+    /// They're made straight away (you can undo them).
+    Apply,
+}
+
+/// What a routine may do while it runs on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Allow {
+    /// The chat's tools (web search, Google, the tools on your PC...).
+    pub tools: bool,
+    pub changes: Changes,
+    /// Commands in its folders, but only those already allowed "always" there: nobody is
+    /// there to OK others.
+    pub commands: bool,
+}
+
+impl Default for Allow {
+    fn default() -> Self {
+        Allow { tools: true, changes: Changes::Wait, commands: true }
+    }
+}
+
+/// Quiet hours: a run that finishes in them is told when they end ("22:00" to "07:00").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Quiet {
+    pub from: String,
+    pub to: String,
+}
+
+impl Quiet {
+    fn check(&self) -> CoreResult<()> {
+        if hour_minute(&self.from).is_none() || hour_minute(&self.to).is_none() {
+            return Err(CoreError::Invalid("Give quiet hours like 22:00 to 07:00.".into()));
+        }
+        if self.from.trim() == self.to.trim() {
+            return Err(CoreError::Invalid("Quiet hours need to start and end at different times.".into()));
+        }
+        Ok(())
+    }
+
+    /// When the quiet hours `t` is in end (Unix seconds), or `None` when `t` isn't in them.
+    pub fn ends(&self, zone: &TimeZone, t: i64) -> Option<i64> {
+        let (fh, fm) = hour_minute(&self.from)?;
+        let (th, tm) = hour_minute(&self.to)?;
+        let (from, to) = (i32::from(fh) * 60 + i32::from(fm), i32::from(th) * 60 + i32::from(tm));
+        let here = Timestamp::from_second(t).ok()?.to_zoned(zone.clone());
+        let m = i32::from(here.hour()) * 60 + i32::from(here.minute());
+        let date = here.date();
+        let end_date = if from < to {
+            if !(from..to).contains(&m) {
+                return None;
+            }
+            date
+        } else if m >= from {
+            date.tomorrow().ok()?
+        } else if m < to {
+            date
+        } else {
+            return None;
+        };
+        Some(end_date.at(th, tm, 0, 0).to_zoned(zone.clone()).ok()?.timestamp().as_second())
+    }
+}
+
+fn quiet_key(account_id: &str) -> String {
+    format!("routines.quiet.{account_id}")
+}
+
+/// My quiet hours, if I have them.
+pub async fn quiet(pool: &SqlitePool, account_id: &str) -> CoreResult<Option<Quiet>> {
+    Ok(crate::settings::get(pool, &quiet_key(account_id))
+        .await?
+        .and_then(|v| serde_json::from_str(&v).ok()))
+}
+
+/// Set my quiet hours, or take them away (`None`).
+pub async fn set_quiet(pool: &SqlitePool, account_id: &str, q: Option<Quiet>) -> CoreResult<Option<Quiet>> {
+    let value = match &q {
+        Some(q) => {
+            q.check()?;
+            serde_json::to_string(&Quiet { from: q.from.trim().into(), to: q.to.trim().into() })
+                .map_err(|e| CoreError::Internal(e.to_string()))?
+        }
+        None => String::new(),
+    };
+    crate::settings::set(pool, &quiet_key(account_id), &value).await?;
+    quiet(pool, account_id).await
+}
+
+/// When a run of this routine finishing at `t` should be told: then, or when my quiet hours end.
+pub async fn tell_time(pool: &SqlitePool, r: &Routine, t: i64) -> i64 {
+    match quiet(pool, &r.account_id).await {
+        Ok(Some(q)) => q.ends(&r.zone(), t).unwrap_or(t),
+        _ => t,
+    }
+}
+
 fn hour_minute(time: &str) -> Option<(i8, i8)> {
     let (h, m) = time.trim().split_once(':')?;
     let (h, m): (i8, i8) = (h.parse().ok()?, m.parse().ok()?);
@@ -163,6 +266,8 @@ pub struct Routine {
     pub notify: Notify,
     /// It can be started from its secret link.
     pub has_link: bool,
+    /// What it may do while it runs on its own.
+    pub allow: Allow,
     /// Its chat (where each run's reply goes), once it has run.
     pub chat_id: Option<String>,
     /// When it runs next (Unix seconds); none when paused or finished.
@@ -194,6 +299,9 @@ struct Row {
     enabled: i64,
     notify: String,
     has_link: i64,
+    allow_tools: i64,
+    allow_changes: String,
+    allow_commands: i64,
     chat_id: Option<String>,
     next_at: Option<i64>,
     last_at: Option<i64>,
@@ -217,6 +325,11 @@ impl Row {
             enabled: self.enabled != 0,
             notify: Notify::parse(&self.notify),
             has_link: self.has_link != 0,
+            allow: Allow {
+                tools: self.allow_tools != 0,
+                changes: if self.allow_changes == "apply" { Changes::Apply } else { Changes::Wait },
+                commands: self.allow_commands != 0,
+            },
             chat_id: self.chat_id,
             next_at: self.next_at,
             last_at: self.last_at,
@@ -229,7 +342,7 @@ impl Row {
 }
 
 const COLUMNS: &str = "id, account_id, name, persona_id, instructions, schedule, time_zone, utc_offset_minutes, enabled, \
-                       notify, hook_hash IS NOT NULL AS has_link, chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
+                       notify, hook_hash IS NOT NULL AS has_link, allow_tools, allow_changes, allow_commands, chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
 
 /// A new routine, or changes to one (fields left out stay as they are).
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
@@ -243,6 +356,8 @@ pub struct RoutineInput {
     pub enabled: Option<bool>,
     /// When it tells you about a run.
     pub notify: Option<Notify>,
+    /// What it may do while it runs on its own.
+    pub allow: Option<Allow>,
     /// The person's time zone ("Australia/Sydney"), from their app.
     pub time_zone: Option<String>,
     /// Minutes ahead of UTC, from their app (used when the zone's name isn't known).
@@ -296,6 +411,13 @@ fn clean_instructions(text: &str) -> CoreResult<String> {
     Ok(text.to_string())
 }
 
+fn changes_str(c: Changes) -> &'static str {
+    match c {
+        Changes::Wait => "wait",
+        Changes::Apply => "apply",
+    }
+}
+
 fn next_for(schedule: &Schedule, enabled: bool, zone: &TimeZone, last: Option<i64>) -> Option<i64> {
     if !enabled {
         return None;
@@ -328,13 +450,15 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: RoutineInput) ->
         crate::personas::get_usable(pool, account_id, p).await?;
     }
     let enabled = input.enabled.unwrap_or(true);
+    let allow = input.allow.unwrap_or_default();
     let zone = zone(input.time_zone.as_deref(), input.utc_offset_minutes);
     let next_at = next_for(&schedule, enabled, &zone, None);
     let t = now();
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO routines (id, account_id, name, persona_id, instructions, schedule, time_zone, utc_offset_minutes, \
-         enabled, notify, next_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         enabled, notify, allow_tools, allow_changes, allow_commands, next_at, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(account_id)
@@ -346,6 +470,9 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: RoutineInput) ->
     .bind(input.utc_offset_minutes)
     .bind(enabled as i64)
     .bind(input.notify.unwrap_or_default().as_str())
+    .bind(allow.tools as i64)
+    .bind(changes_str(allow.changes))
+    .bind(allow.commands as i64)
     .bind(next_at)
     .bind(t)
     .bind(t)
@@ -381,12 +508,14 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Routin
     };
     let enabled = input.enabled.unwrap_or(r.enabled);
     let notify = input.notify.unwrap_or(r.notify);
+    let allow = input.allow.unwrap_or(r.allow);
     let time_zone = input.time_zone.or(r.time_zone.clone());
     let offset = input.utc_offset_minutes.or(r.utc_offset_minutes);
     let next_at = next_for(&schedule, enabled, &zone(time_zone.as_deref(), offset), r.last_at);
     sqlx::query(
         "UPDATE routines SET name = ?, persona_id = ?, instructions = ?, schedule = ?, time_zone = ?, utc_offset_minutes = ?, \
-         enabled = ?, notify = ?, next_at = ?, updated_at = ? WHERE id = ? AND account_id = ?",
+         enabled = ?, notify = ?, allow_tools = ?, allow_changes = ?, allow_commands = ?, next_at = ?, updated_at = ? \
+         WHERE id = ? AND account_id = ?",
     )
     .bind(&name)
     .bind(&persona_id)
@@ -396,6 +525,9 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Routin
     .bind(offset)
     .bind(enabled as i64)
     .bind(notify.as_str())
+    .bind(allow.tools as i64)
+    .bind(changes_str(allow.changes))
+    .bind(allow.commands as i64)
     .bind(next_at)
     .bind(now())
     .bind(id)
@@ -461,6 +593,28 @@ pub async fn set_chat(pool: &SqlitePool, id: &str, chat_id: &str) -> CoreResult<
     Ok(())
 }
 
+/// It was due while a run of it was still going (waiting for a lent PC, say): that time is
+/// skipped, not run straight after.
+pub async fn skip_due(pool: &SqlitePool, r: &Routine) -> CoreResult<()> {
+    let next_at = match &r.schedule {
+        Schedule::Once { .. } => None,
+        s => next_for(s, r.enabled, &r.zone(), Some(now())),
+    };
+    sqlx::query("UPDATE routines SET next_at = ? WHERE id = ?").bind(next_at).bind(&r.id).execute(pool).await?;
+    Ok(())
+}
+
+/// What a run is doing now (waiting for a lent PC...), shown while it runs.
+pub async fn note_running(pool: &SqlitePool, routine_id: &str, run_id: &str, note: &str) -> CoreResult<()> {
+    sqlx::query("UPDATE routine_runs SET note = ? WHERE id = ? AND status = 'running'").bind(note).bind(run_id).execute(pool).await?;
+    sqlx::query("UPDATE routines SET last_note = ? WHERE id = ? AND last_status = 'running'")
+        .bind(note)
+        .bind(routine_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// A run starts: it's marked running, and its next time is worked out now (so it isn't
 /// started twice).
 pub async fn start_run(pool: &SqlitePool, r: &Routine, reason: &str) -> CoreResult<String> {
@@ -500,14 +654,16 @@ pub async fn finish_run(
     message_id: Option<&str>,
     note: Option<&str>,
     tell: bool,
+    tell_at: i64,
 ) -> CoreResult<()> {
     let status = if ok { "ok" } else { "failed" };
-    sqlx::query("UPDATE routine_runs SET finished_at = ?, status = ?, message_id = ?, note = ?, tell = ? WHERE id = ?")
+    sqlx::query("UPDATE routine_runs SET finished_at = ?, status = ?, message_id = ?, note = ?, tell = ?, tell_at = ? WHERE id = ?")
         .bind(now())
         .bind(status)
         .bind(message_id)
         .bind(note)
         .bind(tell as i64)
+        .bind(tell.then_some(tell_at))
         .bind(run_id)
         .execute(pool)
         .await?;
@@ -559,15 +715,17 @@ pub struct Told {
     pub finished_at: i64,
 }
 
-/// My routines' runs that finished since a time and should be told.
-pub async fn told_since(pool: &SqlitePool, account_id: &str, since: i64) -> CoreResult<Vec<Told>> {
+/// My routines' runs to tell about now: told since `since`, up to `now` (one that finished in
+/// quiet hours is told when they end).
+pub async fn told_since(pool: &SqlitePool, account_id: &str, since: i64, now: i64) -> CoreResult<Vec<Told>> {
     Ok(sqlx::query_as(
         "SELECT rr.id, r.name, r.chat_id, rr.status, rr.note, rr.finished_at FROM routine_runs rr \
          JOIN routines r ON r.id = rr.routine_id \
-         WHERE r.account_id = ? AND rr.tell = 1 AND rr.finished_at >= ? ORDER BY rr.finished_at LIMIT 20",
+         WHERE r.account_id = ? AND rr.tell = 1 AND rr.tell_at >= ? AND rr.tell_at <= ? ORDER BY rr.tell_at LIMIT 20",
     )
     .bind(account_id)
     .bind(since)
+    .bind(now)
     .fetch_all(pool)
     .await?)
 }
@@ -581,6 +739,19 @@ pub async fn watch_times(pool: &SqlitePool, account_id: &str) -> CoreResult<(Opt
     .bind(account_id)
     .fetch_one(pool)
     .await?;
+    // News held back by quiet hours: told when they end.
+    let held: Option<i64> = sqlx::query_scalar(
+        "SELECT MIN(rr.tell_at) FROM routine_runs rr JOIN routines r ON r.id = rr.routine_id \
+         WHERE r.account_id = ? AND rr.tell = 1 AND rr.tell_at > ?",
+    )
+    .bind(account_id)
+    .bind(now())
+    .fetch_one(pool)
+    .await?;
+    let next = match (next, held) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
     let running: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM routines WHERE account_id = ? AND last_status = 'running'")
         .bind(account_id)
         .fetch_one(pool)
@@ -721,5 +892,62 @@ mod tests {
         // Nothing known: UTC.
         let utc = zone(Some("Not/AZone"), None);
         assert_eq!(daily.next_after(&utc, 1_793_955_600).unwrap(), 1_794_036_600);
+    }
+
+    #[test]
+    fn quiet_hours_end_in_the_persons_own_zone() {
+        let sydney = zone(Some("Australia/Sydney"), None);
+        // Fri 6 Nov 2026, 20:00 in Sydney = 1_793_955_600.
+        let fri_8pm = 1_793_955_600;
+        let night = Quiet { from: "22:00".into(), to: "07:00".into() };
+        assert_eq!(night.ends(&sydney, fri_8pm), None, "not yet quiet");
+        // 23:30 Friday: told at 07:00 Saturday.
+        assert_eq!(night.ends(&sydney, fri_8pm + 210 * 60), Some(fri_8pm + 11 * 3600));
+        // 05:00 Saturday: told at 07:00 the same morning.
+        assert_eq!(night.ends(&sydney, fri_8pm + 9 * 3600), Some(fri_8pm + 11 * 3600));
+        // In the day, not over midnight.
+        let lunch = Quiet { from: "12:00".into(), to: "13:00".into() };
+        assert_eq!(lunch.ends(&sydney, fri_8pm), None);
+        assert!(Quiet { from: "07:00".into(), to: "07:00".into() }.check().is_err());
+        assert!(Quiet { from: "7am".into(), to: "08:00".into() }.check().is_err());
+    }
+
+    #[tokio::test]
+    async fn allowances_are_kept_and_news_waits_for_quiet_hours_to_end() {
+        let pool = crate::db::open_in_memory().await.unwrap();
+        let me = crate::accounts::create(
+            &pool,
+            crate::accounts::NewAccount { name: "Dan".into(), role: crate::accounts::Role::Owner, secret: Some("4821".into()) },
+        )
+        .await
+        .unwrap();
+        let r = create(
+            &pool,
+            &me.id,
+            RoutineInput {
+                name: Some("Build".into()),
+                instructions: Some("Build it.".into()),
+                schedule: Some(Schedule::Link),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.allow, Allow::default());
+        let allow = Allow { tools: false, changes: Changes::Apply, commands: false };
+        let r = update(&pool, &me.id, &r.id, RoutineInput { allow: Some(allow), ..Default::default() }).await.unwrap();
+        assert_eq!(r.allow, allow);
+        // A run told an hour from now isn't told yet.
+        let run = start_run(&pool, &r, "now").await.unwrap();
+        let t = now();
+        finish_run(&pool, &r.id, &run, true, None, Some("Built."), true, t + 3600).await.unwrap();
+        assert!(told_since(&pool, &me.id, t - 5, t).await.unwrap().is_empty());
+        assert_eq!(told_since(&pool, &me.id, t - 5, t + 3600).await.unwrap().len(), 1);
+        let (next, _) = watch_times(&pool, &me.id).await.unwrap();
+        assert_eq!(next, Some(t + 3600), "a phone looks when it's due");
+        // Quiet hours are kept per person.
+        let q = Quiet { from: "22:00".into(), to: "07:00".into() };
+        assert_eq!(set_quiet(&pool, &me.id, Some(q.clone())).await.unwrap(), Some(q));
+        assert_eq!(set_quiet(&pool, &me.id, None).await.unwrap(), None);
     }
 }

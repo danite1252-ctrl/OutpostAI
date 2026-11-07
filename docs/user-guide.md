@@ -256,6 +256,19 @@ PC: **Routines** in the sidebar; on the phone: **You › Routines**).
   until you resume it. A routine never runs twice at once, and a run is stopped after 30 minutes.
 - Routines use the persona's tools on the server, and its tools on your PC when that PC has
   Outpost open.
+- **While it runs on its own**, nobody is there to say OK, so each routine says what it may do:
+  use its chat's tools (on by default); make **file changes** in its chat's folders straight
+  away (off by default: they wait for you to apply them); and run **commands**, but only ones
+  you've allowed **Always** in that folder (to allow one, run it once in the routine's chat and
+  choose Always). A command that isn't allowed doesn't run, and the routine says which one
+  needs allowing.
+- If the routine's model runs on a **lent PC** that's off or paused (or the card is training),
+  it waits and tries again every 5 minutes, for up to an hour (the list shows it's waiting),
+  then tells you it couldn't run. A scheduled time that comes while it's still waiting is
+  skipped.
+- **Quiet hours** (at the top of Routines): routines still run, but news from a run that
+  finishes in them is told when they end (a 6:30 morning brief with quiet hours until 7:00
+  notifies you at 7:00).
 - **Tell me**: each routine sends a notification to your phone and PC when it runs (**Every
   time**), **Only when there's news** (the persona decides; when there's nothing new it says so
   quietly in the chat, and a quick separate check of each result decides; failures are always told), **Only if it fails**, or **Never**.

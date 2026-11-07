@@ -12,7 +12,7 @@ use axum::Json;
 use outpost_core::accounts::Role;
 use outpost_core::routines::{self, Notify, Routine, RoutineInput, Run};
 use outpost_core::sessions::{Session, SessionKind};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -25,6 +25,11 @@ const NOTHING_NEW: &str = "NOTHING_NEW";
 
 /// Longest a run may take before it's stopped.
 const RUN_MAX: Duration = Duration::from_secs(30 * 60);
+
+/// How long a run waits for its model to be free (a lent PC that's off or paused, a
+/// training using the card), trying again every so often.
+const WAIT_FOR_MODEL: Duration = Duration::from_secs(60 * 60);
+const TRY_AGAIN_EVERY: Duration = Duration::from_secs(5 * 60);
 
 /// Routines running now.
 static RUNNING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
@@ -50,7 +55,11 @@ pub async fn scheduler(state: AppState) {
 /// Run a routine now (on schedule, or Run now).
 pub async fn run(state: AppState, r: Routine, reason: &'static str, details: Option<String>) {
     if !RUNNING.lock().unwrap_or_else(|p| p.into_inner()).insert(r.id.clone()) {
-        return; // already running
+        // Already running (waiting for its model, say): this time is skipped, not run straight after.
+        if reason == "schedule" {
+            let _ = routines::skip_due(&state.pool, &r).await;
+        }
+        return;
     }
     let run_id = match routines::start_run(&state.pool, &r, reason).await {
         Ok(id) => id,
@@ -61,7 +70,23 @@ pub async fn run(state: AppState, r: Routine, reason: &'static str, details: Opt
         }
     };
     tracing::info!(routine = %r.id, name = %r.name, reason, "routine running");
-    let result = attempt(&state, &r, details.as_deref()).await;
+    // Its model may be busy (a lent PC that's off or paused, a training): it waits and tries again.
+    let gave_up_at = std::time::Instant::now() + WAIT_FOR_MODEL;
+    let result = loop {
+        match attempt(&state, &r, details.as_deref()).await {
+            Err(Failed::Busy(why)) if std::time::Instant::now() + TRY_AGAIN_EVERY <= gave_up_at => {
+                let note = format!("Waiting: {why} Trying again every {} minutes.", TRY_AGAIN_EVERY.as_secs() / 60);
+                let _ = routines::note_running(&state.pool, &r.id, &run_id, &note).await;
+                tracing::info!(routine = %r.id, why, "routine waiting for its model");
+                tokio::time::sleep(TRY_AGAIN_EVERY).await;
+            }
+            Err(Failed::Busy(why)) => {
+                break Err(format!("It didn't run: {why} It waited {} minutes.", WAIT_FOR_MODEL.as_secs() / 60))
+            }
+            Err(Failed::No(why)) => break Err(why),
+            Ok(done) => break Ok(done),
+        }
+    };
     let (ok, news, message_id, note) = match result {
         Ok(done) => {
             // Only told when there's news: the reply said "nothing new", or a quick separate
@@ -78,10 +103,36 @@ pub async fn run(state: AppState, r: Routine, reason: &'static str, details: Opt
         Err(why) => (false, false, None, Some(why)),
     };
     let tell = r.notify.tells(ok, news);
-    if let Err(e) = routines::finish_run(&state.pool, &r.id, &run_id, ok, message_id.as_deref(), note.as_deref(), tell).await {
+    // In my quiet hours, it's told when they end.
+    let tell_at = routines::tell_time(&state.pool, &r, outpost_core::now()).await;
+    if let Err(e) =
+        routines::finish_run(&state.pool, &r.id, &run_id, ok, message_id.as_deref(), note.as_deref(), tell, tell_at).await
+    {
         tracing::warn!(error = %e, "couldn't record a routine's run");
     }
     RUNNING.lock().unwrap_or_else(|p| p.into_inner()).remove(&r.id);
+}
+
+/// Why a run didn't work.
+enum Failed {
+    /// Its model can't answer for now (on a lent PC that's off or paused, the card training):
+    /// worth trying again in a while.
+    Busy(String),
+    No(String),
+}
+
+impl From<String> for Failed {
+    fn from(why: String) -> Self {
+        Failed::No(why)
+    }
+}
+
+/// Errors starting a reply that pass (the model is busy or away for now).
+const BUSY_CODES: [&str; 3] = ["lent_pc_away", "gpu_training", "ollama_offline"];
+
+/// A reply that failed because the lent PC didn't answer (see [`crate::lent`]).
+fn lent_pc_gone(why: &str) -> bool {
+    why.contains("didn't answer. Is the Outpost app open there?") || why.ends_with("stopped answering.")
 }
 
 /// What a run said.
@@ -96,10 +147,10 @@ struct Done {
 
 /// One run: the routine's instructions sent in its chat, and its reply waited for. Returns
 /// what it said, or why it failed.
-async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result<Done, String> {
+async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result<Done, Failed> {
     let account = outpost_core::accounts::get(&state.pool, &r.account_id).await.map_err(|e| e.to_string())?;
     if !matches!(account.role, Role::Owner | Role::Member) {
-        return Err("This account can't run routines.".into());
+        return Err("This account can't run routines.".to_string().into());
     }
     // Its own chat (made the first time, or again if it was deleted).
     let chat = match &r.chat_id {
@@ -152,16 +203,21 @@ async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result
         utc_offset_minutes: r.utc_offset_minutes,
         time_zone: r.time_zone.clone(),
         // The chat's tools on your PC, if one with Outpost open offers them.
-        use_pc_tools: true,
+        use_pc_tools: r.allow.tools,
+        routine: Some(r.allow),
         ..Default::default()
     };
     let started = outpost_core::now();
     crate::live::take_failure(&chat.id);
-    let mut rx = crate::routes::chat::start_reply(state, &auth, &chat.id, req).await.map_err(|e| e.message)?;
+    let mut rx = match crate::routes::chat::start_reply(state, &auth, &chat.id, req).await {
+        Ok(rx) => rx,
+        Err(e) if BUSY_CODES.contains(&e.code) => return Err(Failed::Busy(e.message)),
+        Err(e) => return Err(Failed::No(e.message)),
+    };
     let finished = tokio::time::timeout(RUN_MAX, async { while rx.recv().await.is_some() {} }).await;
     if finished.is_err() {
         crate::workspace::request_stop(&chat.id);
-        return Err(format!("It took longer than {} minutes, so it was stopped.", RUN_MAX.as_secs() / 60));
+        return Err(format!("It took longer than {} minutes, so it was stopped.", RUN_MAX.as_secs() / 60).into());
     }
     let messages = outpost_core::chats::messages(&state.pool, &chat.id).await.map_err(|e| e.to_string())?;
     match messages.iter().rev().find(|m| m.role == "assistant" && m.created_at >= started) {
@@ -172,8 +228,15 @@ async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result
             model: m.model.clone(),
         }),
         _ => Err(match crate::live::take_failure(&chat.id) {
-            Some(why) => format!("The reply failed: {why}"),
-            None => "It didn't give a reply (open the routine's chat to see).".into(),
+            // The lent PC went away: its message is taken back, to be sent again.
+            Some(why) if lent_pc_gone(&why) => {
+                for m in messages.iter().filter(|m| m.created_at >= started && m.role == "user") {
+                    let _ = outpost_core::chats::delete_message(&state.pool, &chat.id, &m.id).await;
+                }
+                Failed::Busy(why)
+            }
+            Some(why) => Failed::No(format!("The reply failed: {why}")),
+            None => Failed::No("It didn't give a reply (open the routine's chat to see).".into()),
         }),
     }
 }
@@ -370,3 +433,26 @@ pub async fn hook(State(state): State<AppState>, Path(token): Path<String>, body
     Ok(StatusCode::ACCEPTED)
 }
 
+
+/// My quiet hours: news from runs that finish in them waits until they end.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct QuietHours {
+    /// None: no quiet hours.
+    pub quiet: Option<routines::Quiet>,
+}
+
+/// My quiet hours.
+#[utoipa::path(get, path = "/api/routines/quiet", tag = "routines", security(("bearer" = [])),
+    responses((status = 200, description = "Quiet hours", body = QuietHours)))]
+pub async fn get_quiet(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<QuietHours>> {
+    may_use(&auth)?;
+    Ok(Json(QuietHours { quiet: routines::quiet(&state.pool, &auth.account.id).await? }))
+}
+
+/// Set my quiet hours (`quiet: null` takes them away).
+#[utoipa::path(put, path = "/api/routines/quiet", tag = "routines", security(("bearer" = [])), request_body = QuietHours,
+    responses((status = 200, description = "Set", body = QuietHours), (status = 400, description = "Bad times", body = ErrorBody)))]
+pub async fn set_quiet(State(state): State<AppState>, auth: Auth, Json(input): Json<QuietHours>) -> ApiResult<Json<QuietHours>> {
+    may_use(&auth)?;
+    Ok(Json(QuietHours { quiet: routines::set_quiet(&state.pool, &auth.account.id, input.quiet).await? }))
+}

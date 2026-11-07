@@ -341,6 +341,9 @@ pub struct SendRequest {
     /// `{ok}`): hands-free, where speech can be misheard.
     #[serde(default)]
     pub confirm_tools: bool,
+    /// A routine's run (nobody watching): what it may do. Never from an app.
+    #[serde(skip)]
+    pub routine: Option<outpost_core::routines::Allow>,
 }
 
 #[derive(Deserialize)]
@@ -533,7 +536,11 @@ pub async fn start_reply(
     let folders = outpost_core::chat_files::chat_folders(&state.pool, &chat.id).await?;
     // Tools on a PC: this app's own (desktop), or the chat's on your PC that offers them (phone).
     use crate::pc_tools::Via;
-    let mut tool_servers: Vec<(crate::pc_tools::PcToolServer, Via)> = if !req.pc_tools.is_empty() {
+    let unattended = req.routine;
+    let may_use_tools = !matches!(unattended, Some(a) if !a.tools);
+    let mut tool_servers: Vec<(crate::pc_tools::PcToolServer, Via)> = if !may_use_tools {
+        Vec::new()
+    } else if !req.pc_tools.is_empty() {
         req.pc_tools.iter().cloned().map(|s| (s, Via::App)).collect()
     } else if req.use_pc_tools && resolved.can_use_tools {
         // (A model without tools just answers without them.)
@@ -549,7 +556,7 @@ pub async fn start_reply(
     };
     let wants_tools = tool_servers.iter().any(|(s, _)| !s.tools.is_empty());
     // And the chat's tools on this server (any device), for a model that can use them.
-    if resolved.can_use_tools {
+    if resolved.can_use_tools && may_use_tools {
         let restricted = auth.account.role == outpost_core::accounts::Role::Restricted;
         for s in crate::server_tools::for_chat(&state, &account_id, restricted, &chat.id).await {
             tool_servers.push((s, Via::Server(state.clone())));
@@ -601,10 +608,16 @@ pub async fn start_reply(
         account_id: account_id.clone(),
         chat_id: chat.id.clone(),
         folders,
-        mode: chat.file_mode.clone(),
+        // A routine: changes wait or are made as the routine says (not the chat's setting).
+        mode: match unattended {
+            Some(a) if a.changes == outpost_core::routines::Changes::Apply => "auto".into(),
+            Some(_) => "ask".into(),
+            None => chat.file_mode.clone(),
+        },
+        unattended: unattended.map(|a| crate::workspace::Unattended { commands: a.commands }),
         reachable: req.pc_folders.clone(),
         events: tx.clone(),
-        server_commands: match auth.account.role {
+        server_commands: !matches!(unattended, Some(a) if !a.commands) && match auth.account.role {
             outpost_core::accounts::Role::Owner => true,
             outpost_core::accounts::Role::Member => crate::runner::sandbox_available(),
             _ => false,

@@ -634,7 +634,7 @@ pub async fn finished_jobs(State(state): State<AppState>, auth: Auth, Query(q): 
                 out.push(finished_view(&state, job).await);
             }
             // Routines' runs worth telling about, worded the same way.
-            for run in outpost_core::routines::told_since(&state.pool, &auth.account.id, q.since).await.unwrap_or_default() {
+            for run in outpost_core::routines::told_since(&state.pool, &auth.account.id, q.since, now).await.unwrap_or_default() {
                 let ok = run.status == "ok";
                 out.push(FinishedJob {
                     id: run.id,

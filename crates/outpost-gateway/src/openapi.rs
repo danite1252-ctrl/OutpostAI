@@ -153,6 +153,8 @@ use crate::routes::{
         crate::routines::runs,
         crate::routines::set_link,
         crate::routines::hook,
+        crate::routines::get_quiet,
+        crate::routines::set_quiet,
         crate::persona_templates::add,
         crate::server_tools::catalog,
         crate::server_tools::create,
