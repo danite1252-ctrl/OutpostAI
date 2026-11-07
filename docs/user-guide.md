@@ -121,6 +121,12 @@ servers, so any MCP server works.
   so a model can't use an action someone isn't allowed, and the persona is told what they can't
   do, so it says to ask you instead. Restricted accounts get none of a tool unless you pick for
   them (or turn on Restricted accounts too).
+- **Asking first**: anything on a **lock**, an **alarm**, a **door, gate or garage**, or a
+  **cover or blind** always asks first, in every chat: a card with **Allow** and **Skip** (on
+  the PC and the phone; hands-free asks aloud). On the PC, after **Test**, an owner can also
+  switch on **Ask first** for any other action of their tool (turning the heater on, say), and
+  then it asks everyone, every time. Look-ups never ask. Routines can't ask anyone, so they
+  don't do these: the routine says what it would have done instead.
 - **Keys and sign-ins on the server** are encrypted with a key kept in Outpost's data folder
   (`secrets.key`), beside the database: keep it in backups, or everyone signs in again.
 - **Signing in** happens on the PC you're using (the browser comes back to it), and the sign-in

@@ -363,7 +363,12 @@ export function ServerToolRow({ token, tool, onChanged }: { token: string; tool:
       )}
       {tools && (
         <div className="flex flex-col gap-1">
-          <p className="text-xs text-ok">Working: {tools.length} tools.{tool.mine ? " Switch off any you don't want chats to use." : ""}</p>
+          <p className="text-xs text-ok">
+            Working: {tools.length} tools.
+            {tool.mine
+              ? " Switch off any you don't want chats to use; Ask first makes everyone OK it each time (locks, alarms, doors and covers always ask)."
+              : ""}
+          </p>
           <ul className="flex flex-col gap-1">
             {tools.map((t) => {
               const off = tool.disabled_tools.includes(t.name);
@@ -387,6 +392,20 @@ export function ServerToolRow({ token, tool, onChanged }: { token: string; tool:
                     </span>
                     <span className="line-clamp-2 text-muted">{t.description}</span>
                   </span>
+                  {tool.mine && !off && t.read_only !== true && (
+                    <label className="flex shrink-0 items-center gap-1.5 text-muted">
+                      <Toggle
+                        checked={(tool.ask_tools ?? []).includes(t.name)}
+                        label={`Ask first before ${t.name}`}
+                        onChange={(on) =>
+                          void change({
+                            ask_tools: on ? [...(tool.ask_tools ?? []), t.name] : (tool.ask_tools ?? []).filter((x) => x !== t.name),
+                          })
+                        }
+                      />
+                      Ask first
+                    </label>
+                  )}
                 </li>
               );
             })}

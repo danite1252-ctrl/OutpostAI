@@ -1022,6 +1022,19 @@ function MissingModel({
 /** The reply wants to run a command in a folder: Allow (once), Always allow (that program, in
  *  that folder), or Skip. */
 function CommandApproval({ ask, onAnswer }: { ask: CommandAsk; onAnswer: (a: { ok: boolean; always?: boolean }) => void }) {
+  if (ask.kind === "tool")
+    return (
+      <div role="alertdialog" aria-label="Allow this?" className="mt-2 flex flex-col gap-2 rounded-2xl border border-amber/60 bg-surface p-3">
+        <p className="text-sm">{ask.question}</p>
+        {ask.why && <p className="text-xs text-muted">{ask.why}.</p>}
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={() => onAnswer({ ok: true })}>Allow</Button>
+          <Button variant="ghost" onClick={() => onAnswer({ ok: false })}>
+            Skip
+          </Button>
+        </div>
+      </div>
+    );
   if (ask.kind === "routine")
     return (
       <div role="alertdialog" aria-label="Make a routine?" className="mt-2 flex flex-col gap-2 rounded-2xl border border-amber/60 bg-surface p-3">

@@ -233,6 +233,7 @@ pub async fn for_chat(state: &AppState, account_id: &str, restricted: bool, chat
                         .collect(),
                     withheld_by: if withheld.is_empty() { None } else { owner },
                     withheld,
+                    ask_first: t.ask_tools(),
                 })
             }
             Ok(Err(e)) => {
@@ -265,6 +266,7 @@ fn view(state: &AppState, t: &Tool, me: &str, owner_name: Option<String>) -> Too
         shared: t.shared,
         restricted_ok: t.restricted_ok,
         disabled_tools: t.disabled_tools(),
+        ask_tools: t.ask_tools(),
         mine: t.account_id == me,
         owner_name,
     }

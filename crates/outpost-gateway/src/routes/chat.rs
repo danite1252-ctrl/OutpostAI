@@ -642,7 +642,8 @@ pub async fn start_reply(
         system = format!("{system}\n\n{}", w.instructions());
     }
     // MCP servers on the app's PC.
-    let pc_tools = crate::pc_tools::PcTools::new(state.file_relay.clone(), &chat.id, tx.clone(), tool_servers, req.confirm_tools);
+    let pc_tools = crate::pc_tools::PcTools::new(state.file_relay.clone(), &chat.id, tx.clone(), tool_servers, req.confirm_tools)
+        .map(|t| t.unattended(unattended.is_some()));
     if let Some(t) = &pc_tools {
         system = format!("{system}\n\n{}", t.instructions());
     }

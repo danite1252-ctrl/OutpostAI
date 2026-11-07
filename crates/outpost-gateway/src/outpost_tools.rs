@@ -65,6 +65,7 @@ pub fn server() -> PcToolServer {
         ],
         withheld: Vec::new(),
         withheld_by: None,
+        ask_first: Vec::new(),
     }
 }
 

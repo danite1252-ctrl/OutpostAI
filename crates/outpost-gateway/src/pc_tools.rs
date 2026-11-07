@@ -23,6 +23,8 @@ const CALL_WITHIN: Duration = Duration::from_secs(180);
 /// How long the person has to OK a routine.
 const ROUTINE_WITHIN: Duration = Duration::from_secs(5 * 60);
 const CONFIRM_WITHIN: Duration = Duration::from_secs(60);
+/// How long a typed chat waits for Allow or Skip.
+const ASK_WITHIN: Duration = Duration::from_secs(5 * 60);
 /// Most of a tool's answer the model reads.
 const ANSWER_LIMIT: usize = 16_000;
 
@@ -42,6 +44,9 @@ pub struct PcToolServer {
     /// Whose choice that was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub withheld_by: Option<String>,
+    /// Actions its owner set to ask the person first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ask_first: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -89,6 +94,8 @@ pub struct PcTools {
     entries: Vec<Entry>,
     /// Ask the user before each call (hands-free: speech can be misheard).
     confirm: bool,
+    /// A routine's run: nobody is there to ask, so what must ask first isn't done.
+    unattended: bool,
 }
 
 /// A tool's name as words: `HassTurnOff` → "turn off", `search_files` → "search files".
@@ -142,13 +149,37 @@ pub fn args_words(args: &Value) -> String {
     }
 }
 
+/// A call that only looks something up (its server says so, or its name does).
+pub fn reads(tool: &str, read_only: Option<bool>) -> bool {
+    let words = tool_words(tool);
+    read_only == Some(true)
+        || ["get", "list", "search", "read", "find", "fetch", "query", "lookup", "events"].iter().any(|w| words.split(' ').next() == Some(*w) || words.ends_with(w))
+}
+
+/// A call on something that always asks first, everywhere: a lock, an alarm, a door, gate or
+/// garage, or a cover (blinds, shutters). Its kind, or `None`.
+pub fn sensitive(tool: &str, args: &Value) -> Option<&'static str> {
+    let text = format!("{} {}", tool_words(tool), args).to_lowercase();
+    let words: Vec<&str> = text.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let has = |list: &[&str]| words.iter().any(|w| list.contains(w));
+    if has(&["lock", "locks", "unlock", "unlocks", "deadbolt"]) {
+        Some("A lock")
+    } else if has(&["alarm", "alarms", "alarm_control_panel", "disarm", "arm"]) {
+        Some("An alarm")
+    } else if has(&["door", "doors", "gate", "gates", "garage"]) {
+        Some("A door or gate")
+    } else if has(&["cover", "covers", "shutter", "shutters", "blind", "blinds"]) {
+        Some("A cover or blind")
+    } else {
+        None
+    }
+}
+
 /// The question asked before a call: "Would you like me to check Google Calendar?".
 pub fn confirm_question(server: &str, tool: &str, args: &Value, read_only: Option<bool>) -> String {
     let what = args_words(args);
     let words = tool_words(tool);
-    let reads = read_only == Some(true)
-        || ["get", "list", "search", "read", "find", "fetch", "query", "lookup", "events"].iter().any(|w| words.split(' ').next() == Some(*w) || words.ends_with(w));
-    if reads {
+    if reads(tool, read_only) {
         if what.is_empty() {
             format!("Would you like me to check {server}?")
         } else {
@@ -205,7 +236,7 @@ impl PcTools {
                 entries.push(Entry { call, server: i, tool: t.name.clone() });
             }
         }
-        (!entries.is_empty()).then(|| Self { relay, chat_id: chat_id.into(), events, servers, routes, entries, confirm })
+        (!entries.is_empty()).then(|| Self { relay, chat_id: chat_id.into(), events, servers, routes, entries, confirm, unattended: false })
     }
 
     /// The system prompt's part about them.
@@ -280,6 +311,12 @@ impl PcTools {
             .collect()
     }
 
+    /// For a routine's run (nobody watching).
+    pub fn unattended(mut self, on: bool) -> Self {
+        self.unattended = on;
+        self
+    }
+
     pub fn has(&self, call: &str) -> bool {
         self.entries.iter().any(|e| e.call == call)
     }
@@ -292,9 +329,31 @@ impl PcTools {
         let server = &self.servers[e.server];
         let shown = format!("{} › {}", server.name, e.tool);
         let args = if args.is_object() { args.clone() } else { json!({}) };
-        if self.confirm {
-            // (Hands-free: asked aloud here, so Outpost's own tools don't ask again below.)
-            let read_only = server.tools.iter().find(|t| t.name == e.tool).and_then(|t| t.read_only);
+        // Ask first: hands-free (speech can be misheard), what its owner set to ask, and anything
+        // sensitive (locks, alarms, doors, covers), everywhere. Look-ups don't ask (unless hands-free).
+        let read_only = server.tools.iter().find(|t| t.name == e.tool).and_then(|t| t.read_only);
+        let outpost_own = matches!(self.routes[e.server], Via::Outpost(_));
+        let why = if reads(&e.tool, read_only) || outpost_own {
+            None
+        } else if let Some(kind) = sensitive(&e.tool, &args) {
+            Some(format!("{kind} always asks first"))
+        } else if server.ask_first.iter().any(|a| a == &e.tool) {
+            Some("set to ask first".to_string())
+        } else {
+            None
+        };
+        if why.is_some() || self.confirm {
+            if self.unattended {
+                let why = why.unwrap_or_default();
+                return Outcome {
+                    reply: format!(
+                        "Not done: this needs the user's OK first ({why}), and a routine runs with nobody there to give it. \
+                         Say in your answer what you'd have done, so they can do it themselves."
+                    ),
+                    action: FileAction { op: "mcp".into(), path: shown, note: Some("needs an OK (not in routines)".into()), change_id: None, failed: true },
+                    more: Vec::new(),
+                };
+            }
             let question = match &self.routes[e.server] {
                 // A routine: say what it is and when.
                 Via::Outpost(ctx) if e.tool == "make_routine" => match crate::outpost_tools::wanted(ctx, &args) {
@@ -303,17 +362,27 @@ impl PcTools {
                 },
                 _ => confirm_question(&server.name, &e.tool, &args, read_only),
             };
-            let asked = json!({ "op": "confirm", "question": question, "server": server.name, "tool": e.tool, "arguments": args });
-            let ok = match self.relay.ask_within(&self.events, &self.chat_id, asked, CONFIRM_WITHIN, "confirm").await {
-                Ok(v) => v.get("ok").and_then(Value::as_bool).unwrap_or(false),
-                Err(_) => false,
-            };
+            let asked = json!({
+                "op": "confirm", "kind": "tool", "question": question, "server": server.name, "tool": e.tool,
+                "arguments": args, "why": why,
+            });
+            let within = if self.confirm { CONFIRM_WITHIN } else { ASK_WITHIN };
+            let answer = self.relay.ask_within(&self.events, &self.chat_id, asked, within, "confirm").await;
+            let ok = answer.as_ref().is_ok_and(|v| v.get("ok").and_then(Value::as_bool) == Some(true));
             if !ok {
+                let cannot = answer.as_ref().is_ok_and(|v| v.get("cannot_ask").and_then(Value::as_bool) == Some(true));
+                let (reply, note) = if cannot {
+                    ("Not done: this needs the user's OK, and the app they're using can't ask for it (it may need updating). Tell them.", "couldn't ask")
+                } else if self.confirm {
+                    ("The user said no to this (or didn't answer), so it wasn't done. Speech can be misheard: briefly ask what they'd like instead.", "Not confirmed")
+                } else if answer.is_err() {
+                    ("Not done: nobody answered the request to OK it. Tell the user it needs their OK.", "no answer")
+                } else {
+                    ("The user chose Skip, so it wasn't done. Don't try it again unless they ask.", "skipped")
+                };
                 return Outcome {
-                    reply: "The user said no to this (or didn't answer), so it wasn't done. Speech can be misheard: briefly \
-                            ask what they'd like instead."
-                        .into(),
-                    action: FileAction { op: "mcp".into(), path: shown, note: Some("Not confirmed".into()), change_id: None, failed: true },
+                    reply: reply.into(),
+                    action: FileAction { op: "mcp".into(), path: shown, note: Some(note.into()), change_id: None, failed: true },
                     more: Vec::new(),
                 };
             }
@@ -420,6 +489,7 @@ mod tests {
                 .collect(),
             withheld: Vec::new(),
             withheld_by: None,
+            ask_first: Vec::new(),
         }
     }
 
@@ -483,6 +553,52 @@ mod tests {
         assert!(!out.action.failed);
         let missing = t.run("nope", &json!({})).await;
         assert!(missing.action.failed);
+    }
+
+    #[test]
+    fn locks_alarms_doors_and_covers_are_sensitive() {
+        assert_eq!(sensitive("HassTurnOff", &json!({ "name": "front door", "domain": ["lock"] })), Some("A lock"));
+        assert_eq!(sensitive("HassTurnOn", &json!({ "name": "Garage" })), Some("A door or gate"));
+        assert_eq!(sensitive("HassTurnOn", &json!({ "domain": ["alarm_control_panel"] })), Some("An alarm"));
+        assert_eq!(sensitive("HassSetPosition", &json!({ "name": "lounge blinds", "position": 50 })), Some("A cover or blind"));
+        assert_eq!(sensitive("HassTurnOff", &json!({ "name": "kitchen lamp" })), None);
+        assert_eq!(sensitive("HassTurnOn", &json!({ "name": "warm white strip" })), None, "whole words only");
+        assert!(reads("GetLiveContext", None));
+        assert!(!reads("HassTurnOn", None));
+    }
+
+    #[tokio::test]
+    async fn sensitive_and_ask_first_calls_wait_for_an_ok_and_routines_dont_do_them() {
+        // Typed chat: unlocking asks; Skip means it isn't done.
+        let (tx, mut rx) = mpsc::channel(8);
+        let relay = Relay::default();
+        let t = PcTools::new(relay.clone(), "chat1", tx, vec![(server("Home Assistant", &["HassTurnOff", "GetLiveContext"]), Via::App)], false).unwrap();
+        let app = {
+            let relay = relay.clone();
+            tokio::spawn(async move {
+                let ev = format!("{:?}", rx.recv().await.unwrap());
+                assert!(ev.contains("confirm") && ev.contains("A lock always asks first"), "{ev}");
+                for _ in 0..50 {
+                    if relay.pending_ids().len() == 1 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                let id = relay.pending_ids().pop().unwrap();
+                assert!(relay.answer("chat1", &id, json!({ "ok": false })));
+            })
+        };
+        let out = t.run("home_assistant__hassturnoff", &json!({ "name": "front door", "domain": ["lock"] })).await;
+        app.await.unwrap();
+        assert!(out.action.failed && out.reply.contains("Skip"), "{}", out.reply);
+
+        // A routine: never done, nobody asked.
+        let (tx, _rx) = mpsc::channel(8);
+        let mut ha = server("Home Assistant", &["HassTurnOn"]);
+        ha.ask_first = vec!["HassTurnOn".into()];
+        let t = PcTools::new(Relay::default(), "chat2", tx, vec![(ha, Via::App)], false).unwrap().unattended(true);
+        let out = t.run("home_assistant__hassturnon", &json!({ "name": "heater" })).await;
+        assert!(out.action.failed && out.reply.contains("set to ask first") && out.reply.contains("routine"), "{}", out.reply);
     }
 
     #[test]

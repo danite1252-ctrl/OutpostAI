@@ -34,6 +34,8 @@ pub struct Tool {
     pub shared: bool,
     pub restricted_ok: bool,
     pub disabled_tools: String,
+    /// Actions that ask the person first, in every chat (JSON list).
+    pub ask_tools: String,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -44,6 +46,9 @@ impl Tool {
     }
     pub fn disabled_tools(&self) -> Vec<String> {
         serde_json::from_str(&self.disabled_tools).unwrap_or_default()
+    }
+    pub fn ask_tools(&self) -> Vec<String> {
+        serde_json::from_str(&self.ask_tools).unwrap_or_default()
     }
     pub fn secret_names(&self) -> Vec<String> {
         serde_json::from_str(&self.secret_names).unwrap_or_default()
@@ -63,10 +68,12 @@ pub struct ToolFields {
     pub shared: Option<bool>,
     pub restricted_ok: Option<bool>,
     pub disabled_tools: Option<Vec<String>>,
+    /// Actions that ask first, in every chat.
+    pub ask_tools: Option<Vec<String>>,
 }
 
 const COLS: &str = "id, account_id, name, catalog_id, transport, command, args, url, secrets, secret_names, oauth, signed_in_as, \
-                    enabled, shared, restricted_ok, disabled_tools, created_at, updated_at";
+                    enabled, shared, restricted_ok, disabled_tools, ask_tools, created_at, updated_at";
 
 fn clean_name(name: &str) -> CoreResult<String> {
     let n: String = name.trim().chars().filter(|c| !c.is_control()).take(60).collect();
@@ -108,6 +115,9 @@ pub fn apply(t: &mut Tool, f: &ToolFields) -> CoreResult<()> {
     if let Some(d) = &f.disabled_tools {
         t.disabled_tools = serde_json::to_string(d).unwrap_or_else(|_| "[]".into());
     }
+    if let Some(a) = &f.ask_tools {
+        t.ask_tools = serde_json::to_string(a).unwrap_or_else(|_| "[]".into());
+    }
     match t.transport.as_str() {
         "stdio" if t.command.is_empty() => Err(CoreError::Invalid("Give the command that starts it (e.g. npx).".into())),
         "http" if !(t.url.starts_with("https://") || t.url.starts_with("http://")) => {
@@ -139,6 +149,7 @@ pub fn new_tool(account_id: &str, f: &ToolFields) -> CoreResult<Tool> {
         shared: false,
         restricted_ok: false,
         disabled_tools: "[]".into(),
+        ask_tools: "[]".into(),
         created_at: t0,
         updated_at: t0,
     };
@@ -147,7 +158,7 @@ pub fn new_tool(account_id: &str, f: &ToolFields) -> CoreResult<Tool> {
 }
 
 pub async fn insert(pool: &SqlitePool, t: &Tool) -> CoreResult<()> {
-    sqlx::query(&format!("INSERT INTO tools ({COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
+    sqlx::query(&format!("INSERT INTO tools ({COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
         .bind(&t.id)
         .bind(&t.account_id)
         .bind(&t.name)
@@ -164,6 +175,7 @@ pub async fn insert(pool: &SqlitePool, t: &Tool) -> CoreResult<()> {
         .bind(t.shared)
         .bind(t.restricted_ok)
         .bind(&t.disabled_tools)
+        .bind(&t.ask_tools)
         .bind(t.created_at)
         .bind(t.updated_at)
         .execute(pool)
@@ -175,7 +187,7 @@ pub async fn insert(pool: &SqlitePool, t: &Tool) -> CoreResult<()> {
 pub async fn save(pool: &SqlitePool, t: &Tool) -> CoreResult<()> {
     sqlx::query(
         "UPDATE tools SET name = ?, catalog_id = ?, transport = ?, command = ?, args = ?, url = ?, secrets = ?, secret_names = ?, \
-         oauth = ?, signed_in_as = ?, enabled = ?, shared = ?, restricted_ok = ?, disabled_tools = ?, updated_at = ? WHERE id = ?",
+         oauth = ?, signed_in_as = ?, enabled = ?, shared = ?, restricted_ok = ?, disabled_tools = ?, ask_tools = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&t.name)
     .bind(&t.catalog_id)
@@ -191,6 +203,7 @@ pub async fn save(pool: &SqlitePool, t: &Tool) -> CoreResult<()> {
     .bind(t.shared)
     .bind(t.restricted_ok)
     .bind(&t.disabled_tools)
+    .bind(&t.ask_tools)
     .bind(now())
     .bind(&t.id)
     .execute(pool)
@@ -527,6 +540,8 @@ pub struct ToolView {
     pub shared: bool,
     pub restricted_ok: bool,
     pub disabled_tools: Vec<String>,
+    /// Actions that ask first, in every chat.
+    pub ask_tools: Vec<String>,
     /// Yours (you can change or remove it), else someone's shared one.
     pub mine: bool,
     /// Its owner's name, for a shared one that isn't yours.

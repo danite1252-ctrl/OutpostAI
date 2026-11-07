@@ -310,6 +310,8 @@ function Conversation({
     always: string | null;
     /** A routine the reply wants to make (its name and when; what it does). */
     routine?: { summary: string; instructions: string };
+    /** A tool action that asks first (a lock, an alarm, or one set to ask). */
+    tool?: { question: string; why: string };
   } | null>(null);
   async function answerAsk(id: string, answer: { ok: boolean; always?: boolean; cannot_ask?: boolean }) {
     setAsking(null);
@@ -483,8 +485,20 @@ function Conversation({
         if (f.change_id) void chatFiles.reload();
       } else if (name === "confirm") {
         // A command the reply wants to run in a folder (asks here; other asks are skipped).
-        const c = data as { id: string; kind?: string; command?: string; folder?: string; always?: string | null; summary?: string; instructions?: string };
+        const c = data as {
+          id: string;
+          kind?: string;
+          command?: string;
+          folder?: string;
+          always?: string | null;
+          summary?: string;
+          instructions?: string;
+          question?: string;
+          why?: string | null;
+        };
         if (c.kind === "command") setAsking({ id: c.id, command: c.command ?? "", folder: c.folder ?? "", always: c.always ?? null });
+        else if (c.kind === "tool")
+          setAsking({ id: c.id, command: "", folder: "", always: null, tool: { question: c.question ?? "Go ahead?", why: c.why ?? "" } });
         else if (c.kind === "routine")
           setAsking({ id: c.id, command: "", folder: "", always: null, routine: { summary: c.summary ?? "", instructions: c.instructions ?? "" } });
         else void answerAsk(c.id, { ok: false, cannot_ask: true });
@@ -641,6 +655,16 @@ function Conversation({
           </View>
         )}
         {!draft && <WaitingChanges api={api} chatId={chat.id} files={chatFiles} />}
+        {asking?.tool && (
+          <View accessibilityRole="alert" style={[s.card, { gap: 8, borderColor: C.amber }]}>
+            <Text style={{ color: C.ink }}>{asking.tool.question}</Text>
+            {!!asking.tool.why && <Text style={{ color: C.muted, fontSize: 12 }}>{asking.tool.why}.</Text>}
+            <View style={[s.row, { flexWrap: "wrap" }]}>
+              <Chip label="Allow" active onPress={() => void answerAsk(asking.id, { ok: true })} />
+              <Chip label="Skip" onPress={() => void answerAsk(asking.id, { ok: false })} />
+            </View>
+          </View>
+        )}
         {asking?.routine && (
           <View accessibilityRole="alert" style={[s.card, { gap: 8, borderColor: C.amber }]}>
             <Text style={{ color: C.ink }}>Make the routine {asking.routine.summary}?</Text>
@@ -654,7 +678,7 @@ function Conversation({
             </View>
           </View>
         )}
-        {asking && !asking.routine && (
+        {asking && !asking.routine && !asking.tool && (
           <View accessibilityRole="alert" style={[s.card, { gap: 8, borderColor: C.amber }]}>
             <Text style={{ color: C.ink }}>Run this in {asking.folder}?</Text>
             <Text style={{ color: C.soft, fontFamily: "monospace", backgroundColor: C.raised, padding: 8, borderRadius: 8 }}>{asking.command}</Text>
