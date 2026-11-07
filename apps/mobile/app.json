@@ -2,7 +2,7 @@
   "expo": {
     "name": "Outpost",
     "slug": "outpost",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -22,7 +22,7 @@
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
       ],
-      "versionCode": 72,
+      "versionCode": 73,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#280C01"
