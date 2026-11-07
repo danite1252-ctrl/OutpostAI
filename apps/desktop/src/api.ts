@@ -1057,6 +1057,12 @@ export interface StreamHandlers {
 export interface CommandAsk {
   /** This request (an answer on any device settles it). */
   id: string;
+  /** "command" (run something in a folder) or "routine" (make a routine the reply asked for). */
+  kind?: "command" | "routine";
+  /** A routine: its name and when it runs ("\"Call Mum\", once, Sat 7 Nov 17:00"). */
+  summary?: string;
+  /** A routine: what it will do. */
+  instructions?: string;
   question: string;
   command: string;
   folder: string;
@@ -1187,7 +1193,7 @@ async function readReply(stream: ReadableStream<Uint8Array>, token: string, chat
       else if (name === "confirm") {
         const question = String(payload.question ?? "Go ahead?");
         const ask: Promise<{ ok: boolean; always?: boolean; cannot_ask?: boolean }> =
-          payload.kind === "command" && on.approve
+          (payload.kind === "command" || payload.kind === "routine") && on.approve
             ? on.approve(payload as CommandAsk).catch(() => ({ ok: false }))
             : on.confirm
               ? on.confirm(question).then((ok) => ({ ok }), () => ({ ok: false }))

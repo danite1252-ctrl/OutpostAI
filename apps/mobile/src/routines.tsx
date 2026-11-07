@@ -27,6 +27,51 @@ const EVENTS = [
   { id: "training_finished", label: "A training finishes" },
 ] as const;
 
+/** Ready-made routines to start from (the person fills in the parts in <angle brackets>). */
+const READY: { name: string; instructions: string; schedule: Schedule; notify: Notify; needs?: string }[] = [
+  {
+    name: "Morning brief",
+    instructions: "Give me a short morning brief: today's weather where I live, and anything on my calendar today. A few lines, no more.",
+    schedule: { kind: "days", time: "07:00", days: [1, 2, 3, 4, 5] },
+    notify: "always",
+    needs: "a web search tool, and Google for the calendar",
+  },
+  {
+    name: "Update checker",
+    instructions:
+      "Open https://papermc.io/downloads/paper and find the newest Paper version and build number. Compare it with what you found last time in this chat, and say if there's a newer one (its version and build).",
+    schedule: { kind: "every", hours: 6 },
+    notify: "worth",
+    needs: "a tool that reads web pages",
+  },
+  {
+    name: "News on a topic",
+    instructions: "Search the web for news from the last day about <your topic>. Give me the three most important items, a line each, with links.",
+    schedule: { kind: "days", time: "08:00", days: [0, 1, 2, 3, 4, 5, 6] },
+    notify: "worth",
+    needs: "a web search tool",
+  },
+  {
+    name: "Week ahead",
+    instructions: "Look at my calendar for this week. Tell me what's coming up, and anything I should prepare for.",
+    schedule: { kind: "days", time: "07:30", days: [1] },
+    notify: "always",
+    needs: "Google (calendar)",
+  },
+  {
+    name: "Reminder",
+    instructions: "Remind me to <what>.",
+    schedule: { kind: "once", at: Math.floor(Date.now() / 1000 / 60) * 60 + 3600 },
+    notify: "always",
+  },
+  {
+    name: "Caption new creations",
+    instructions: "Write a one-line caption for what was just made, and one idea to make it better.",
+    schedule: { kind: "event", event: "job_finished" },
+    notify: "always",
+  },
+];
+
 interface Routine {
   id: string;
   name: string;
@@ -314,6 +359,26 @@ function RoutineEditor({
   const [onceTime, setOnceTime] = useState(`${pad(onceAt.getHours())}:${pad(onceAt.getMinutes())}`);
   const [notify, setNotify] = useState<Notify>(routine?.notify ?? "always");
   const [event, setEvent] = useState<"job_finished" | "training_finished">(sch?.kind === "event" ? sch.event : "job_finished");
+  const [ready, setReady] = useState<string | null>(null);
+  function startFrom(t: (typeof READY)[number]) {
+    const sc = t.schedule;
+    setReady(t.name);
+    setName(t.name);
+    setInstructions(t.instructions);
+    setNotify(t.notify);
+    setKind(kindOf(sc));
+    if (sc.kind === "days") {
+      setTime(sc.time);
+      setDays(sc.days);
+    }
+    if (sc.kind === "every") setHours(String(sc.hours));
+    if (sc.kind === "once") {
+      const d = new Date(Date.now() + 3600 * 1000);
+      setDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+      setOnceTime(`${pad(d.getHours())}:${pad(d.getMinutes())}`);
+    }
+    if (sc.kind === "event") setEvent(sc.event);
+  }
   const [allow, setAllow] = useState<Allow>(routine?.allow ?? { tools: true, changes: "wait", commands: true });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -371,6 +436,19 @@ function RoutineEditor({
 
   return (
     <Screen title={routine ? `Edit "${routine.name}"` : "New routine"} onClose={onClose} back="‹ Routines">
+      {!routine && (
+        <>
+          <P muted>Start from a ready-made one, or write your own (or ask in any chat: "remind me at 5 to…").</P>
+          <View style={[s.row, { flexWrap: "wrap" }]}>
+            {READY.map((t) => (
+              <Chip key={t.name} label={t.name} active={ready === t.name} onPress={() => startFrom(t)} />
+            ))}
+          </View>
+          {ready && READY.find((t) => t.name === ready)?.needs && (
+            <P muted>Its persona needs {READY.find((t) => t.name === ready)!.needs}. Change anything in &lt;angle brackets&gt;.</P>
+          )}
+        </>
+      )}
       <Field label="Name" value={name} onChangeText={setName} placeholder="Morning brief" maxLength={80} />
       <Text style={s.label}>Persona (its instructions, model and tools do the work)</Text>
       <View style={[s.row, { flexWrap: "wrap" }]}>

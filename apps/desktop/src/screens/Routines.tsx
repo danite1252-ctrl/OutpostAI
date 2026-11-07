@@ -351,6 +351,51 @@ function LinkPanel({
   );
 }
 
+/** Ready-made routines to start from (the person fills in the parts in <angle brackets>). */
+const READY: { name: string; instructions: string; schedule: Schedule; notify: Notify; needs?: string }[] = [
+  {
+    name: "Morning brief",
+    instructions: "Give me a short morning brief: today's weather where I live, and anything on my calendar today. A few lines, no more.",
+    schedule: { kind: "days", time: "07:00", days: [1, 2, 3, 4, 5] },
+    notify: "always",
+    needs: "a web search tool, and Google for the calendar",
+  },
+  {
+    name: "Update checker",
+    instructions:
+      "Open https://papermc.io/downloads/paper and find the newest Paper version and build number. Compare it with what you found last time in this chat, and say if there's a newer one (its version and build).",
+    schedule: { kind: "every", hours: 6 },
+    notify: "worth",
+    needs: "a tool that reads web pages",
+  },
+  {
+    name: "News on a topic",
+    instructions: "Search the web for news from the last day about <your topic>. Give me the three most important items, a line each, with links.",
+    schedule: { kind: "days", time: "08:00", days: [0, 1, 2, 3, 4, 5, 6] },
+    notify: "worth",
+    needs: "a web search tool",
+  },
+  {
+    name: "Week ahead",
+    instructions: "Look at my calendar for this week. Tell me what's coming up, and anything I should prepare for.",
+    schedule: { kind: "days", time: "07:30", days: [1] },
+    notify: "always",
+    needs: "Google (calendar)",
+  },
+  {
+    name: "Reminder",
+    instructions: "Remind me to <what>.",
+    schedule: { kind: "once", at: Math.floor(Date.now() / 1000 / 60) * 60 + 3600 },
+    notify: "always",
+  },
+  {
+    name: "Caption new creations",
+    instructions: "Write a one-line caption for what was just made, and one idea to make it better.",
+    schedule: { kind: "event", event: "job_finished" },
+    notify: "always",
+  },
+];
+
 type Kind = "daily" | "weekdays" | "days" | "every" | "once" | "link" | "event";
 
 function kindOf(s: Schedule | null): Kind {
@@ -396,6 +441,22 @@ function RoutineEditor({
   const [at, setAt] = useState(localInput(s?.kind === "once" ? s.at : Math.floor(Date.now() / 1000) + 3600));
   const [notify, setNotify] = useState<Notify>(routine?.notify ?? "always");
   const [event, setEvent] = useState<"job_finished" | "training_finished">(s?.kind === "event" ? s.event : "job_finished");
+  const [ready, setReady] = useState<string | null>(null);
+  function startFrom(t: (typeof READY)[number]) {
+    const sc = t.schedule;
+    setReady(t.name);
+    setName(t.name);
+    setInstructions(t.instructions);
+    setNotify(t.notify);
+    setKind(kindOf(sc));
+    if (sc.kind === "days") {
+      setTime(sc.time);
+      setDays(sc.days);
+    }
+    if (sc.kind === "every") setHours(sc.hours);
+    if (sc.kind === "once") setAt(localInput(Math.floor(Date.now() / 1000 / 60) * 60 + 3600));
+    if (sc.kind === "event") setEvent(sc.event);
+  }
   const [allow, setAllow] = useState<RoutineAllow>(routine?.allow ?? { tools: true, changes: "wait", commands: true });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -445,6 +506,28 @@ function RoutineEditor({
   return (
     <section className="flex flex-col gap-4 rounded-2xl border border-ember/50 bg-surface p-5" aria-label={routine ? "Edit routine" : "New routine"}>
       <h2 className="text-lg font-semibold">{routine ? `Edit "${routine.name}"` : "New routine"}</h2>
+      {!routine && (
+        <div className="flex flex-col gap-2">
+          <p className="text-sm text-muted">Start from a ready-made one, or write your own (you can also ask in any chat: "remind me at 5 to…").</p>
+          <div className="flex flex-wrap gap-2">
+            {READY.map((t) => (
+              <button
+                key={t.name}
+                type="button"
+                onClick={() => startFrom(t)}
+                className={`min-h-9 rounded-full border px-3 text-sm ${ready === t.name ? "border-ember bg-ember/10 text-ink" : "border-line text-soft hover:bg-raised"}`}
+              >
+                {t.name}
+              </button>
+            ))}
+          </div>
+          {ready && READY.find((t) => t.name === ready)?.needs && (
+            <p className="text-xs text-muted">
+              Its persona needs {READY.find((t) => t.name === ready)!.needs} (in the persona's or its chat's tools). Change anything in &lt;angle brackets&gt;.
+            </p>
+          )}
+        </div>
+      )}
       <Field label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Morning brief" maxLength={80} />
       <label className="flex flex-col gap-1.5 text-sm text-muted">
         Persona (its instructions, model and tools do the work)

@@ -3371,6 +3371,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "if-addrs",
+ "jiff",
  "mdns-sd",
  "minisign-verify 0.2.5",
  "outpost-core",

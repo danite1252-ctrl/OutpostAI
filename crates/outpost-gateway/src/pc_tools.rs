@@ -20,6 +20,8 @@ pub const MAX_TOOLS: usize = 80;
 /// Longest a tool on the PC may take (a browser loading pages, a search).
 const CALL_WITHIN: Duration = Duration::from_secs(180);
 /// Longest to wait for a yes or no.
+/// How long the person has to OK a routine.
+const ROUTINE_WITHIN: Duration = Duration::from_secs(5 * 60);
 const CONFIRM_WITHIN: Duration = Duration::from_secs(60);
 /// Most of a tool's answer the model reads.
 const ANSWER_LIMIT: usize = 16_000;
@@ -57,6 +59,8 @@ pub enum Via {
     App,
     Device { tools: crate::device_tools::DeviceTools, session_id: String },
     Server(crate::AppState),
+    /// Outpost's own tools (making routines), for this person.
+    Outpost(crate::outpost_tools::Context),
 }
 
 struct Entry {
@@ -198,7 +202,12 @@ impl PcTools {
 
     /// The system prompt's part about them.
     pub fn instructions(&self) -> String {
-        let names: Vec<&str> = self.servers.iter().map(|s| s.name.as_str()).collect();
+        let outpost = self.servers.iter().any(|s| s.id == crate::outpost_tools::SERVER_ID);
+        let names: Vec<&str> = self.servers.iter().filter(|s| s.id != crate::outpost_tools::SERVER_ID).map(|s| s.name.as_str()).collect();
+        // Only Outpost's own: just how to use them.
+        if names.is_empty() && outpost {
+            return format!("## Tools{}", crate::outpost_tools::NOTE.trim_end());
+        }
         format!(
             "## Tools\nYou can use tools from: {}. Use them when they help answer (to look things up, check facts or \
              act for the user), and say what you found or did. Don't make up a tool's results; if one fails, say so. \
@@ -209,7 +218,7 @@ impl PcTools {
              means, look it up with a tool or ask, rather than guessing.{}",
             names.join(", "),
             if self.has_home_assistant() { HOME_ASSISTANT_NOTE } else { "" }
-        )
+        ) + if outpost { crate::outpost_tools::NOTE } else { "" }
     }
 
     /// Home Assistant's tools are here (their names start "Hass", plus GetLiveContext).
@@ -250,8 +259,16 @@ impl PcTools {
         let shown = format!("{} › {}", server.name, e.tool);
         let args = if args.is_object() { args.clone() } else { json!({}) };
         if self.confirm {
+            // (Hands-free: asked aloud here, so Outpost's own tools don't ask again below.)
             let read_only = server.tools.iter().find(|t| t.name == e.tool).and_then(|t| t.read_only);
-            let question = confirm_question(&server.name, &e.tool, &args, read_only);
+            let question = match &self.routes[e.server] {
+                // A routine: say what it is and when.
+                Via::Outpost(ctx) if e.tool == "make_routine" => match crate::outpost_tools::wanted(ctx, &args) {
+                    Ok(w) => format!("Shall I make the routine {}?", w.summary),
+                    Err(_) => confirm_question(&server.name, &e.tool, &args, read_only),
+                },
+                _ => confirm_question(&server.name, &e.tool, &args, read_only),
+            };
             let asked = json!({ "op": "confirm", "question": question, "server": server.name, "tool": e.tool, "arguments": args });
             let ok = match self.relay.ask_within(&self.events, &self.chat_id, asked, CONFIRM_WITHIN, "confirm").await {
                 Ok(v) => v.get("ok").and_then(Value::as_bool).unwrap_or(false),
@@ -267,10 +284,14 @@ impl PcTools {
                 };
             }
         }
+        if let Via::Outpost(ctx) = &self.routes[e.server] {
+            return self.outpost(ctx, &e.tool, &args, shown).await;
+        }
         let request = json!({ "op": "mcp", "server": server.id, "tool": e.tool, "arguments": args.clone() });
         let answer = match &self.routes[e.server] {
             Via::App => self.relay.ask_within(&self.events, &self.chat_id, request, CALL_WITHIN, "file_request").await,
             Via::Device { tools, session_id } => tools.call(session_id, request, CALL_WITHIN).await,
+            Via::Outpost(_) => unreachable!("handled above"),
             Via::Server(state) => match tokio::time::timeout(CALL_WITHIN, crate::server_tools::call(state, &server.id, &e.tool, args)).await {
                 Ok(Ok(r)) => Ok(json!({ "text": r.text, "is_error": r.is_error })),
                 Ok(Err(err)) => Err(err.trim_start_matches("needs sign-in: ").to_string()),
@@ -296,6 +317,57 @@ impl PcTools {
                 }
             }
             Err(why) => fail("mcp", &shown, why),
+        }
+    }
+}
+
+impl PcTools {
+    /// Outpost's own tools: a routine is made only once the person says yes (in the chat, or
+    /// aloud when hands-free already asked).
+    async fn outpost(&self, ctx: &crate::outpost_tools::Context, tool: &str, args: &Value, shown: String) -> Outcome {
+        let done = |reply: String, note: Option<String>, failed: bool| Outcome {
+            reply,
+            action: FileAction { op: "mcp".into(), path: shown.clone(), note, change_id: None, failed },
+            more: Vec::new(),
+        };
+        match tool {
+            "list_routines" => match crate::outpost_tools::list(ctx).await {
+                Ok(text) => done(text, None, false),
+                Err(why) => done(format!("Couldn't list the routines: {why}"), Some(why), true),
+            },
+            "make_routine" => {
+                let w = match crate::outpost_tools::wanted(ctx, args) {
+                    Ok(w) => w,
+                    Err(why) => return done(format!("The routine wasn't made: {why} Fix that and call make_routine again."), Some(why), true),
+                };
+                if !self.confirm {
+                    let instructions = w.input.instructions.clone().unwrap_or_default();
+                    let asked = json!({
+                        "kind": "routine",
+                        "question": format!("Make the routine {}?", w.summary),
+                        "summary": w.summary,
+                        "instructions": instructions,
+                    });
+                    let answer = self.relay.ask_within(&self.events, &self.chat_id, asked, ROUTINE_WITHIN, "confirm").await;
+                    let ok = answer.as_ref().is_ok_and(|v| v.get("ok").and_then(Value::as_bool) == Some(true));
+                    if !ok {
+                        let cannot = answer.as_ref().is_ok_and(|v| v.get("cannot_ask").and_then(Value::as_bool) == Some(true));
+                        let (reply, note) = if cannot {
+                            ("The routine wasn't made: this app can't ask the user to OK it (it may need updating). Tell the user they can make it in Routines.", "couldn't ask")
+                        } else if answer.is_err() {
+                            ("The routine wasn't made: the user didn't answer. Tell them it's waiting for their OK if they ask again.", "no answer")
+                        } else {
+                            ("The user chose not to make this routine. Don't make it again unless they ask.", "not made")
+                        };
+                        return done(reply.into(), Some(note.into()), true);
+                    }
+                }
+                match crate::outpost_tools::make(ctx, w).await {
+                    Ok(text) => done(text, Some("made".into()), false),
+                    Err(why) => done(format!("The routine wasn't made: {why}"), Some(why), true),
+                }
+            }
+            _ => done(format!("There's no Outpost tool called {tool}."), None, true),
         }
     }
 }

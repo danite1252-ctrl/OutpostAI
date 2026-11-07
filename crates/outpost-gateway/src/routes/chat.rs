@@ -561,6 +561,19 @@ pub async fn start_reply(
         for s in crate::server_tools::for_chat(&state, &account_id, restricted, &chat.id).await {
             tool_servers.push((s, Via::Server(state.clone())));
         }
+        // Outpost's own (making routines): for owners and members, not in a routine's own run.
+        if unattended.is_none() && matches!(auth.account.role, outpost_core::accounts::Role::Owner | outpost_core::accounts::Role::Member) {
+            // The person's clock: this app's, else the one last saved for them.
+            let saved = if req.utc_offset_minutes.is_none() { llm::UserClock::load(&state, &account_id).await } else { None };
+            let ctx = crate::outpost_tools::Context {
+                state: state.clone(),
+                account_id: account_id.clone(),
+                persona_id: chat.persona_id.clone(),
+                time_zone: req.time_zone.clone().or_else(|| saved.as_ref().and_then(|c| c.zone.clone())),
+                utc_offset_minutes: req.utc_offset_minutes.or(saved.as_ref().map(|c| c.offset_minutes)),
+            };
+            tool_servers.push((crate::outpost_tools::server(), Via::Outpost(ctx)));
+        }
     }
     if wants_tools && folders.is_empty() && !resolved.can_use_tools {
         return Err(ApiError::new(

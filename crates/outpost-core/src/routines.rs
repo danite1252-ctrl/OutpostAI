@@ -239,6 +239,41 @@ fn hour_minute(time: &str) -> Option<(i8, i8)> {
     ((0..24).contains(&h) && (0..60).contains(&m)).then_some((h, m))
 }
 
+/// A local date and time ("2026-11-07 17:00" or "2026-11-07T17:00") in that zone, as Unix seconds.
+pub fn local_time(zone: &TimeZone, text: &str) -> Option<i64> {
+    let text = text.trim().replacen(' ', "T", 1);
+    let dt: jiff::civil::DateTime = text.parse().ok()?;
+    Some(dt.to_zoned(zone.clone()).ok()?.timestamp().as_second())
+}
+
+/// "Weekdays at 07:30", "Every 4 hours", "Once, Sat 7 Nov 17:00": a schedule as words.
+pub fn describe(schedule: &Schedule, zone: &TimeZone) -> String {
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    match schedule {
+        Schedule::Link => "from its link (or Run now)".into(),
+        Schedule::Event { event } if event == "training_finished" => "when a training finishes".into(),
+        Schedule::Event { .. } => "when a picture, video or 3D model finishes".into(),
+        Schedule::Every { hours: 1 } => "every hour".into(),
+        Schedule::Every { hours } => format!("every {hours} hours"),
+        Schedule::Once { at } => match Timestamp::from_second(*at) {
+            Ok(t) => format!("once, {}", t.to_zoned(zone.clone()).strftime("%a %-d %b %H:%M")),
+            Err(_) => "once".into(),
+        },
+        Schedule::Days { time, days } => {
+            let mut d = days.clone();
+            d.sort_unstable();
+            d.dedup();
+            let which = match d.as_slice() {
+                [0, 1, 2, 3, 4, 5, 6] => "every day".to_string(),
+                [1, 2, 3, 4, 5] => "weekdays".to_string(),
+                [0, 6] => "weekends".to_string(),
+                _ => d.iter().filter_map(|i| DAYS.get(*i as usize)).copied().collect::<Vec<_>>().join(", "),
+            };
+            format!("{which} at {time}")
+        }
+    }
+}
+
 /// A person's time zone: by name when known ("Australia/Sydney", daylight saving and all),
 /// else their UTC offset, else UTC.
 pub fn zone(name: Option<&str>, offset_minutes: Option<i32>) -> TimeZone {
@@ -949,5 +984,17 @@ mod tests {
         let q = Quiet { from: "22:00".into(), to: "07:00".into() };
         assert_eq!(set_quiet(&pool, &me.id, Some(q.clone())).await.unwrap(), Some(q));
         assert_eq!(set_quiet(&pool, &me.id, None).await.unwrap(), None);
+    }
+
+    #[test]
+    fn local_times_and_schedules_in_words() {
+        let sydney = zone(Some("Australia/Sydney"), None);
+        assert_eq!(local_time(&sydney, "2026-11-06 20:00"), Some(1_793_955_600));
+        assert_eq!(local_time(&sydney, "2026-11-06T20:00"), Some(1_793_955_600));
+        assert_eq!(local_time(&sydney, "tomorrow"), None);
+        assert_eq!(describe(&Schedule::Once { at: 1_793_955_600 }, &sydney), "once, Fri 6 Nov 20:00");
+        assert_eq!(describe(&Schedule::Days { time: "07:30".into(), days: vec![5, 1, 2, 3, 4] }, &sydney), "weekdays at 07:30");
+        assert_eq!(describe(&Schedule::Days { time: "18:00".into(), days: vec![0] }, &sydney), "Sun at 18:00");
+        assert_eq!(describe(&Schedule::Every { hours: 6 }, &sydney), "every 6 hours");
     }
 }

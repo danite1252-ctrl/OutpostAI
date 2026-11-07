@@ -23,6 +23,7 @@ pub mod mcp_client;
 pub mod mcp_oauth;
 pub mod memory;
 pub mod openapi;
+pub mod outpost_tools;
 pub mod pc_tools;
 pub mod persona_templates;
 pub mod print3d;

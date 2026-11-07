@@ -236,6 +236,14 @@ A routine is a persona doing something on its own, on a schedule: a morning brie
 whether a new Paper build is out, a weekly summary. Owners and members can make them (on the
 PC: **Routines** in the sidebar; on the phone: **You › Routines**).
 
+- **Start from a ready-made one** (New routine): a morning brief, an update checker, news on a
+  topic, the week ahead, a reminder, or captions for new creations. Change anything in
+  <angle brackets>. Some need tools on their persona (web search, Google).
+- **Or ask in any chat**: "remind me at 5 to call Mum", "every weekday at 7 give me the
+  weather", "check that page every 6 hours and tell me if it changes". The persona sets it up
+  and asks you first (**Make it** / **No thanks**); it runs as that chat's persona, in your
+  time zone. Ask "what routines do I have?" to hear them. (Needs a model with tools; owners and
+  members.)
 - Give it a **name**, a **persona** (its instructions, model and tools do the work) and what it
   should do, in plain words.
 - Pick when: **every day**, **weekdays**, **chosen days** at a time, **every few hours**, or

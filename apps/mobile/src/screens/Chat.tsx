@@ -303,7 +303,14 @@ function Conversation({
   const [modelOpen, setModelOpen] = useState(false);
   const [docsOpen, setDocsOpen] = useState(false);
   // A command the reply wants to run, waiting for Allow or Skip.
-  const [asking, setAsking] = useState<{ id: string; command: string; folder: string; always: string | null } | null>(null);
+  const [asking, setAsking] = useState<{
+    id: string;
+    command: string;
+    folder: string;
+    always: string | null;
+    /** A routine the reply wants to make (its name and when; what it does). */
+    routine?: { summary: string; instructions: string };
+  } | null>(null);
   async function answerAsk(id: string, answer: { ok: boolean; always?: boolean; cannot_ask?: boolean }) {
     setAsking(null);
     try {
@@ -476,8 +483,10 @@ function Conversation({
         if (f.change_id) void chatFiles.reload();
       } else if (name === "confirm") {
         // A command the reply wants to run in a folder (asks here; other asks are skipped).
-        const c = data as { id: string; kind?: string; command?: string; folder?: string; always?: string | null };
+        const c = data as { id: string; kind?: string; command?: string; folder?: string; always?: string | null; summary?: string; instructions?: string };
         if (c.kind === "command") setAsking({ id: c.id, command: c.command ?? "", folder: c.folder ?? "", always: c.always ?? null });
+        else if (c.kind === "routine")
+          setAsking({ id: c.id, command: "", folder: "", always: null, routine: { summary: c.summary ?? "", instructions: c.instructions ?? "" } });
         else void answerAsk(c.id, { ok: false, cannot_ask: true });
       } else if (name === "answered") {
         // Answered on another device (or given up on): put it away here too.
@@ -632,7 +641,20 @@ function Conversation({
           </View>
         )}
         {!draft && <WaitingChanges api={api} chatId={chat.id} files={chatFiles} />}
-        {asking && (
+        {asking?.routine && (
+          <View accessibilityRole="alert" style={[s.card, { gap: 8, borderColor: C.amber }]}>
+            <Text style={{ color: C.ink }}>Make the routine {asking.routine.summary}?</Text>
+            {!!asking.routine.instructions && (
+              <Text style={{ color: C.soft, backgroundColor: C.raised, padding: 8, borderRadius: 8 }}>{asking.routine.instructions}</Text>
+            )}
+            <Text style={{ color: C.muted, fontSize: 12 }}>It runs on its own and tells you the result. Change or delete it in Routines.</Text>
+            <View style={[s.row, { flexWrap: "wrap" }]}>
+              <Chip label="Make it" active onPress={() => void answerAsk(asking.id, { ok: true })} />
+              <Chip label="No thanks" onPress={() => void answerAsk(asking.id, { ok: false })} />
+            </View>
+          </View>
+        )}
+        {asking && !asking.routine && (
           <View accessibilityRole="alert" style={[s.card, { gap: 8, borderColor: C.amber }]}>
             <Text style={{ color: C.ink }}>Run this in {asking.folder}?</Text>
             <Text style={{ color: C.soft, fontFamily: "monospace", backgroundColor: C.raised, padding: 8, borderRadius: 8 }}>{asking.command}</Text>
