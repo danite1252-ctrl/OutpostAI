@@ -1891,7 +1891,9 @@ export const voiceApi = {
 export type Schedule =
   | { kind: "once"; at: number }
   | { kind: "days"; time: string; days: number[] }
-  | { kind: "every"; hours: number };
+  | { kind: "every"; hours: number }
+  | { kind: "link" }
+  | { kind: "event"; event: "job_finished" | "training_finished" };
 
 export interface Routine {
   id: string;
@@ -1904,6 +1906,8 @@ export interface Routine {
   enabled: boolean;
   /** When it tells you about a run. */
   notify: Notify;
+  /** It can be started from its secret link. */
+  has_link: boolean;
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -1932,7 +1936,7 @@ export interface RoutineRun {
   status: "ok" | "failed" | "running";
   message_id: string | null;
   note: string | null;
-  reason: "schedule" | "now";
+  reason: "schedule" | "now" | "link" | "event";
 }
 
 /** This app's time zone, sent with a routine so it runs at your times. */
@@ -1954,4 +1958,7 @@ export const routinesApi = {
   remove: (token: string, id: string) => request<void>("DELETE", `/api/routines/${id}`, { token }),
   runNow: (token: string, id: string) => request<Routine>("POST", `/api/routines/${id}/run`, { token }),
   runs: (token: string, id: string) => request<RoutineRun[]>("GET", `/api/routines/${id}/runs?limit=10`, { token }),
+  /** A new secret link (the old one stops working), or none. The token is shown this once. */
+  setLink: (token: string, id: string, on: boolean) =>
+    request<{ routine: Routine; token: string | null }>("PUT", `/api/routines/${id}/link`, { token, body: { on } }),
 };

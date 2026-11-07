@@ -728,10 +728,25 @@ pub async fn start_reply(
             body["tools"] = serde_json::Value::Array(tools);
         }
         crate::workspace::clear_stop(&chat_id);
+        // The same call made again and again (a page that won't load): how often each was made.
+        let mut repeats: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for round in 0..=max_rounds {
             if round > 0 && crate::workspace::stopped(&chat_id) {
                 failure = Some("Stopped.".into());
                 break;
+            }
+            // The last round is for answering: no more tools, and a note to answer with what it has.
+            if round == max_rounds && round > 0 {
+                if let Some(b) = body.as_object_mut() {
+                    b.remove("tools");
+                }
+                if let Some(last) = body.get_mut("messages").and_then(serde_json::Value::as_array_mut).and_then(|m| m.last_mut()) {
+                    let text = last["content"].as_str().unwrap_or_default().to_string();
+                    last["content"] = serde_json::Value::String(format!(
+                        "{text}\n\n[That was the last tool use for this reply. Now give your answer with what you've found, \
+                         and say briefly what you couldn't find or finish.]"
+                    ));
+                }
             }
             let before = content.len();
             let (calls, failed) = stream_round(&round_state, &body, &tx, &mut content, &mut thinking).await;
@@ -757,10 +772,24 @@ pub async fn start_reply(
                     other => other.clone(),
                 };
                 let name = &call.function.name;
-                let outcome = match (&pc_tools, &workspace) {
-                    (Some(t), _) if t.has(name) => t.run(name, &args).await,
-                    (_, Some(w)) => w.run(name, &args).await,
-                    _ => crate::workspace::fail("tool", name, format!("There's no tool called {name}.")),
+                let seen = repeats.entry(format!("{name} {args}")).or_insert(0);
+                *seen += 1;
+                let outcome = if *seen > 2 {
+                    crate::workspace::fail(
+                        "tool",
+                        name,
+                        format!(
+                            "Not run: you've already made exactly this call {} times and got its result. Don't repeat it: \
+                             try something different, or give your answer with what you have.",
+                            *seen - 1
+                        ),
+                    )
+                } else {
+                    match (&pc_tools, &workspace) {
+                        (Some(t), _) if t.has(name) => t.run(name, &args).await,
+                        (_, Some(w)) => w.run(name, &args).await,
+                        _ => crate::workspace::fail("tool", name, format!("There's no tool called {name}.")),
+                    }
                 };
                 let _ = tx.send(event("file", serde_json::json!(outcome.action))).await;
                 actions.push(outcome.action);

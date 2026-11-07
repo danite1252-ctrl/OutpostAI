@@ -27,7 +27,15 @@ pub enum Schedule {
     Days { time: String, days: Vec<u8> },
     /// Every so many hours (1 to 168).
     Every { hours: u32 },
+    /// Never on its own: only from its link, or Run now.
+    Link,
+    /// When something happens in Outpost: `job_finished` (a picture, video or 3D model of
+    /// yours finished) or `training_finished` (a character's training).
+    Event { event: String },
 }
+
+/// What can start a routine that runs when something happens.
+pub const EVENTS: [&str; 2] = ["job_finished", "training_finished"];
 
 impl Schedule {
     fn check(&self) -> CoreResult<()> {
@@ -43,6 +51,9 @@ impl Schedule {
             Schedule::Every { hours } if !(1..=168).contains(hours) => {
                 Err(CoreError::Invalid("Every 1 to 168 hours.".into()))
             }
+            Schedule::Event { event } if !EVENTS.contains(&event.as_str()) => {
+                Err(CoreError::Invalid("Pick what starts it.".into()))
+            }
             _ => Ok(()),
         }
     }
@@ -53,6 +64,7 @@ impl Schedule {
         match self {
             Schedule::Once { at } => (*at > after).then_some(*at),
             Schedule::Every { hours } => Some(after + i64::from(*hours) * 3600),
+            Schedule::Link | Schedule::Event { .. } => None,
             Schedule::Days { time, days } => {
                 let (h, m) = hour_minute(time)?;
                 let start = Timestamp::from_second(after).ok()?.to_zoned(zone.clone());
@@ -149,6 +161,8 @@ pub struct Routine {
     pub enabled: bool,
     /// When it tells you about a run.
     pub notify: Notify,
+    /// It can be started from its secret link.
+    pub has_link: bool,
     /// Its chat (where each run's reply goes), once it has run.
     pub chat_id: Option<String>,
     /// When it runs next (Unix seconds); none when paused or finished.
@@ -179,6 +193,7 @@ struct Row {
     utc_offset_minutes: Option<i64>,
     enabled: i64,
     notify: String,
+    has_link: i64,
     chat_id: Option<String>,
     next_at: Option<i64>,
     last_at: Option<i64>,
@@ -201,6 +216,7 @@ impl Row {
             utc_offset_minutes: self.utc_offset_minutes.map(|m| m as i32),
             enabled: self.enabled != 0,
             notify: Notify::parse(&self.notify),
+            has_link: self.has_link != 0,
             chat_id: self.chat_id,
             next_at: self.next_at,
             last_at: self.last_at,
@@ -213,7 +229,7 @@ impl Row {
 }
 
 const COLUMNS: &str = "id, account_id, name, persona_id, instructions, schedule, time_zone, utc_offset_minutes, enabled, \
-                       notify, chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
+                       notify, hook_hash IS NOT NULL AS has_link, chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
 
 /// A new routine, or changes to one (fields left out stay as they are).
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
@@ -399,6 +415,44 @@ pub async fn delete(pool: &SqlitePool, account_id: &str, id: &str) -> CoreResult
         return Err(CoreError::NotFound);
     }
     Ok(())
+}
+
+/// Give a routine a new secret link (any old one stops working), or take it away. Returns
+/// the link's token, shown this once.
+pub async fn set_link(pool: &SqlitePool, account_id: &str, id: &str, on: bool) -> CoreResult<Option<String>> {
+    get(pool, account_id, id).await?;
+    let (token, hash) = if on {
+        let (t, h) = crate::secret::new_token()?;
+        (Some(t), Some(h))
+    } else {
+        (None, None)
+    };
+    sqlx::query("UPDATE routines SET hook_hash = ?, updated_at = ? WHERE id = ? AND account_id = ?")
+        .bind(&hash)
+        .bind(now())
+        .bind(id)
+        .bind(account_id)
+        .execute(pool)
+        .await?;
+    Ok(token)
+}
+
+/// The routine a link's token starts, if any.
+pub async fn by_link(pool: &SqlitePool, token: &str) -> CoreResult<Option<Routine>> {
+    let row: Option<Row> = sqlx::query_as(&format!("SELECT {COLUMNS} FROM routines WHERE hook_hash = ?"))
+        .bind(crate::secret::hash_token(token))
+        .fetch_optional(pool)
+        .await?;
+    row.map(Row::into_routine).transpose()
+}
+
+/// My routines (switched on) that start when this happens.
+pub async fn on_event(pool: &SqlitePool, account_id: &str, event: &str) -> CoreResult<Vec<Routine>> {
+    Ok(list(pool, account_id)
+        .await?
+        .into_iter()
+        .filter(|r| r.enabled && matches!(&r.schedule, Schedule::Event { event: e } if e == event))
+        .collect())
 }
 
 /// The routine's chat, once made.
@@ -600,6 +654,55 @@ mod tests {
         let after = get(&pool, &me.id, &r.id).await.unwrap();
         assert!(after.enabled, "still on");
         assert_eq!(after.next_at, None, "nothing next: done");
+    }
+
+    #[tokio::test]
+    async fn a_link_starts_its_routine_until_its_taken_away() {
+        let pool = crate::db::open_in_memory().await.unwrap();
+        let me = crate::accounts::create(
+            &pool,
+            crate::accounts::NewAccount { name: "Dan".into(), role: crate::accounts::Role::Owner, secret: Some("4821".into()) },
+        )
+        .await
+        .unwrap();
+        let r = create(
+            &pool,
+            &me.id,
+            RoutineInput {
+                name: Some("Door".into()),
+                instructions: Some("Tell me who's at the door.".into()),
+                schedule: Some(Schedule::Link),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.next_at, None, "never on its own");
+        assert!(!r.has_link);
+        let token = set_link(&pool, &me.id, &r.id, true).await.unwrap().unwrap();
+        assert_eq!(by_link(&pool, &token).await.unwrap().unwrap().id, r.id);
+        assert!(get(&pool, &me.id, &r.id).await.unwrap().has_link);
+        // A new link: the old one stops working.
+        let newer = set_link(&pool, &me.id, &r.id, true).await.unwrap().unwrap();
+        assert!(by_link(&pool, &token).await.unwrap().is_none());
+        set_link(&pool, &me.id, &r.id, false).await.unwrap();
+        assert!(by_link(&pool, &newer).await.unwrap().is_none());
+        // Events: only the right one, only when switched on.
+        let e = create(
+            &pool,
+            &me.id,
+            RoutineInput {
+                name: Some("Shared".into()),
+                instructions: Some("Post it.".into()),
+                schedule: Some(Schedule::Event { event: "job_finished".into() }),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(on_event(&pool, &me.id, "job_finished").await.unwrap()[0].id, e.id);
+        assert!(on_event(&pool, &me.id, "training_finished").await.unwrap().is_empty());
+        assert!(Schedule::Event { event: "nope".into() }.check().is_err());
     }
 
     #[test]

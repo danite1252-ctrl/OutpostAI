@@ -374,6 +374,24 @@ async fn routines_are_made_paused_run_and_kept_to_their_owner() {
     assert!(r[0]["chat_id"].is_string(), "its chat was made: {r}");
     assert_eq!(r[0]["last_status"], "running");
 
+    // A secret link: shown once, starts it with no sign-in; a wrong one doesn't.
+    let (s, link_only) = call(&app, "POST", "/api/routines", Some(&sj), Some(json!({
+        "name": "Door", "instructions": "Say who's at the door.", "schedule": {"kind": "link"}
+    }))).await;
+    assert_eq!(s, StatusCode::CREATED, "{link_only}");
+    assert!(link_only["next_at"].is_null());
+    let door = link_only["id"].as_str().unwrap().to_string();
+    let (_, made) = call(&app, "PUT", &format!("/api/routines/{door}/link"), Some(&sj), Some(json!({"on": true}))).await;
+    let token = made["token"].as_str().unwrap().to_string();
+    assert_eq!(made["routine"]["has_link"], true);
+    let (s, _) = call(&app, "POST", "/api/hooks/routines/nope", None, Some(json!({"who": "Sam"}))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (s, _) = call(&app, "POST", &format!("/api/hooks/routines/{token}"), None, Some(json!({"who": "Sam"}))).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let (_, runs) = call(&app, "GET", &format!("/api/routines/{door}/runs"), Some(&sj), None).await;
+    assert_eq!(runs[0]["reason"], "link", "{runs}");
+
     let (s, _) = call(&app, "DELETE", &format!("/api/routines/{id}"), Some(&sj), None).await;
     assert_eq!(s, StatusCode::NO_CONTENT);
 }

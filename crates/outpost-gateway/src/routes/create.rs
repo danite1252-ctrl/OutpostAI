@@ -656,7 +656,7 @@ pub async fn finished_jobs(State(state): State<AppState>, auth: Auth, Query(q): 
     }
 }
 
-async fn finished_view(state: &AppState, job: Job) -> FinishedJob {
+pub(crate) async fn finished_view(state: &AppState, job: Job) -> FinishedJob {
     let kind = if job.pack_id == crate::train::PACK_ID {
         "training"
     } else {

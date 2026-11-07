@@ -151,6 +151,8 @@ use crate::routes::{
         crate::routines::delete,
         crate::routines::run_now,
         crate::routines::runs,
+        crate::routines::set_link,
+        crate::routines::hook,
         crate::persona_templates::add,
         crate::server_tools::catalog,
         crate::server_tools::create,

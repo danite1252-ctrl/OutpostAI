@@ -2,7 +2,7 @@
 // pause and run them; see how each went, and open its chat for the full result.
 
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { Alert, Share, Text, View } from "react-native";
 import { ListState, message, Screen } from "./admin";
 import type { Outpost } from "./outpost";
 import { Avatar, Button, C, Chip, ErrorText, Field, P, s } from "./ui";
@@ -15,7 +15,17 @@ const NOTIFY: { id: Notify; label: string; short: string }[] = [
   { id: "never", label: "Never", short: "doesn't notify" },
 ];
 
-type Schedule = { kind: "once"; at: number } | { kind: "days"; time: string; days: number[] } | { kind: "every"; hours: number };
+type Schedule =
+  | { kind: "once"; at: number }
+  | { kind: "days"; time: string; days: number[] }
+  | { kind: "every"; hours: number }
+  | { kind: "link" }
+  | { kind: "event"; event: "job_finished" | "training_finished" };
+
+const EVENTS = [
+  { id: "job_finished", label: "A picture, video or 3D model finishes" },
+  { id: "training_finished", label: "A training finishes" },
+] as const;
 
 interface Routine {
   id: string;
@@ -25,6 +35,7 @@ interface Routine {
   schedule: Schedule;
   enabled: boolean;
   notify: Notify;
+  has_link: boolean;
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -56,6 +67,8 @@ function when(unix: number) {
 }
 
 function describe(s: Schedule) {
+  if (s.kind === "link") return "Starts from its link (or Run now)";
+  if (s.kind === "event") return s.event === "training_finished" ? "When a training finishes" : "When a Create job finishes";
   if (s.kind === "every") return s.hours === 1 ? "Every hour" : `Every ${s.hours} hours`;
   if (s.kind === "once") return `Once, ${when(s.at)}`;
   const days = [...s.days].sort().join();
@@ -147,7 +160,15 @@ export function RoutinesScreen({ api, onClose, onOpenChat }: { api: Outpost; onC
                   {persona ? ` · ${persona.name}` : ""} · {NOTIFY.find((n) => n.id === r.notify)?.short}
                 </Text>
                 <Text style={{ color: !r.enabled ? C.muted : running ? C.amber : C.soft, fontSize: 13 }}>
-                  {!r.enabled ? "Paused" : running ? "Running now…" : r.next_at ? `Next: ${when(r.next_at)}` : "Done (it ran once)"}
+                  {!r.enabled
+                    ? "Paused"
+                    : running
+                      ? "Running now…"
+                      : r.next_at
+                        ? `Next: ${when(r.next_at)}`
+                        : r.schedule.kind === "link" || r.schedule.kind === "event"
+                          ? "Waiting"
+                          : "Done (it ran once)"}
                 </Text>
               </View>
             </View>
@@ -156,6 +177,7 @@ export function RoutinesScreen({ api, onClose, onOpenChat }: { api: Outpost; onC
                 {r.last_status === "failed" ? "Last run failed" : "Last run"} ({when(r.last_at)}): {r.last_note ?? ""}
               </Text>
             )}
+            <LinkRow api={api} routine={r} onChanged={replace} act={act} />
             <View style={[s.row, { flexWrap: "wrap" }]}>
               {!running && (
                 <Chip label="Run now" onPress={() => void act(async () => replace(await api.json<Routine>("POST", `/api/routines/${r.id}/run`)))} />
@@ -192,7 +214,58 @@ export function RoutinesScreen({ api, onClose, onOpenChat }: { api: Outpost; onC
   );
 }
 
-type Kind = "daily" | "weekdays" | "days" | "every" | "once";
+/** Its secret link, for starting it from n8n, Home Assistant or anything that can call a web address. */
+function LinkRow({
+  api,
+  routine: r,
+  onChanged,
+  act,
+}: {
+  api: Outpost;
+  routine: Routine;
+  onChanged: (r: Routine) => void;
+  act: (work: () => Promise<unknown>) => Promise<void>;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  const make = (on: boolean) =>
+    act(async () => {
+      const made = await api.json<{ routine: Routine; token: string | null }>("PUT", `/api/routines/${r.id}/link`, { on });
+      onChanged(made.routine);
+      setUrl(made.token ? `https://${api.conn.hosts[0]}:${api.conn.port}/api/hooks/routines/${made.token}` : null);
+    });
+  if (!r.has_link && r.schedule.kind !== "link" && !url) return null;
+  return (
+    <View style={{ gap: 6 }}>
+      <View style={[s.row, { flexWrap: "wrap", alignItems: "center" }]}>
+        <Text style={{ color: C.muted, fontSize: 13, flex: 1 }}>{r.has_link ? "Has a secret link" : "Starts from a secret link (none yet)"}</Text>
+        <Chip label={r.has_link ? "New link" : "Make its link"} onPress={() => void make(true)} />
+        {r.has_link && (
+          <Chip
+            label="Remove link"
+            color={C.danger}
+            onPress={() =>
+              Alert.alert("Remove its link?", "Anything using it stops working.", [
+                { text: "Keep", style: "cancel" },
+                { text: "Remove", style: "destructive", onPress: () => void make(false) },
+              ])
+            }
+          />
+        )}
+      </View>
+      {url && (
+        <View style={{ gap: 4 }}>
+          <Text style={{ color: C.amber, fontSize: 12 }}>Send it to yourself now: it's only shown this once. Anyone with it can start this routine.</Text>
+          <Text selectable style={{ color: C.ink, fontSize: 12, fontFamily: "monospace" }}>
+            {url}
+          </Text>
+          <Chip label="Share the link" onPress={() => void Share.share({ message: url })} />
+        </View>
+      )}
+    </View>
+  );
+}
+
+type Kind = "daily" | "weekdays" | "days" | "every" | "once" | "link" | "event";
 
 function kindOf(s: Schedule | null): Kind {
   if (!s) return "weekdays";
@@ -228,12 +301,17 @@ function RoutineEditor({
   const [date, setDate] = useState(`${onceAt.getFullYear()}-${pad(onceAt.getMonth() + 1)}-${pad(onceAt.getDate())}`);
   const [onceTime, setOnceTime] = useState(`${pad(onceAt.getHours())}:${pad(onceAt.getMinutes())}`);
   const [notify, setNotify] = useState<Notify>(routine?.notify ?? "always");
+  const [event, setEvent] = useState<"job_finished" | "training_finished">(sch?.kind === "event" ? sch.event : "job_finished");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function schedule(): Schedule | string {
     const okTime = (t: string) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(t.trim());
     switch (kind) {
+      case "link":
+        return { kind: "link" };
+      case "event":
+        return { kind: "event", event };
       case "every": {
         const h = Number(hours);
         return Number.isInteger(h) && h >= 1 && h <= 168 ? { kind: "every", hours: h } : "Every 1 to 168 hours.";
@@ -274,6 +352,8 @@ function RoutineEditor({
     { id: "days", label: "Chosen days" },
     { id: "every", label: "Every few hours" },
     { id: "once", label: "Once" },
+    { id: "link", label: "From a link" },
+    { id: "event", label: "When something happens" },
   ];
 
   return (
@@ -315,6 +395,14 @@ function RoutineEditor({
       )}
       {(kind === "daily" || kind === "weekdays" || kind === "days") && (
         <Field label="At (24-hour, like 07:30)" value={time} onChangeText={setTime} keyboardType="numbers-and-punctuation" />
+      )}
+      {kind === "link" && <P muted>It runs when something calls its secret link (n8n, Home Assistant), or Run now. Make the link once it's saved.</P>}
+      {kind === "event" && (
+        <View style={{ gap: 6 }}>
+          {EVENTS.map((ev) => (
+            <Chip key={ev.id} label={ev.label} active={event === ev.id} onPress={() => setEvent(ev.id)} />
+          ))}
+        </View>
       )}
       {kind === "every" && <Field label="Every how many hours" value={hours} onChangeText={setHours} keyboardType="number-pad" />}
       {kind === "once" && (

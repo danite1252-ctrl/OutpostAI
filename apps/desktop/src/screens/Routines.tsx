@@ -2,7 +2,7 @@
 // a morning brief"). Each run is a reply in the routine's own chat.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, routinesApi, type Notify, type Persona, type Routine, type RoutineRun, type Schedule } from "../api";
+import { api, GATEWAY, routinesApi, type Notify, type Persona, type Routine, type RoutineRun, type Schedule } from "../api";
 import { Avatar, Button, ErrorNote, Field, areYouSure } from "../components/ui";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -38,7 +38,14 @@ export function when(unix: number) {
 }
 
 /** "Weekdays at 7:30 am", "Every 4 hours", "Once, Sat 7 Nov, 9:00 am". */
+const EVENTS = [
+  { id: "job_finished", label: "A picture, video or 3D model of yours finishes" },
+  { id: "training_finished", label: "A character's training finishes" },
+] as const;
+
 export function describe(s: Schedule) {
+  if (s.kind === "link") return "Starts from its link (or Run now)";
+  if (s.kind === "event") return s.event === "training_finished" ? "When a training finishes" : "When a Create job finishes";
   if (s.kind === "every") return s.hours === 1 ? "Every hour" : `Every ${s.hours} hours`;
   if (s.kind === "once") return `Once, ${when(s.at)}`;
   const days = [...s.days].sort();
@@ -176,6 +183,8 @@ function RoutineCard({
               <span className="text-amber">Running now…</span>
             ) : r.next_at ? (
               <span className="text-soft">Next: {when(r.next_at)}</span>
+            ) : r.schedule.kind === "link" || r.schedule.kind === "event" ? (
+              <span className="text-soft">Waiting</span>
             ) : (
               <span className="text-muted">Done (it ran once)</span>
             )}
@@ -221,6 +230,7 @@ function RoutineCard({
           {r.last_note ?? ""}
         </div>
       )}
+      <LinkPanel token={token} routine={r} onChanged={onChanged} act={act} />
       <details
         onToggle={(e) => {
           if ((e.target as HTMLDetailsElement).open) void routinesApi.runs(token, r.id).then(setRuns, () => setRuns([]));
@@ -240,7 +250,7 @@ function RoutineCard({
                 </span>
                 <span className="text-muted">
                   {when(run.started_at)}
-                  {run.reason === "now" ? " (Run now)" : ""}
+                  {run.reason === "now" ? " (Run now)" : run.reason === "link" ? " (from its link)" : run.reason === "event" ? " (something happened)" : ""}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-soft">{run.note ?? ""}</span>
               </li>
@@ -252,12 +262,100 @@ function RoutineCard({
   );
 }
 
-type Kind = "daily" | "weekdays" | "days" | "every" | "once";
+/** Its secret link: for starting it from n8n, Home Assistant or anything that can call a web address. */
+function LinkPanel({
+  token,
+  routine: r,
+  onChanged,
+  act,
+}: {
+  token: string;
+  routine: Routine;
+  onChanged: (r: Routine) => void;
+  act: (work: () => Promise<unknown>) => Promise<void>;
+}) {
+  const [shown, setShown] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const url = shown ? `${GATEWAY}/api/hooks/routines/${shown}` : null;
+  const local = GATEWAY.includes("127.0.0.1") || GATEWAY.includes("localhost");
+  async function make(on: boolean) {
+    await act(async () => {
+      const made = await routinesApi.setLink(token, r.id, on);
+      onChanged(made.routine);
+      setShown(made.token);
+      setCopied(false);
+    });
+  }
+  if (!r.has_link && r.schedule.kind !== "link" && !url)
+    return (
+      <button type="button" className="self-start text-xs text-muted underline hover:text-ink" onClick={() => void make(true)}>
+        Also start it from a secret link…
+      </button>
+    );
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-line px-3 py-2 text-sm">
+      {!r.has_link ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-muted">It starts from a secret link, which it hasn't got yet.</span>
+          <Button variant="ghost" onClick={() => void make(true)}>
+            Make its link
+          </Button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-soft">Has a secret link</span>
+          <Button variant="ghost" onClick={() => void make(true)}>
+            Make a new link
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() =>
+              void (async () => {
+                if (await areYouSure("Remove its link? Anything using it stops working.")) await make(false);
+              })()
+            }
+          >
+            Remove link
+          </Button>
+        </div>
+      )}
+      {url && (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs text-amber">Copy it now: it's only shown this once. Anyone with it can start this routine.</p>
+          <div className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded-lg bg-deep px-2 py-1.5 text-xs">{url}</code>
+            <Button
+              variant="ghost"
+              onClick={() =>
+                void navigator.clipboard.writeText(url).then(
+                  () => setCopied(true),
+                  () => setCopied(false),
+                )
+              }
+            >
+              {copied ? "Copied" : "Copy"}
+            </Button>
+          </div>
+          <p className="text-xs text-muted">
+            Call it with POST (or GET). Anything sent with it (text, or JSON like {'{"who": "Sam"}'}) is passed to the routine as
+            information. Outpost's certificate is its own, so in n8n turn on "Ignore SSL issues", and in Home Assistant use
+            verify_ssl: false.
+            {local ? " From another machine, use this PC's network address instead of 127.0.0.1." : ""}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type Kind = "daily" | "weekdays" | "days" | "every" | "once" | "link" | "event";
 
 function kindOf(s: Schedule | null): Kind {
   if (!s) return "weekdays";
   if (s.kind === "every") return "every";
   if (s.kind === "once") return "once";
+  if (s.kind === "link") return "link";
+  if (s.kind === "event") return "event";
   const d = [...s.days].sort().join();
   if (d === "0,1,2,3,4,5,6") return "daily";
   if (d === "1,2,3,4,5") return "weekdays";
@@ -294,6 +392,7 @@ function RoutineEditor({
   const [hours, setHours] = useState(s?.kind === "every" ? s.hours : 4);
   const [at, setAt] = useState(localInput(s?.kind === "once" ? s.at : Math.floor(Date.now() / 1000) + 3600));
   const [notify, setNotify] = useState<Notify>(routine?.notify ?? "always");
+  const [event, setEvent] = useState<"job_finished" | "training_finished">(s?.kind === "event" ? s.event : "job_finished");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -309,6 +408,10 @@ function RoutineEditor({
         return { kind: "every", hours };
       case "once":
         return { kind: "once", at: Math.floor(new Date(at).getTime() / 1000) };
+      case "link":
+        return { kind: "link" };
+      case "event":
+        return { kind: "event", event };
     }
   }
 
@@ -331,6 +434,8 @@ function RoutineEditor({
     { id: "days", label: "Chosen days" },
     { id: "every", label: "Every few hours" },
     { id: "once", label: "Once" },
+    { id: "link", label: "From a link" },
+    { id: "event", label: "When something happens" },
   ];
 
   return (
@@ -408,6 +513,23 @@ function RoutineEditor({
           />
         )}
         {kind === "once" && <Field label="On" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} />}
+        {kind === "link" && (
+          <p className="text-sm text-muted">
+            It runs when something calls its secret link (n8n, Home Assistant, a script), or when you press Run now. Make the link
+            once it's saved.
+          </p>
+        )}
+        {kind === "event" && (
+          <div className="flex flex-col gap-2" role="radiogroup" aria-label="What starts it">
+            {EVENTS.map((ev) => (
+              <label key={ev.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                <input type="radio" name="event" checked={event === ev.id} onChange={() => setEvent(ev.id)} />
+                {ev.label}
+              </label>
+            ))}
+            <p className="text-xs text-muted">What finished (its name and how it went) is passed to the routine.</p>
+          </div>
+        )}
         <p className="text-xs text-muted">Times are this PC's time zone, daylight saving included, wherever the server is.</p>
       </fieldset>
 

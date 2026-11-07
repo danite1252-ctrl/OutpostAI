@@ -240,6 +240,16 @@ PC: **Routines** in the sidebar; on the phone: **You › Routines**).
   should do, in plain words.
 - Pick when: **every day**, **weekdays**, **chosen days** at a time, **every few hours**, or
   **once**. Times are your device's time zone (daylight saving included), wherever the server is.
+- Or start it **when something happens**: a picture, video or 3D model of yours finishing, or a
+  character's training finishing. What finished (its name and how it went) is passed to it. A
+  picture the routine makes itself doesn't start it again.
+- Or **from a link**: give the routine a secret link (on the PC, **Make its link**, or **Also
+  start it from a secret link…** for any routine; on the phone, **Make its link**) and call it
+  from n8n, Home Assistant or a script, with POST or GET. Anything sent with it (text, or JSON
+  like `{"who": "Sam"}`) is passed to the routine as information. The link is shown once:
+  copy it then. **Make a new link** replaces it (the old one stops working); **Remove link**
+  takes it away. Outpost's certificate is its own, so tell the caller not to check it (n8n:
+  "Ignore SSL issues"; Home Assistant: `verify_ssl: false`).
 - Each run is a reply in the routine's own chat, so you can read every result (**Open chat**)
   or carry on talking about one. The list shows when it runs next and how the last run went.
 - **Run now** runs it straight away (its schedule carries on as before). **Pause** stops it

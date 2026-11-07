@@ -101,6 +101,13 @@ pub async fn job_finished(state: &AppState, job_id: &str) {
         JobStatus::Cancelled => "cancelled",
         _ => return,
     };
+    // Routines waiting for this (not for cancelled ones).
+    if status != "cancelled" {
+        let event = if job.pack_id == crate::train::PACK_ID { "training_finished" } else { "job_finished" };
+        let seen = crate::routes::create::finished_view(state, job.clone()).await;
+        let details = format!("{}. {}", seen.title, seen.body).trim().to_string();
+        crate::routines::happened(state, &job.account_id, event, &job.id, details).await;
+    }
     if job.pack_id == crate::train::PACK_ID {
         let Ok(t) = training::training_for_job(&state.pool, &job.id).await else { return };
         let run = training::run_dir(&crate::train::root(state), &t.id);

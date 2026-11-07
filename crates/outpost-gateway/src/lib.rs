@@ -254,6 +254,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/routines/{id}", put(routines::update).delete(routines::delete))
         .route("/api/routines/{id}/run", post(routines::run_now))
         .route("/api/routines/{id}/runs", get(routines::runs))
+        .route("/api/routines/{id}/link", put(routines::set_link))
+        .route("/api/hooks/routines/{token}", post(routines::hook).get(routines::hook))
         .route("/api/files/{id}", get(chat::get_file))
         .route("/api/memory", get(chat::list_memory).post(chat::add_memory))
         .route(
