@@ -318,7 +318,7 @@ async fn ask(state: &AppState, account: &str, slug: &str, message: &str) -> Resu
     let persona = personas::get_by_slug(&state.pool, account, slug)
         .await
         .map_err(|_| format!("No persona \"{slug}\". Use list_personas."))?;
-    let resolved = llm::resolve_model(state, None, Some(&persona)).await.map_err(|e| e.message)?;
+    let resolved = llm::resolve_model(state, None, Some(&persona), false).await.map_err(|e| e.message)?;
     let system = llm::system_prompt(state, account, Some(&persona), Some(message))
         .await
         .map_err(|e| e.message)?;

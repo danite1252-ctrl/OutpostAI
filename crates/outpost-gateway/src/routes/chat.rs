@@ -521,7 +521,7 @@ pub async fn start_reply(
         Some(pid) => personas::get_usable(&state.pool, &account_id, pid).await.ok(),
         None => None,
     };
-    let resolved = llm::resolve_model(&state, chat.model.as_deref(), persona.as_ref()).await?;
+    let resolved = llm::resolve_model(&state, chat.model.as_deref(), persona.as_ref(), !images.is_empty()).await?;
     if !images.is_empty() && !resolved.can_see {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,

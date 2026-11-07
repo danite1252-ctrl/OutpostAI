@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use outpost_core::chats::Message;
 use outpost_core::personas::Persona;
 use outpost_engines::catalog::Badge;
+use outpost_engines::models::InstalledModel;
 use serde_json::{json, Value};
 
 use crate::error::ApiError;
@@ -37,6 +38,7 @@ pub async fn resolve_model(
     state: &AppState,
     chat_model: Option<&str>,
     persona: Option<&Persona>,
+    see: bool,
 ) -> Result<Resolved, ApiError> {
     // A training fills the graphics card; a chat model loading now could crash it.
     if state.queue.training() {
@@ -71,9 +73,10 @@ pub async fn resolve_model(
                 format!("{m} isn't downloaded. Get it in Models, or pick another model for this persona."),
             )
         })?,
-        None => installed
-            .iter()
-            .find(|i| !i.badges.contains(&Badge::Embedding))
+        // No model chosen: one that can do everything asked (tools, and seeing when there are
+        // pictures), else any chat model. Which is first can change (a lent PC paused), so the
+        // one it falls back to still has tools.
+        None => default_model(&installed, see)
             .ok_or_else(|| {
                 ApiError::new(
                     axum::http::StatusCode::BAD_REQUEST,
@@ -88,6 +91,44 @@ pub async fn resolve_model(
         can_see: chosen.badges.contains(&Badge::Vision),
         can_use_tools: chosen.badges.contains(&Badge::Tools),
     })
+}
+
+/// The chat model to use when none is chosen: the first that can use tools (and see, when
+/// `see`), else the first that can use tools, else the first chat model.
+fn default_model(installed: &[InstalledModel], see: bool) -> Option<&InstalledModel> {
+    let chat = || installed.iter().filter(|i| !i.badges.contains(&Badge::Embedding));
+    let tools = |i: &InstalledModel| i.badges.contains(&Badge::Tools);
+    chat()
+        .find(|i| tools(i) && (!see || i.badges.contains(&Badge::Vision)))
+        .or_else(|| chat().find(|i| tools(i)))
+        .or_else(|| chat().next())
+}
+
+#[cfg(test)]
+mod default_model_tests {
+    use super::*;
+
+    fn m(name: &str, badges: Vec<Badge>) -> InstalledModel {
+        serde_json::from_value(json!({ "model": name, "size_bytes": 1, "badges": [] })).map(|mut x: InstalledModel| {
+            x.badges = badges;
+            x
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn the_default_model_can_use_tools() {
+        let list = vec![
+            m("embed", vec![Badge::Embedding]),
+            m("plain", vec![]),
+            m("tools", vec![Badge::Tools]),
+            m("seeing", vec![Badge::Tools, Badge::Vision]),
+        ];
+        assert_eq!(default_model(&list, false).unwrap().model, "tools");
+        assert_eq!(default_model(&list, true).unwrap().model, "seeing");
+        assert_eq!(default_model(&list[..2], false).unwrap().model, "plain", "none with tools: any chat model");
+        assert!(default_model(&list[..1], false).is_none());
+    }
 }
 
 /// Base64 images for the newest attachments in the history window, keyed by message

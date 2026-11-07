@@ -27,7 +27,7 @@ async fn apply_persona(state: &AppState, auth: &Auth, body: &mut Value, slug: &s
                 format!("No persona \"{slug}\" on this account. See GET /v1/models."),
             )
         })?;
-    let model = llm::resolve_model(state, None, Some(&persona)).await?.model;
+    let model = llm::resolve_model(state, None, Some(&persona), false).await?.model;
     // The newest user message picks which learned memories are relevant.
     let query = body
         .get("messages")
