@@ -571,6 +571,7 @@ pub async fn start_reply(
                 persona_id: chat.persona_id.clone(),
                 time_zone: req.time_zone.clone().or_else(|| saved.as_ref().and_then(|c| c.zone.clone())),
                 utc_offset_minutes: req.utc_offset_minutes.or(saved.as_ref().map(|c| c.offset_minutes)),
+                asked: content.clone(),
             };
             tool_servers.push((crate::outpost_tools::server(), Via::Outpost(ctx)));
         }
