@@ -2,7 +2,7 @@
 // a morning brief"). Each run is a reply in the routine's own chat.
 
 import { useCallback, useEffect, useState } from "react";
-import { api, GATEWAY, routinesApi, type Notify, type Persona, type Routine, type RoutineRun, type Schedule } from "../api";
+import { api, GATEWAY, SERVER, routinesApi, type Notify, type Persona, type Routine, type RoutineRun, type Schedule } from "../api";
 import { Avatar, Button, ErrorNote, Field, areYouSure } from "../components/ui";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -276,8 +276,10 @@ function LinkPanel({
 }) {
   const [shown, setShown] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const url = shown ? `${GATEWAY}/api/hooks/routines/${shown}` : null;
-  const local = GATEWAY.includes("127.0.0.1") || GATEWAY.includes("localhost");
+  // Using a server: its own address (this app's connection to it only works on this PC).
+  const base = SERVER ? `https://${SERVER.host}:${SERVER.port}` : GATEWAY;
+  const url = shown ? `${base}/api/hooks/routines/${shown}` : null;
+  const local = !SERVER && (GATEWAY.includes("127.0.0.1") || GATEWAY.includes("localhost"));
   async function make(on: boolean) {
     await act(async () => {
       const made = await routinesApi.setLink(token, r.id, on);
