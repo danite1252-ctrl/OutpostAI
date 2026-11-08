@@ -1,0 +1,6 @@
+Wake word models from openWakeWord by David Scripka (https://github.com/dscripka/openWakeWord),
+release v0.5.1: melspectrogram.onnx and embedding_model.onnx (Apache License 2.0, the
+embedding model based on Google's speech embedding model), and the pre-trained wake words
+hey_jarvis, alexa and hey_mycroft (Creative Commons Attribution-NonCommercial-ShareAlike 4.0).
+
+alexa_test.wav and hey_jane.wav are openWakeWord's test recordings (Apache License 2.0), used for the on-phone check.

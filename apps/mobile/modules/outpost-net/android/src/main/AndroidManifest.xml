@@ -13,6 +13,9 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
   <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+  <!-- The wake word: listening (shown by a notification, with Stop) even with the screen off. -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
   <!-- Android 11+ only shows apps the speech recognizer if they say they look for it. -->
   <queries>
     <intent>
@@ -24,6 +27,10 @@
         android:name="expo.modules.outpostnet.JobWatchService"
         android:exported="false"
         android:foregroundServiceType="dataSync" />
+    <service
+        android:name="expo.modules.outpostnet.WakeService"
+        android:exported="false"
+        android:foregroundServiceType="microphone" />
     <!-- Looking for a routine's result just after it's due (an alarm Android allows while idle). -->
     <receiver
         android:name="expo.modules.outpostnet.RoutineAlarm"

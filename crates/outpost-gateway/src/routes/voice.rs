@@ -227,7 +227,7 @@ pub struct Transcript {
     pub duration: f64,
 }
 
-fn decode_audio(encoded: &str) -> Result<Vec<u8>, ApiError> {
+pub(crate) fn decode_audio(encoded: &str) -> Result<Vec<u8>, ApiError> {
     let raw = match encoded.split_once(";base64,") {
         Some((head, rest)) if head.starts_with("data:") => rest,
         _ => encoded,
@@ -241,7 +241,7 @@ fn decode_audio(encoded: &str) -> Result<Vec<u8>, ApiError> {
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid", "That recording couldn't be read."))
 }
 
-fn clean_language(l: Option<&str>) -> Option<String> {
+pub(crate) fn clean_language(l: Option<&str>) -> Option<String> {
     l.map(str::trim)
         .filter(|l| (2..=8).contains(&l.len()) && l.chars().all(|c| c.is_ascii_alphabetic() || c == '-'))
         .map(|l| l.to_ascii_lowercase())
@@ -294,7 +294,7 @@ pub async fn transcribe(State(state): State<AppState>, auth: Auth, Json(req): Js
 }
 
 /// Your characters' and personas' names, for Whisper to listen for ("Kat, zk4t, Ada").
-async fn name_hints(state: &AppState, account_id: &str) -> String {
+pub(crate) async fn name_hints(state: &AppState, account_id: &str) -> String {
     let mut names: Vec<String> = Vec::new();
     if let Ok(chars) = outpost_core::training::characters(&state.pool, Some(account_id)).await {
         for c in chars {
@@ -489,5 +489,71 @@ mod tests {
         );
         assert_eq!(said, "Plan Bold and soft with a link. (code) one two Drawing Kat: \"x\"");
         assert_eq!(speakable("```\nonly code\n```"), "(code)");
+    }
+}
+
+/// One spoken turn from the phone's wake word: what was said after "Hey Jarvis".
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct TurnRequest {
+    /// The recording (a WAV), as base64.
+    pub audio: String,
+    /// The persona that answers.
+    pub persona_id: String,
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+/// What to say back.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TurnReply {
+    /// What was heard ("" when it was nothing: go back to listening for the wake word).
+    pub heard: String,
+    /// The reply, as text.
+    pub reply: String,
+    /// It asked a yes-or-no question: listen for the answer.
+    pub asking: bool,
+    /// The reply spoken in the persona's voice (a WAV, base64), when voice is installed.
+    pub audio: Option<String>,
+}
+
+/// Whisper's noise words ("you", "Thank you for watching"), or nothing at all.
+pub fn is_speech(text: &str) -> bool {
+    let t = text.trim().trim_end_matches(['.', '!', '?']).to_lowercase();
+    let letters = t.chars().filter(|c| c.is_alphanumeric()).count();
+    letters >= 2 && !["you", "thank you for watching", "thanks for watching", "thank you"].contains(&t.as_str())
+}
+
+/// The phone's wake word: hear what was said, have the persona answer it (as in a chat: its
+/// tools and your rules; anything that asks first is asked aloud), and speak the answer.
+#[utoipa::path(post, path = "/api/voice/turn", tag = "voice", security(("bearer" = [])), request_body = TurnRequest,
+    responses((status = 200, description = "What to say back", body = TurnReply), (status = 400, description = "Unreadable audio", body = ErrorBody)))]
+pub async fn turn(State(state): State<AppState>, auth: Auth, Json(req): Json<TurnRequest>) -> ApiResult<Json<TurnReply>> {
+    auth.require_person("Talking by wake word")?;
+    let audio = decode_audio(&req.audio)?;
+    let persona = personas::get_usable(&state.pool, &auth.account.id, &req.persona_id).await?;
+    let hints = name_hints(&state, &auth.account.id).await;
+    let heard = transcribe_bytes(&state, audio, clean_language(req.language.as_deref()), &hints).await?.text.trim().to_string();
+    if !is_speech(&heard) {
+        return Ok(Json(TurnReply { heard: String::new(), reply: String::new(), asking: false, audio: None }));
+    }
+    let agent = crate::wyoming::VoiceAgent { account_id: auth.account.id.clone(), persona_id: persona.id.clone() };
+    let (reply, asking) = crate::wyoming::answer(&state, &agent, &heard, &crate::wyoming::PHONE)
+        .await
+        .map_err(|why| ApiError::new(StatusCode::BAD_GATEWAY, "reply_failed", why))?;
+    let voice = persona.voice.clone().filter(|v| !v.is_empty()).unwrap_or_else(|| DEFAULT_VOICE.to_string());
+    let said: String = reply.chars().take(MAX_SPEAK_CHARS).collect();
+    let audio = speak_bytes(&state, &said, &voice, 1.0).await.ok().map(|w| base64::engine::general_purpose::STANDARD.encode(w));
+    Ok(Json(TurnReply { heard, reply, asking, audio }))
+}
+
+#[cfg(test)]
+mod turn_tests {
+    #[test]
+    fn noise_words_are_not_speech() {
+        assert!(super::is_speech("Turn off the kitchen lamp."));
+        assert!(super::is_speech("yes"));
+        assert!(!super::is_speech("you"));
+        assert!(!super::is_speech("Thank you for watching!"));
+        assert!(!super::is_speech("  ."));
     }
 }

@@ -336,6 +336,22 @@ class OutpostNetModule : Module() {
     Function("converse") { bargeIn: Boolean -> voice.converse(bargeIn); Unit }
     Function("converseMuted") { muted: Boolean -> voice.converseMuted(muted); Unit }
     Function("converseBrief") { brief: Boolean -> voice.converseBrief(brief); Unit }
+
+    // The wake word (see WakeService): start, stop, how it's doing, and the check.
+    Function("wakeStart") { word: String, personaId: String, threshold: Double, hosts: List<String>, port: Int, fingerprint: String, token: String ->
+      WakeService.start(context, word, personaId, threshold, hosts, port, fingerprint, token)
+    }
+    Function("wakeStop") { WakeService.stop(context) }
+    Function("wakeStatus") { WakeService.status(context) }
+    AsyncFunction("wakeCheck") { promise: Promise ->
+      Thread {
+        try {
+          promise.resolve(WakeService.check(context))
+        } catch (e: Exception) {
+          promise.reject("wake_check", e.message ?: "The check failed.", e)
+        }
+      }.start()
+    }
     Function("stopConversation") { voice.stopConversation(); Unit }
 
     /** The SHA-256 of the certificate an address presents, before anything is trusted. */

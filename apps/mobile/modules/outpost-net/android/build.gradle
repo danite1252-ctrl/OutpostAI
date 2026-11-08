@@ -16,6 +16,10 @@ android {
     versionCode 1
     versionName "0.1.0"
   }
+  // The wake word's models are read whole: keep them uncompressed.
+  aaptOptions {
+    noCompress "onnx"
+  }
   lintOptions {
     abortOnError false
   }
@@ -27,4 +31,6 @@ dependencies {
   // Background checks for finished jobs (notifications with the app closed).
   implementation "androidx.work:work-runtime-ktx:2.9.1"
   implementation "androidx.core:core-ktx:1.13.1"
+  // The wake word, heard on the phone (openWakeWord's models).
+  implementation "com.microsoft.onnxruntime:onnxruntime-android:1.20.0"
 }

@@ -77,6 +77,7 @@ class PhoneVoice(
 
   private fun startListening(language: String?, partial: Boolean, retry: Boolean) {
     destroyRecognizer()
+    WakeService.hold("listen", true)
     muteBeeps()
     val ctx = context()
     val onDevice = onDeviceWorks && Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)
@@ -192,6 +193,7 @@ class PhoneVoice(
 
   fun converse(bargeIn: Boolean) = main.post {
     stopConversationNow()
+    WakeService.hold("talk", true)
     val c = Conversation(
       context(),
       bargeIn,
@@ -216,12 +218,14 @@ class PhoneVoice(
   fun stopConversation() = main.post { stopConversationNow() }
 
   private fun stopConversationNow() {
+    WakeService.hold("talk", false)
     val c = conversation ?: return
     conversation = null
     c.stop()
   }
 
   private fun destroyRecognizer() {
+    WakeService.hold("listen", false)
     val r = recognizer ?: return
     recognizer = null
     try {
@@ -253,6 +257,7 @@ class PhoneVoice(
    */
   fun record(autoStop: Boolean) = main.post {
     cancelRecordingNow()
+    WakeService.hold("mic", true)
     val ctx = context()
     val file = File(File(ctx.cacheDir, "outpost-media").apply { mkdirs() }, "mic-${System.currentTimeMillis()}.m4a")
     @Suppress("DEPRECATION")
@@ -329,6 +334,7 @@ class PhoneVoice(
   fun cancelRecording() = main.post { cancelRecordingNow() }
 
   private fun finishRecording(keep: Boolean) {
+    WakeService.hold("mic", false)
     val rec = recorder ?: return
     val file = recording
     recorder = null
@@ -351,6 +357,7 @@ class PhoneVoice(
   }
 
   private fun cancelRecordingNow() {
+    WakeService.hold("mic", false)
     val rec = recorder ?: return
     recorder = null
     watching?.let { main.removeCallbacks(it) }

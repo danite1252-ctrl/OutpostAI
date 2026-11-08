@@ -21,8 +21,10 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -172,6 +174,51 @@ object JobNotifier {
       .putStringSet("seen", if (seen.size > 100) seen.toList().takeLast(50).toSet() else seen)
       .apply()
     return r.optInt("unfinished", 0)
+  }
+
+  /** Keep a connection (for the wake word) in its own storage, the sign-in encrypted. */
+  fun keepConnection(p: android.content.SharedPreferences, hosts: List<String>, port: Int, fingerprint: String, token: String) {
+    p.edit()
+      .putString("hosts", hosts.joinToString(","))
+      .putInt("port", port)
+      .putString("fingerprint", fingerprint)
+      .putString("token", seal(token))
+      .apply()
+  }
+
+  /**
+   * POST JSON to the Outpost kept in `p` (each of its addresses in turn). Its answer; a refusal
+   * as `error_message`; null if it can't be reached.
+   */
+  fun post(ctx: Context, p: android.content.SharedPreferences, path: String, body: JSONObject, readSeconds: Long): JSONObject? {
+    val token = p.getString("token", null)?.let { open(it) } ?: return null
+    val hosts = p.getString("hosts", "")!!.split(",").filter { it.isNotBlank() }
+    val port = p.getInt("port", 0)
+    val fingerprint = p.getString("fingerprint", "") ?: return null
+    val client = pinnedClient(fingerprint).newBuilder().readTimeout(readSeconds, TimeUnit.SECONDS).build()
+    val payload = body.toString().toRequestBody("application/json".toMediaType())
+    for (host in hosts) {
+      try {
+        val req = Request.Builder()
+          .url("https://$host:$port$path")
+          .header("Authorization", "Bearer $token")
+          .post(payload)
+          .build()
+        client.newCall(req).execute().use { r ->
+          val text = r.body?.string() ?: "{}"
+          if (r.isSuccessful) return JSONObject(text)
+          val message = try {
+            JSONObject(text).optJSONObject("error")?.optString("message")
+          } catch (_: Exception) {
+            null
+          }
+          return JSONObject().put("error_message", message ?: if (r.code == 401) "Sign in to Outpost again." else "Outpost couldn't answer (${r.code}).")
+        }
+      } catch (_: Exception) {
+        // Not at this address (away from home): try the next.
+      }
+    }
+    return null
   }
 
   /** The small icon in the status bar. */

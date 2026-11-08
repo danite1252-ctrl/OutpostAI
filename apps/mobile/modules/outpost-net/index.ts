@@ -1,6 +1,22 @@
 import { NativeModule, requireNativeModule } from "expo";
 
 /** One HTTPS request to the paired Outpost; only its pinned certificate is accepted. */
+export interface WakeStatus {
+  on: boolean;
+  word: string;
+  persona: string | null;
+  threshold: number;
+  /** When it started listening (ms). */
+  since: number;
+  batteryStart: number;
+  batteryNow: number;
+  charging: boolean;
+  wakes: number;
+  lastWake: number;
+  error: string | null;
+  words: { id: string; name: string }[];
+}
+
 export interface RequestOptions {
   url: string;
   method?: string;
@@ -126,6 +142,13 @@ declare class OutpostNetModule extends NativeModule<Events> {
   converseMuted(muted: boolean): void;
   /** Waiting for a yes or no: short answers count. */
   converseBrief?(brief: boolean): void;
+  /** The wake word: listen for it (a foreground service, with a notification and Stop), even with
+   *  the screen off; what's said after it goes to the persona and the answer is spoken. */
+  wakeStart?(word: string, personaId: string, threshold: number, hosts: string[], port: number, fingerprint: string, token: string): void;
+  wakeStop?(): void;
+  wakeStatus?(): WakeStatus;
+  /** The detector on a recording of "Alexa" and of other words: it works on this phone. */
+  wakeCheck?(): Promise<{ heard: number; other: number; ok: boolean }>;
   stopConversation(): void;
   /** Whether Outpost may install apps, and whether its own updates can skip the prompt. */
   updateStatus(): { canInstall: boolean; silent: boolean; sdk: number };

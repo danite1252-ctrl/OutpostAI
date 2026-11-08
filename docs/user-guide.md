@@ -375,6 +375,23 @@ Install **Voice** in **Settings › Engines**, then:
 Speech is recognised by Whisper on your PC. The phone's **Mic** button uses the phone's own
 recogniser (on the phone where it can, otherwise the phone's speech service).
 
+### The phone's wake word
+
+**You › Wake word** on the phone: choose the word (**Hey Jarvis**, Alexa or Hey Mycroft) and the
+persona that answers, then **Start listening**. Say the word, wait for the beep, and say what
+you want, even with the screen off: the answer is spoken in the persona's voice. Anything that
+asks first (a lock, a door, an alarm) is asked aloud; say yes or no.
+
+- Listening for the word happens on the phone; only what you say after it goes to your Outpost.
+- A notification shows while it listens, with **Stop**. Talk and the Mic button pause it.
+- The screen shows how long it has listened and how far the battery has gone down since (all
+  of the phone's use, not only this). On Samsung phones set Outpost's battery use to
+  **Unrestricted**, or it may stop with the screen off. After a restart, start it again.
+- **How easily it wakes**: Less if it wakes by itself, More if it misses you across a room.
+  **Check the wake word works on this phone** runs it on a test recording.
+- The talk is kept in a chat called **Phone voice**. Wake words are openWakeWord's (free for
+  non-commercial use).
+
 ### Home Assistant voice devices
 
 Outpost can be the ears and the voice of Home Assistant's voice assistants (a Voice Preview

@@ -410,7 +410,7 @@ pub async fn serve<S: tokio::io::AsyncRead + AsyncWrite + Unpin>(state: &AppStat
                 let reply = match linked.or(settings(state).await.agent) {
                     None => Err("Outpost isn't set up to answer here: choose a persona in its Home Assistant voice settings.".to_string()),
                     Some(_) if text.is_empty() => Err("I didn't catch that.".to_string()),
-                    Some(agent) => answer(state, &agent, &text).await,
+                    Some(agent) => answer(state, &agent, &text, &HOME_ASSISTANT).await,
                 };
                 match reply {
                     Ok((said, asking)) => {
@@ -541,15 +541,27 @@ pub fn is_yes(text: &str) -> bool {
         || ["go ahead", "do it", "go for it"].iter().any(|p| phrase(p))
 }
 
-/// The chat the voice device talks in (one per person and persona, made when first needed).
-async fn voice_chat(state: &AppState, agent: &VoiceAgent) -> Result<String, String> {
-    let key = format!("voice.wyoming.chat.{}.{}", agent.account_id, agent.persona_id);
+/// Where spoken talk is kept: a chat per person and persona, for each way in.
+pub struct Place {
+    key: &'static str,
+    /// The chat's title (and the label its replies run under).
+    pub title: &'static str,
+}
+
+/// Home Assistant's voice devices.
+pub const HOME_ASSISTANT: Place = Place { key: "voice.wyoming.chat", title: "Home Assistant voice" };
+/// The phone's wake word.
+pub const PHONE: Place = Place { key: "voice.phone.chat", title: "Phone voice" };
+
+/// The chat that talk goes in (one per person and persona, made when first needed).
+async fn voice_chat(state: &AppState, agent: &VoiceAgent, place: &Place) -> Result<String, String> {
+    let key = format!("{}.{}.{}", place.key, agent.account_id, agent.persona_id);
     if let Some(id) = outpost_core::settings::get(&state.pool, &key).await.ok().flatten() {
         if outpost_core::chats::get(&state.pool, &agent.account_id, &id).await.is_ok() {
             return Ok(id);
         }
     }
-    let c = outpost_core::chats::create(&state.pool, &agent.account_id, Some(&agent.persona_id), Some("Home Assistant voice"))
+    let c = outpost_core::chats::create(&state.pool, &agent.account_id, Some(&agent.persona_id), Some(place.title))
         .await
         .map_err(|e| format!("Couldn't make the voice chat: {e}"))?;
     let _ = outpost_core::settings::set(&state.pool, &key, &c.id).await;
@@ -559,9 +571,9 @@ async fn voice_chat(state: &AppState, agent: &VoiceAgent) -> Result<String, Stri
 /// Answer something said to a voice device: the reply to speak, and whether it's a question
 /// waiting for a yes or no (Allow or Skip, said aloud). The persona works as it does in a typed
 /// chat, as the chosen person: their tools, allowed actions, ask-first and tool hours.
-pub async fn answer(state: &AppState, agent: &VoiceAgent, text: &str) -> Result<(String, bool), String> {
+pub async fn answer(state: &AppState, agent: &VoiceAgent, text: &str, place: &Place) -> Result<(String, bool), String> {
     let account = outpost_core::accounts::get(&state.pool, &agent.account_id).await.map_err(|_| "Its person isn't there any more.".to_string())?;
-    let chat_id = voice_chat(state, agent).await?;
+    let chat_id = voice_chat(state, agent, place).await?;
     // An answer to the question it asked: yes or no, and the reply carries on.
     let mut answered: Option<String> = None;
     if let Some((id, _)) = state.file_relay.question_in(&chat_id) {
@@ -573,7 +585,7 @@ pub async fn answer(state: &AppState, agent: &VoiceAgent, text: &str) -> Result<
                 id: format!("voice-{}", account.id),
                 account_id: account.id.clone(),
                 kind: outpost_core::sessions::SessionKind::App,
-                label: "Home Assistant voice".into(),
+                label: place.title.into(),
                 created_at: outpost_core::now(),
                 last_used_at: outpost_core::now(),
             },
@@ -610,7 +622,7 @@ pub async fn answer(state: &AppState, agent: &VoiceAgent, text: &str) -> Result<
             break;
         }
         if std::time::Instant::now() > until {
-            return Ok(("That's taking a while. I'll carry on, and the answer will be in the Home Assistant voice chat.".into(), false));
+            return Ok((format!("That's taking a while. I'll carry on, and the answer will be in the {} chat.", place.title), false));
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }

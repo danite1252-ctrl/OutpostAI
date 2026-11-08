@@ -154,6 +154,7 @@ use crate::routes::{
         crate::routines::set_link,
         crate::routines::hook,
         crate::activity::list,
+        crate::routes::voice::turn,
         crate::wyoming::get_settings,
         crate::wyoming::set_settings,
         crate::wyoming::get_devices,
