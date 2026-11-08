@@ -155,6 +155,47 @@ fn is_home_assistant(tool: &str) -> bool {
     b.starts_with("Hass") || b == "GetLiveContext"
 }
 
+/// Arguments without values the tool's schema doesn't allow: an optional field whose value
+/// isn't one of its choices (or, for a list, the items that aren't) is left out.
+pub fn fit_to_schema(args: &Value, schema: &Value) -> Value {
+    let (Some(given), Some(props)) = (args.as_object(), schema.get("properties").and_then(Value::as_object)) else {
+        return args.clone();
+    };
+    let required: Vec<&str> = schema.get("required").and_then(Value::as_array).map(|r| r.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    let choices = |p: &Value| -> Option<Vec<Value>> { p.get("enum").and_then(Value::as_array).cloned() };
+    let mut out = serde_json::Map::new();
+    for (k, v) in given {
+        let Some(p) = props.get(k) else {
+            out.insert(k.clone(), v.clone());
+            continue;
+        };
+        let kept = match v {
+            Value::Array(items) => match p.get("items").and_then(|i| choices(i)) {
+                Some(ok) => {
+                    let left: Vec<Value> = items.iter().filter(|i| ok.contains(i)).cloned().collect();
+                    (!left.is_empty()).then_some(Value::Array(left))
+                }
+                None => Some(v.clone()),
+            },
+            other => match choices(p) {
+                Some(ok) if !ok.contains(other) => None,
+                _ => Some(v.clone()),
+            },
+        };
+        match kept {
+            Some(v) => {
+                out.insert(k.clone(), v);
+            }
+            // Required: send it as it was, and let the tool say what's wrong.
+            None if required.contains(&k.as_str()) => {
+                out.insert(k.clone(), v.clone());
+            }
+            None => {}
+        }
+    }
+    Value::Object(out)
+}
+
 /// The devices in GetLiveContext's answer: (name, domain, areas).
 pub fn live_devices(text: &str) -> Vec<(String, String, String)> {
     let mut out: Vec<(String, String, String)> = Vec::new();
@@ -566,7 +607,34 @@ impl PcTools {
         if let Via::Outpost(ctx) = &self.routes[e.server] {
             return self.outpost(ctx, &e.tool, &args, shown).await;
         }
-        let answer = self.dispatch(e.server, &e.tool, args.clone()).await;
+        // Home Assistant refuses a whole call over one guessed value it doesn't take (a small
+        // model sends device_class "light" to turn on a lamp): leave out such guesses.
+        let sent = if is_home_assistant(&e.tool) {
+            match server.tools.iter().find(|t| t.name == e.tool) {
+                Some(t) => fit_to_schema(&args, &t.input_schema),
+                None => args.clone(),
+            }
+        } else {
+            args.clone()
+        };
+        let mut answer = self.dispatch(e.server, &e.tool, sent).await;
+        // Still "invalid slot info": once more with only the device's name (and room), the
+        // same device, without the guesses.
+        let refused = |a: &Result<Value, String>| {
+            a.as_ref().is_ok_and(|v| {
+                v.get("is_error").and_then(Value::as_bool) == Some(true)
+                    && v.get("text").and_then(Value::as_str).is_some_and(|t| t.to_lowercase().contains("invalid slot info"))
+            })
+        };
+        if is_home_assistant(&e.tool) && refused(&answer) && args.get("name").and_then(Value::as_str).is_some_and(|n| !n.trim().is_empty()) {
+            let mut plain = serde_json::Map::new();
+            for k in ["name", "area"] {
+                if let Some(v) = args.get(k) {
+                    plain.insert(k.to_string(), v.clone());
+                }
+            }
+            answer = self.dispatch(e.server, &e.tool, Value::Object(plain)).await;
+        }
         match answer {
             Ok(v) => {
                 let text = v.get("text").and_then(Value::as_str).unwrap_or_default();
@@ -574,6 +642,12 @@ impl PcTools {
                 let mut reply: String = text.chars().take(ANSWER_LIMIT).collect();
                 if text.chars().count() > ANSWER_LIMIT {
                     reply.push_str("\n[... the rest was cut off]");
+                }
+                if is_error && is_home_assistant(&e.tool) && text.to_lowercase().contains("invalid slot info") {
+                    reply.push_str(
+                        "\n\nSomething sent isn't a value Home Assistant takes here. Call it again with only the device's name \
+                         (exactly as Home Assistant names it), and nothing else.",
+                    );
                 }
                 // Home Assistant found no device by that name: say which it has (small models
                 // often guess "lamp" for "Kitchen Lamp" and give up).
@@ -759,6 +833,28 @@ mod tests {
         let (tx, _rx) = mpsc::channel(1);
         let ha = PcTools::new(Relay::default(), "c", tx, vec![(server("Home Assistant", &["intent__HassTurnOff", "homeassistant__GetLiveContext"]), Via::App)], false).unwrap();
         assert!(ha.instructions().contains("call GetLiveContext first"));
+    }
+
+    #[test]
+    fn guessed_values_home_assistant_wont_take_are_left_out() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" },
+                "domain": { "type": "array", "items": { "type": "string", "enum": ["light", "switch", "fan"] } },
+                "device_class": { "type": "array", "items": { "type": "string", "enum": ["outlet", "switch", "blind", "garage"] } },
+                "mode": { "type": "string", "enum": ["heat", "cool"] }
+            }
+        });
+        let sent = json!({ "name": "Kitchen Lamp", "device_class": ["light"], "domain": ["light", "lamp"], "mode": "warm" });
+        assert_eq!(fit_to_schema(&sent, &schema), json!({ "name": "Kitchen Lamp", "domain": ["light"] }));
+        // The screenshot's call: device_class as a plain string.
+        assert_eq!(fit_to_schema(&json!({ "name": "Kitchen Lamp", "device_class": "light" }), &json!({ "properties": { "device_class": { "enum": ["outlet"] } } })), json!({ "name": "Kitchen Lamp" }));
+        // Fine as sent: unchanged. A required one is never dropped.
+        let ok = json!({ "name": "Fan", "domain": ["fan"] });
+        assert_eq!(fit_to_schema(&ok, &schema), ok);
+        let req = json!({ "properties": { "mode": { "enum": ["heat"] } }, "required": ["mode"] });
+        assert_eq!(fit_to_schema(&json!({ "mode": "warm" }), &req), json!({ "mode": "warm" }));
     }
 
     #[test]
