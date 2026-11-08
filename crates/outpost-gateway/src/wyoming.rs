@@ -397,7 +397,17 @@ pub async fn serve<S: tokio::io::AsyncRead + AsyncWrite + Unpin>(state: &AppStat
             // What was said to the conversation agent (never sent to speech-to-text).
             "transcript" => {
                 let text = e.str("text").unwrap_or_default().trim().to_string();
-                let reply = match settings(state).await.agent {
+                // Which device it came from: its own person, else the default.
+                let context = e.data.get("context");
+                let from = ["satellite_id", "device_id"]
+                    .iter()
+                    .find_map(|k| context.and_then(|c| c.get(*k)).and_then(Value::as_str).filter(|v| !v.is_empty() && v.len() <= 200))
+                    .map(str::to_string);
+                let linked = match &from {
+                    Some(id) => seen(state, id).await.and_then(|d| d.link),
+                    None => None,
+                };
+                let reply = match linked.or(settings(state).await.agent) {
                     None => Err("Outpost isn't set up to answer here: choose a persona in its Home Assistant voice settings.".to_string()),
                     Some(_) if text.is_empty() => Err("I didn't catch that.".to_string()),
                     Some(agent) => answer(state, &agent, &text).await,
@@ -612,6 +622,185 @@ pub async fn answer(state: &AppState, agent: &VoiceAgent, text: &str) -> Result<
 }
 
 // ---------------------------------------------------------------------------------------
+// Who's speaking: each voice device linked to a person.
+
+/// Where the voice devices are kept.
+const DEVICES: &str = "voice.wyoming.devices";
+/// At most this many are remembered (the oldest unlinked go first).
+const MAX_DEVICES: usize = 50;
+
+/// A voice device Home Assistant has asked from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct VoiceDevice {
+    /// Home Assistant's id for it (its satellite's, else its device's).
+    pub id: String,
+    /// What the owner calls it ("Dan's phone", "Kids' room").
+    #[serde(default)]
+    pub label: Option<String>,
+    pub first_seen: i64,
+    pub last_seen: i64,
+    /// Who answers it (their tools and rules). None: the default.
+    #[serde(default)]
+    pub link: Option<VoiceAgent>,
+}
+
+pub async fn devices(state: &AppState) -> Vec<VoiceDevice> {
+    outpost_core::settings::get(&state.pool, DEVICES)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default()
+}
+
+async fn save_devices(state: &AppState, list: &[VoiceDevice]) {
+    if let Ok(v) = serde_json::to_string(list) {
+        let _ = outpost_core::settings::set(&state.pool, DEVICES, &v).await;
+    }
+}
+
+/// Note that a device spoke (remembering it if it's new); what's known of it.
+async fn seen(state: &AppState, id: &str) -> Option<VoiceDevice> {
+    let mut list = devices(state).await;
+    let now = outpost_core::now();
+    let found = remember(&mut list, id, now);
+    save_devices(state, &list).await;
+    found
+}
+
+/// Note a device in the list: seen now, added when new (forgetting the oldest unlinked past
+/// [`MAX_DEVICES`]).
+fn remember(list: &mut Vec<VoiceDevice>, id: &str, now: i64) -> Option<VoiceDevice> {
+    if let Some(d) = list.iter_mut().find(|d| d.id == id) {
+        d.last_seen = now;
+        return Some(d.clone());
+    }
+    list.push(VoiceDevice { id: id.to_string(), label: None, first_seen: now, last_seen: now, link: None });
+    while list.len() > MAX_DEVICES {
+        match list.iter().enumerate().filter(|(_, d)| d.link.is_none()).min_by_key(|(_, d)| d.last_seen).map(|(i, _)| i) {
+            Some(i) => {
+                list.remove(i);
+            }
+            None => break,
+        }
+    }
+    list.iter().find(|d| d.id == id).cloned()
+}
+
+/// Someone a device can be linked to, and their personas.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct VoicePerson {
+    pub account_id: String,
+    pub name: String,
+    /// owner, member or restricted.
+    pub role: String,
+    pub personas: Vec<VoicePersona>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct VoicePersona {
+    pub id: String,
+    pub name: String,
+}
+
+/// The voice devices, and who they can be linked to.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct VoiceDevices {
+    pub devices: Vec<VoiceDevice>,
+    pub people: Vec<VoicePerson>,
+}
+
+async fn devices_now(state: &AppState) -> VoiceDevices {
+    let mut list = devices(state).await;
+    list.sort_by_key(|d| std::cmp::Reverse(d.last_seen));
+    let mut people = Vec::new();
+    for a in outpost_core::accounts::list(&state.pool).await.unwrap_or_default() {
+        if a.role == outpost_core::accounts::Role::Service {
+            continue;
+        }
+        let mut personas: Vec<VoicePersona> = Vec::new();
+        for p in outpost_core::personas::list_existing(&state.pool, &a.id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .chain(outpost_core::personas::shared_with_me(&state.pool, &a.id).await.unwrap_or_default())
+        {
+            if !personas.iter().any(|x| x.id == p.id) {
+                personas.push(VoicePersona { id: p.id, name: p.name });
+            }
+        }
+        people.push(VoicePerson { account_id: a.id, name: a.name, role: a.role.as_str().into(), personas });
+    }
+    VoiceDevices { devices: list, people }
+}
+
+/// Voice devices Home Assistant has asked from, and the people they can be linked to.
+#[utoipa::path(get, path = "/api/voice/wyoming/devices", tag = "voice", security(("bearer" = [])),
+    responses((status = 200, description = "Devices and people", body = VoiceDevices), (status = 403, description = "Owners only", body = crate::error::ErrorBody)))]
+pub async fn get_devices(axum::extract::State(state): axum::extract::State<AppState>, auth: crate::extract::Auth) -> crate::error::ApiResult<axum::Json<VoiceDevices>> {
+    auth.require_owner()?;
+    Ok(axum::Json(devices_now(&state).await))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct DeviceInput {
+    /// What to call it (empty: no name).
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Who answers it. None: the default.
+    #[serde(default)]
+    pub link: Option<VoiceAgent>,
+}
+
+/// Name a voice device, and choose who answers it (their tools and rules apply).
+#[utoipa::path(put, path = "/api/voice/wyoming/devices/{id}", tag = "voice", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Home Assistant's id for the device")), request_body = DeviceInput,
+    responses((status = 200, description = "Saved", body = VoiceDevices), (status = 400, description = "Bad choice", body = crate::error::ErrorBody)))]
+pub async fn set_device(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: crate::extract::Auth,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::Json(input): axum::Json<DeviceInput>,
+) -> crate::error::ApiResult<axum::Json<VoiceDevices>> {
+    auth.require_owner()?;
+    auth.require_person("Linking a voice device")?;
+    let bad = |why: &str| crate::error::ApiError::new(axum::http::StatusCode::BAD_REQUEST, "invalid", why.to_string());
+    if let Some(l) = &input.link {
+        let a = outpost_core::accounts::get(&state.pool, &l.account_id).await.map_err(|_| bad("That person isn't here any more."))?;
+        if a.role == outpost_core::accounts::Role::Service {
+            return Err(bad("A voice device can't answer as an app account."));
+        }
+        outpost_core::personas::get_usable(&state.pool, &l.account_id, &l.persona_id)
+            .await
+            .map_err(|_| bad("That persona isn't one they can use."))?;
+    }
+    let mut list = devices(&state).await;
+    let Some(d) = list.iter_mut().find(|d| d.id == id) else {
+        return Err(crate::error::ApiError::new(axum::http::StatusCode::NOT_FOUND, "not_found", "Outpost hasn't heard from that device."));
+    };
+    d.label = input.label.map(|l| l.trim().chars().take(60).collect::<String>()).filter(|l| !l.is_empty());
+    d.link = input.link;
+    save_devices(&state, &list).await;
+    Ok(axum::Json(devices_now(&state).await))
+}
+
+/// Forget a voice device (it's listed again, unlinked, if it speaks again).
+#[utoipa::path(delete, path = "/api/voice/wyoming/devices/{id}", tag = "voice", security(("bearer" = [])),
+    params(("id" = String, Path, description = "Home Assistant's id for the device")),
+    responses((status = 200, description = "Forgotten", body = VoiceDevices)))]
+pub async fn forget_device(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: crate::extract::Auth,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> crate::error::ApiResult<axum::Json<VoiceDevices>> {
+    auth.require_owner()?;
+    let mut list = devices(&state).await;
+    list.retain(|d| d.id != id);
+    save_devices(&state, &list).await;
+    Ok(axum::Json(devices_now(&state).await))
+}
+
+// ---------------------------------------------------------------------------------------
 // The listener.
 
 /// The running listener, and its announcement.
@@ -790,6 +979,20 @@ mod tests {
         let with = info(&[], Some("Assistant"));
         assert_eq!(with["handle"][0]["description"], "Outpost (Assistant)");
         assert_eq!(with["handle"][0]["supports_home_control"], true);
+    }
+
+    #[test]
+    fn devices_are_remembered_and_the_oldest_unlinked_forgotten() {
+        let mut list = Vec::new();
+        assert_eq!(remember(&mut list, "phone", 100).unwrap().first_seen, 100);
+        assert_eq!(remember(&mut list, "phone", 200).unwrap().last_seen, 200);
+        list[0].link = Some(VoiceAgent { account_id: "kid".into(), persona_id: "p".into() });
+        for i in 0..MAX_DEVICES {
+            remember(&mut list, &format!("d{i}"), 300 + i as i64);
+        }
+        assert_eq!(list.len(), MAX_DEVICES);
+        assert!(list.iter().any(|d| d.id == "phone"), "a linked one is kept");
+        assert!(!list.iter().any(|d| d.id == "d0"), "the oldest unlinked goes");
     }
 
     #[test]

@@ -13,6 +13,7 @@ async fn home_assistant_asks_what_we_offer_and_gets_an_answer_to_each_request() 
     let state = AppState::with_pool(pool, config);
 
     let (ours, theirs) = tokio::io::duplex(1 << 20);
+    let kept = state.clone();
     let server = tokio::spawn(async move { serve(&state, ours).await });
     let (r, mut w) = tokio::io::split(theirs);
     let mut r = BufReader::new(r);
@@ -54,12 +55,16 @@ async fn home_assistant_asks_what_we_offer_and_gets_an_answer_to_each_request() 
     }
 
     // Said to the conversation agent with no persona chosen: not handled, with why.
-    w.write_all(&encode(&Event::new("transcript", json!({ "text": "turn off the kitchen lamp", "context": { "conversation_id": "c1" } }))))
+    w.write_all(&encode(&Event::new("transcript", json!({ "text": "turn off the kitchen lamp", "context": { "conversation_id": "c1", "device_id": "phone-1" } }))))
         .await
         .unwrap();
     let handled = read_event(&mut r).await.unwrap().unwrap();
     assert_eq!(handled.kind, "not-handled");
     assert!(handled.data["text"].as_str().unwrap().contains("choose a persona"));
+    // The device it came from is remembered, for linking to a person.
+    let devices = outpost_gateway::wyoming::devices(&kept).await;
+    assert_eq!(devices.len(), 1);
+    assert_eq!((devices[0].id.as_str(), devices[0].link.is_none()), ("phone-1", true));
 
     // Closing ends it cleanly.
     drop(w);

@@ -1908,7 +1908,27 @@ export interface WyomingStatus {
   host: string | null;
 }
 
+/** A voice device Home Assistant has asked from, and who answers it. */
+export interface VoiceDevice {
+  id: string;
+  label: string | null;
+  first_seen: number;
+  last_seen: number;
+  /** Who answers it; null: the default. */
+  link: { account_id: string; persona_id: string } | null;
+}
+
+export interface VoiceDevices {
+  devices: VoiceDevice[];
+  people: { account_id: string; name: string; role: string; personas: { id: string; name: string }[] }[];
+}
+
 export const voiceApi = {
+  voiceDevices: (token: string) => request<VoiceDevices>("GET", "/api/voice/wyoming/devices", { token }),
+  setVoiceDevice: (token: string, id: string, label: string | null, link: { account_id: string; persona_id: string } | null) =>
+    request<VoiceDevices>("PUT", `/api/voice/wyoming/devices/${encodeURIComponent(id)}`, { token, body: { label, link } }),
+  forgetVoiceDevice: (token: string, id: string) =>
+    request<VoiceDevices>("DELETE", `/api/voice/wyoming/devices/${encodeURIComponent(id)}`, { token }),
   wyoming: (token: string) => request<WyomingStatus>("GET", "/api/voice/wyoming", { token }),
   setWyoming: (token: string, s: { on: boolean; port: number; allow: string[]; agent: { account_id: string; persona_id: string } | null }) =>
     request<WyomingStatus>("PUT", "/api/voice/wyoming", { token, body: s }),

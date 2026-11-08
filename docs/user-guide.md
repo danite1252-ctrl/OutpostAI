@@ -398,6 +398,13 @@ you: your tools, allowed actions and tool hours. Anything that asks first (a loc
 door, an action set to ask) is asked aloud, and the device keeps listening for your yes or no.
 The conversation is kept in a chat called **Home Assistant voice**, where you can read it back.
 
+**Who's speaking**: once a persona answers, every device that talks to Outpost (the Assist
+button in someone's Home Assistant app, a voice device in a room) is listed under **Who's
+speaking**, with when it was last heard. Name it ("SJ's phone", "Kids' room") and choose who
+answers it: a person and one of their personas. Then that person's tools, allowed actions, ask-first
+and tool hours apply, and its talk goes in their own Home Assistant voice chat. A device not
+linked uses the default. **Forget** removes one from the list.
+
 ## The phone app
 
 1. Install **`Outpost-<version>.apk`** from
