@@ -92,6 +92,19 @@ pub fn describe_voice(id: &str) -> VoiceInfo {
     }
 }
 
+/// A spoken reply, no longer than `max` characters: whole sentences, cut at the last one that
+/// fits (a voice device shouldn't read a page out).
+pub fn spoken_cap(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(max).collect();
+    match cut.rfind(['.', '!', '?']) {
+        Some(i) if i > max / 3 => cut[..=i].to_string(),
+        _ => format!("{}…", cut.trim_end()),
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct VoiceStatus {
     /// The voice service's engine state.
@@ -324,7 +337,8 @@ pub fn speakable(text: &str) -> String {
             }
             continue;
         }
-        if in_code || t.starts_with("[[outpost-job:") || t.starts_with('|') {
+        // Tables (Markdown or tab-separated) aren't read out.
+        if in_code || t.starts_with("[[outpost-job:") || t.starts_with('|') || t.matches('\t').count() >= 2 || t.matches(" | ").count() >= 2 {
             continue;
         }
         let t = t.trim_start_matches(['#', '>', '-', '*', ' ']);
@@ -548,6 +562,16 @@ pub async fn turn(State(state): State<AppState>, auth: Auth, Json(req): Json<Tur
 
 #[cfg(test)]
 mod turn_tests {
+    #[test]
+    fn spoken_replies_are_whole_sentences_and_skip_tables() {
+        let long = "It'll be 22 degrees and dry. ".repeat(40);
+        let cut = super::spoken_cap(&long, 200);
+        assert!(cut.len() <= 200 && cut.ends_with('.'), "{cut}");
+        assert_eq!(super::spoken_cap("Short.", 200), "Short.");
+        let table = "Sydney today: 22 and dry.\nStation\tTemp\tWind\nObservatory Hill\t18.9\tS 28\n| a | b | c |";
+        assert_eq!(super::speakable(table), "Sydney today: 22 and dry.");
+    }
+
     #[test]
     fn noise_words_are_not_speech() {
         assert!(super::is_speech("Turn off the kitchen lamp."));

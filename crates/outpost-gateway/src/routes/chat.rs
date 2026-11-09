@@ -310,6 +310,17 @@ pub async fn get_file(State(state): State<AppState>, auth: Auth, Path(id): Path<
         })
 }
 
+/// How every reply starts: with the answer.
+pub const DIRECT_NOTE: &str = "## Answering\nStart with the answer itself. Don't announce what you're about to do \
+    (\"I'll check the weather...\") or recap the question. When a tool returns a lot, give what was asked for, \
+    not everything it returned: no long tables or lists of readings unless the user asks for them.";
+
+/// For replies that will be spoken aloud.
+pub const SPOKEN_NOTE: &str = "## Spoken reply\nThis reply will be spoken aloud, not read. Answer in one to three short \
+    sentences, as you'd say it to someone in the room: no tables, lists, headings, links, symbols or Markdown. Give \
+    the one or two facts that answer it, rounded and in plain words (the weather: today's high and low, rain, \
+    and wind if it's strong). Don't offer more unless it's needed; they'll ask.";
+
 #[derive(Debug, Default, Serialize, Deserialize, ToSchema)]
 pub struct SendRequest {
     #[serde(default)]
@@ -341,6 +352,9 @@ pub struct SendRequest {
     /// `{ok}`): hands-free, where speech can be misheard.
     #[serde(default)]
     pub confirm_tools: bool,
+    /// The reply will be spoken (a voice device, the phone's wake word): short and plain.
+    #[serde(default)]
+    pub spoken: bool,
     /// A routine's run (nobody watching): what it may do. Never from an app.
     #[serde(skip)]
     pub routine: Option<outpost_core::routines::Allow>,
@@ -666,6 +680,11 @@ pub async fn start_reply(
         });
     if let Some(t) = &pc_tools {
         system = format!("{system}\n\n{}", t.instructions());
+    }
+    // Answer first, always; spoken replies short, with nothing that only reads on a screen.
+    system = format!("{system}\n\n{DIRECT_NOTE}");
+    if req.spoken || req.confirm_tools {
+        system = format!("{system}\n\n{SPOKEN_NOTE}");
     }
     if earlier.is_empty() && chat.title == "New chat" {
         let title = if content.is_empty() {

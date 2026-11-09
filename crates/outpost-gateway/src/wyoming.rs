@@ -502,6 +502,9 @@ pub async fn serve<S: tokio::io::AsyncRead + AsyncWrite + Unpin>(state: &AppStat
 // ---------------------------------------------------------------------------------------
 // The conversation agent.
 
+/// The longest a spoken answer runs (about 30 seconds aloud); the whole reply is in its chat.
+const SPOKEN_MAX: usize = 450;
+
 /// How long Home Assistant waits for a spoken reply before being told it's still going.
 const ANSWER_WITHIN: Duration = Duration::from_secs(90);
 
@@ -597,6 +600,7 @@ pub async fn answer(state: &AppState, agent: &VoiceAgent, text: &str, place: &Pl
             time_zone: clock.as_ref().and_then(|c| c.zone.clone()),
             utc_offset_minutes: clock.as_ref().map(|c| c.offset_minutes),
             use_pc_tools: true,
+            spoken: true,
             ..Default::default()
         };
         crate::live::take_failure(&chat_id);
@@ -628,7 +632,9 @@ pub async fn answer(state: &AppState, agent: &VoiceAgent, text: &str, place: &Pl
     }
     let messages = outpost_core::chats::messages(&state.pool, &chat_id).await.map_err(|e| e.to_string())?;
     match messages.iter().rev().find(|m| m.role == "assistant" && m.created_at >= started) {
-        Some(m) if !m.content.trim().is_empty() => Ok((crate::routes::voice::speakable(&m.content), false)),
+        Some(m) if !m.content.trim().is_empty() => {
+            Ok((crate::routes::voice::spoken_cap(&crate::routes::voice::speakable(&m.content), SPOKEN_MAX), false))
+        }
         _ => Err(crate::live::take_failure(&chat_id).unwrap_or_else(|| "I couldn't answer that.".into())),
     }
 }
