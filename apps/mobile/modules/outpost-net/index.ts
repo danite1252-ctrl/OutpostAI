@@ -146,6 +146,8 @@ declare class OutpostNetModule extends NativeModule<Events> {
    *  the screen off; what's said after it goes to the persona and the answer is spoken. */
   wakeStart?(word: string, personaId: string, threshold: number, hosts: string[], port: number, fingerprint: string, token: string): void;
   wakeStop?(): void;
+  /** Turn it back on if it was on (not switched off) and isn't listening: when the app opens. */
+  wakeResume?(hosts: string[], port: number, fingerprint: string, token: string): void;
   wakeStatus?(): WakeStatus;
   /** The detector on a recording of "Alexa" and of other words: it works on this phone. */
   wakeCheck?(): Promise<{ heard: number; other: number; ok: boolean }>;

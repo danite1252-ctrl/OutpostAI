@@ -386,7 +386,9 @@ asks first (a lock, a door, an alarm) is asked aloud; say yes or no.
 - A notification shows while it listens, with **Stop**. Talk and the Mic button pause it.
 - The screen shows how long it has listened and how far the battery has gone down since (all
   of the phone's use, not only this). On Samsung phones set Outpost's battery use to
-  **Unrestricted**, or it may stop with the screen off. After a restart, start it again.
+  **Unrestricted**, or it may stop with the screen off. After the phone restarts, Android
+  doesn't let it start by itself: it comes back on when you next open Outpost (unless you
+  stopped it).
 - **How easily it wakes**: Less if it wakes by itself, More if it misses you across a room.
   **Check the wake word works on this phone** runs it on a test recording.
 - The talk is kept in a chat called **Phone voice**. Wake words are openWakeWord's (free for

@@ -205,6 +205,22 @@ function Main({
   useEffect(() => {
     void setUpNotifications(saved, true);
   }, [saved]);
+  // The wake word: if it was on (and not switched off), opening the app turns it back on (after
+  // a restart Android won't let it start by itself).
+  useEffect(() => {
+    const resume = () => {
+      try {
+        OutpostNet.wakeResume?.(saved.hosts, saved.port, saved.fingerprint, saved.token);
+      } catch {
+        // Not allowed the microphone any more, or an older build: the Wake word screen says why.
+      }
+    };
+    resume();
+    const sub = AppState.addEventListener("change", (st) => {
+      if (st === "active") resume();
+    });
+    return () => sub.remove();
+  }, [saved]);
   // While the app is open, start watching closely whenever jobs of mine are running (from
   // any device), so "it's ready" comes straight away after the app is left.
   useEffect(() => {

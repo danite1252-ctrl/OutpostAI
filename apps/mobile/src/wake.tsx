@@ -152,8 +152,8 @@ export function WakeScreen({ api, saved, onClose }: { api: Outpost; saved: Saved
       {on && <P muted>Changes take effect when you stop and start it again.</P>}
       <P muted>
         It beeps when it hears the word: then say what you want. Anything that asks first (a lock, a door, an alarm) is asked aloud: say
-        yes or no. The talk is kept in a chat called "Phone voice". Talk and the Mic button pause it while they're in use. Android stops
-        it if the phone restarts: start it again here.
+        yes or no. The talk is kept in a chat called "Phone voice". Talk and the Mic button pause it while they're in use. After the phone
+        restarts, Android doesn't let it start by itself: it comes back on when you next open Outpost (unless you stopped it).
       </P>
       <P muted>
         On Samsung phones, set Outpost's battery use to Unrestricted (Settings › Apps › Outpost › Battery), or it may stop listening

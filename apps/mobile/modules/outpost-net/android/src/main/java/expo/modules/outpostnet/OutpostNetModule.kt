@@ -342,6 +342,9 @@ class OutpostNetModule : Module() {
       WakeService.start(context, word, personaId, threshold, hosts, port, fingerprint, token)
     }
     Function("wakeStop") { WakeService.stop(context) }
+    Function("wakeResume") { hosts: List<String>, port: Int, fingerprint: String, token: String ->
+      WakeService.resume(context, hosts, port, fingerprint, token)
+    }
     Function("wakeStatus") { WakeService.status(context) }
     AsyncFunction("wakeCheck") { promise: Promise ->
       Thread {

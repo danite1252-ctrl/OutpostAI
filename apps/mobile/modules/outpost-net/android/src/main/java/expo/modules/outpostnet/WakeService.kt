@@ -53,7 +53,15 @@ class WakeService : Service() {
       stop(this)
       return START_NOT_STICKY
     }
-    show("Listening for \"${wordName(this)}\"")
+    try {
+      show("Listening for \"${wordName(this)}\"")
+    } catch (_: Exception) {
+      // Android won't let the microphone start from the background (it restarted the service
+      // on its own): it starts again when the app is next opened.
+      stopSelf()
+      return START_NOT_STICKY
+    }
+    alive = true
     if (worker?.isAlive != true) {
       running = true
       @SuppressLint("WakelockTimeout")
@@ -66,6 +74,7 @@ class WakeService : Service() {
   }
 
   override fun onDestroy() {
+    alive = false
     running = false
     worker?.interrupt()
     lock?.let { if (it.isHeld) it.release() }
@@ -352,6 +361,27 @@ class WakeService : Service() {
         .putString("word", word)
         .putString("persona", personaId)
         .putFloat("threshold", threshold.toFloat().coerceIn(0.2f, 0.95f))
+        .putLong("since", System.currentTimeMillis())
+        .putInt("battery_start", battery(ctx))
+        .putInt("wakes", 0)
+        .remove("error")
+        .apply()
+      ContextCompat.startForegroundService(ctx, Intent(ctx, WakeService::class.java))
+    }
+
+    /** Listening now (this process). */
+    @Volatile private var alive = false
+
+    /**
+     * When the app opens: if it was on (not switched off, nor stopped by a problem) and isn't
+     * listening (the phone restarted), listen again, as it was set.
+     */
+    fun resume(ctx: Context, hosts: List<String>, port: Int, fingerprint: String, token: String) {
+      val p = prefs(ctx)
+      if (alive || !p.getBoolean("on", false) || p.getString("persona", "").isNullOrBlank()) return
+      if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
+      if (hosts.isNotEmpty() && token.isNotEmpty()) JobNotifier.keepConnection(p, hosts, port, fingerprint, token)
+      p.edit()
         .putLong("since", System.currentTimeMillis())
         .putInt("battery_start", battery(ctx))
         .putInt("wakes", 0)
