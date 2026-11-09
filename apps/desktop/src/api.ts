@@ -1788,7 +1788,7 @@ export interface UpdateStatus {
   server_can_install?: boolean;
   /** A server install in progress, or "Failed: ..." */
   installing?: string | null;
-  /** A server installs updates by itself at a quiet moment (checking every minute). */
+  /** A server installs updates by itself at a quiet moment (checking every 15 minutes). */
   auto_install?: boolean;
   error: string | null;
 }

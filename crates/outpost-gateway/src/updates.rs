@@ -29,8 +29,11 @@ pub const UPDATES_OFF: &str = "updates.off";
 
 /// How often to look (and once, a minute after start).
 const EVERY: Duration = Duration::from_secs(24 * 60 * 60);
-/// A server (left running on its own) checks this often, and installs by itself.
-const SERVER_EVERY: Duration = Duration::from_secs(60);
+/// A server (left running on its own) checks this often, and installs by itself. (Not more
+/// often: GitHub throttles addresses that ask too often without signing in.)
+const SERVER_EVERY: Duration = Duration::from_secs(15 * 60);
+/// After a check that failed, wait longer before the next.
+const SERVER_AFTER_FAILING: Duration = Duration::from_secs(30 * 60);
 /// "off" to stop a server installing updates by itself (on until turned off).
 pub const AUTO_INSTALL: &str = "updates.auto_install";
 /// After a failed automatic install, wait this long before trying that version again.
@@ -160,7 +163,7 @@ pub struct UpdateStatus {
     pub server_can_install: bool,
     /// A server install in progress, or why the last one failed.
     pub installing: Option<String>,
-    /// A server installs updates by itself, at a quiet moment (checking every minute).
+    /// A server installs updates by itself, at a quiet moment (checking every 15 minutes).
     pub auto_install: bool,
     /// Why the last check failed.
     pub error: Option<String>,
@@ -232,16 +235,11 @@ pub fn install_server(state: &AppState) -> Result<(), String> {
 }
 
 async fn download_and_replace(state: &AppState, platform: &Platform, version: &str) -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(600))
-        .user_agent(concat!("Outpost/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client.get(&platform.url).send().await.map_err(|_| "Couldn't download the update.".to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("The download failed ({}).", resp.status().as_u16()));
-    }
-    let data = resp.bytes().await.map_err(|_| "The download was cut off.".to_string())?;
+    let data = release_file(&platform.url, Duration::from_secs(600)).await.map_err(|e| match e {
+        Fetched::Status(code) => format!("The download failed ({code})."),
+        Fetched::Unreachable => "Couldn't download the update.".to_string(),
+        Fetched::CutOff => "The download was cut off.".to_string(),
+    })?;
     if !signature_ok(&data, &platform.signature) {
         return Err("The download's signature doesn't match Outpost's release key, so it wasn't installed.".into());
     }
@@ -329,25 +327,70 @@ async fn fetch() -> Result<Manifest, String> {
     if !repo_configured() {
         return Err("No releases address is set yet.".into());
     }
+    let data = release_file(&manifest_url(), Duration::from_secs(20)).await.map_err(|e| match e {
+        Fetched::Status(404) => "No release has been published yet.".to_string(),
+        Fetched::Status(code) => format!("GitHub said no ({code})."),
+        Fetched::Unreachable | Fetched::CutOff => "Couldn't reach GitHub to check for updates.".to_string(),
+    })?;
+    serde_json::from_slice::<Manifest>(&data).map_err(|_| "The release information couldn't be read.".to_string())
+}
+
+/// Why a release file couldn't be had.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Fetched {
+    Status(u16),
+    Unreachable,
+    CutOff,
+}
+
+/// A file of a release (`github.com/<repo>/releases/latest/download/<name>` or
+/// `.../releases/download/<tag>/<name>`). If GitHub's download pages fail (they sometimes time
+/// out for one place or address), the same file through GitHub's API instead.
+async fn release_file(url: &str, timeout: Duration) -> Result<Vec<u8>, Fetched> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
+        .timeout(timeout)
         .user_agent(concat!("Outpost/", env!("CARGO_PKG_VERSION")))
         .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client
-        .get(manifest_url())
-        .send()
-        .await
-        .map_err(|_| "Couldn't reach GitHub to check for updates.".to_string())?;
-    if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return Err("No release has been published yet.".into());
+        .map_err(|_| Fetched::Unreachable)?;
+    let first = match client.get(url).send().await {
+        Ok(r) if r.status().is_success() => return r.bytes().await.map(|b| b.to_vec()).map_err(|_| Fetched::CutOff),
+        Ok(r) => Fetched::Status(r.status().as_u16()),
+        Err(_) => Fetched::Unreachable,
+    };
+    // Not there at all: no other way will find it.
+    if first == Fetched::Status(404) {
+        return Err(first);
     }
-    if !resp.status().is_success() {
-        return Err(format!("GitHub said no ({}).", resp.status().as_u16()));
+    let Some((release, name)) = api_route(url) else { return Err(first) };
+    tracing::info!(?first, url, "GitHub's download page failed; trying its API");
+    let found: serde_json::Value = match client.get(&release).header("Accept", "application/vnd.github+json").send().await {
+        Ok(r) if r.status().is_success() => r.json().await.map_err(|_| first)?,
+        _ => return Err(first),
+    };
+    let Some(id) = found["assets"]
+        .as_array()
+        .and_then(|a| a.iter().find(|x| x["name"] == name.as_str()))
+        .and_then(|x| x["id"].as_u64())
+    else {
+        return Err(Fetched::Status(404));
+    };
+    let asset = format!("https://api.github.com/repos/{RELEASES_REPO}/releases/assets/{id}");
+    match client.get(&asset).header("Accept", "application/octet-stream").send().await {
+        Ok(r) if r.status().is_success() => r.bytes().await.map(|b| b.to_vec()).map_err(|_| Fetched::CutOff),
+        Ok(r) => Err(Fetched::Status(r.status().as_u16())),
+        Err(_) => Err(first),
     }
-    resp.json::<Manifest>()
-        .await
-        .map_err(|_| "The release information couldn't be read.".to_string())
+}
+
+/// For a release file's download address: its release in GitHub's API, and the file's name.
+fn api_route(url: &str) -> Option<(String, String)> {
+    let rest = url.strip_prefix(&format!("https://github.com/{RELEASES_REPO}/releases/"))?;
+    let api = format!("https://api.github.com/repos/{RELEASES_REPO}/releases");
+    if let Some(name) = rest.strip_prefix("latest/download/") {
+        return (!name.is_empty() && !name.contains('/')).then(|| (format!("{api}/latest"), name.to_string()));
+    }
+    let (tag, name) = rest.strip_prefix("download/")?.split_once('/')?;
+    (!tag.is_empty() && !name.is_empty() && !name.contains('/')).then(|| (format!("{api}/tags/{tag}"), name.to_string()))
 }
 
 /// A server installs updates by itself (until the owner turns it off).
@@ -356,7 +399,7 @@ pub async fn auto_install(state: &AppState) -> bool {
         && outpost_core::settings::get(&state.pool, AUTO_INSTALL).await.ok().flatten().as_deref() != Some("off")
 }
 
-/// Checks a minute after start, then once a day (a server: every minute, installing what it
+/// Checks a minute after start, then once a day (a server: every 15 minutes, installing what it
 /// finds at a quiet moment), while checks are on. The apps' Check now looks at once.
 pub async fn background(state: AppState) {
     tokio::time::sleep(Duration::from_secs(60)).await;
@@ -391,7 +434,13 @@ pub async fn background(state: AppState) {
                 }
             }
         }
-        tokio::time::sleep(if state.config.server { SERVER_EVERY } else { EVERY }).await;
+        let failing = state.updates.found.read().map(|f| f.error.is_some()).unwrap_or(false);
+        tokio::time::sleep(match (state.config.server, failing) {
+            (true, false) => SERVER_EVERY,
+            (true, true) => SERVER_AFTER_FAILING,
+            _ => EVERY,
+        })
+        .await;
     }
 }
 
@@ -469,6 +518,7 @@ pub fn newer(a: &str, b: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::{api_route, RELEASES_REPO};
 
     #[test]
     fn the_service_gets_its_out_of_memory_policy_once() {
@@ -488,6 +538,19 @@ mod tests {
         assert!(!super::signature_ok(b"anything", ""));
         assert!(!super::signature_ok(b"anything", "bm90IGEgc2lnbmF0dXJl"));
         assert_eq!(super::server_platform().is_some(), cfg!(all(target_os = "linux", target_arch = "x86_64")));
+    }
+
+    #[test]
+    fn release_files_have_a_second_route_through_the_api() {
+        let base = format!("https://github.com/{RELEASES_REPO}/releases");
+        let api = format!("https://api.github.com/repos/{RELEASES_REPO}/releases");
+        assert_eq!(api_route(&format!("{base}/latest/download/latest.json")), Some((format!("{api}/latest"), "latest.json".into())));
+        assert_eq!(
+            api_route(&format!("{base}/download/v1.5.3/outpost-gateway-linux")),
+            Some((format!("{api}/tags/v1.5.3"), "outpost-gateway-linux".into()))
+        );
+        assert_eq!(api_route("https://example.com/releases/latest/download/latest.json"), None);
+        assert_eq!(api_route(&format!("{base}/download/v1/a/b")), None);
     }
 
     #[test]

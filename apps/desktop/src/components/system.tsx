@@ -45,6 +45,8 @@ export async function installUpdate(onProgress: (text: string) => void) {
 function useAppUpdate() {
   const [version, setVersion] = useState<string | null>(null);
   const [newer, setNewer] = useState<string | null>(null);
+  /** The last check: when, and what went wrong if it did. */
+  const [last, setLast] = useState<{ at: Date; problem: string | null } | null>(null);
   const look = useCallback(async () => {
     try {
       const { getVersion } = await import("@tauri-apps/api/app");
@@ -52,8 +54,16 @@ function useAppUpdate() {
       const { check } = await import("@tauri-apps/plugin-updater");
       const u = await check();
       setNewer(u ? u.version : null);
+      setLast({ at: new Date(), problem: null });
       return u ? u.version : null;
-    } catch {
+    } catch (e) {
+      const why = message(e);
+      setLast({
+        at: new Date(),
+        problem: /50[234]|timed out|timeout/i.test(why)
+          ? "GitHub didn't answer (it's having trouble, or is busy for this address). It tries again tomorrow, or press Check now later."
+          : `Couldn't check: ${why}`,
+      });
       return null;
     }
   }, []);
@@ -63,7 +73,7 @@ function useAppUpdate() {
     const t = window.setInterval(() => void look(), 24 * 60 * 60 * 1000);
     return () => window.clearInterval(t);
   }, [look]);
-  return { version, newer, look };
+  return { version, newer, look, last };
 }
 
 /** Before a server restart (an update or Restart): if something's running that it would
@@ -311,7 +321,7 @@ export function UpdatesPanel({ token, canManage }: { token: string; canManage: b
         {canManage && SERVER && status.enabled && (
           <ToggleRow
             title="Install server updates automatically"
-            hint="The server checks every minute and installs a new release by itself as soon as nothing is running (no Create job, training or chat in the last two minutes). It's back a few seconds later."
+            hint="The server checks every 15 minutes and installs a new release by itself as soon as nothing is running (no Create job, training or chat in the last two minutes). It's back a few seconds later."
             checked={status.auto_install ?? false}
             onChange={(on) => {
               setError(null);
@@ -324,7 +334,7 @@ export function UpdatesPanel({ token, canManage }: { token: string; canManage: b
             title="Check for updates"
             hint={
               <>
-                {SERVER ? "Every minute the server asks" : "Once a day Outpost asks"} github.com/{status.repo} whether there's a
+                {SERVER ? "Every 15 minutes the server asks" : "Once a day Outpost asks"} github.com/{status.repo} whether there's a
                 newer version. It's the only time Outpost goes on the internet by itself, and nothing about you or your PC is
                 sent. Updates only install if they're signed with Outpost's key
                 {SERVER ? "" : ", and only when you press Update"}.
@@ -378,6 +388,11 @@ function AppUpdateRow() {
         >
           {checking ? "Checking…" : "Check now"}
         </Button>
+        {app.last && (
+          <span className="text-xs text-muted">
+            {app.last.problem ?? (app.newer ? "" : "Up to date.")} Last checked {app.last.at.toLocaleString()}
+          </span>
+        )}
       </div>
       <ErrorNote>{error}</ErrorNote>
     </div>
