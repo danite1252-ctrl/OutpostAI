@@ -10,6 +10,8 @@ set -euo pipefail
 
 REPO="danite1252-ctrl/OutpostAI"
 BASE="https://github.com/$REPO/releases/latest/download"
+# Outpost's own download server: the same files, asked when GitHub doesn't answer.
+MIRROR="https://outpost.hartspace.cc/downloads"
 BIN_DIR="$HOME/.local/lib/outpost"
 UNIT_DIR="$HOME/.config/systemd/user"
 TMP="$(mktemp -d)"
@@ -21,23 +23,29 @@ if [ "$(uname -m)" != "x86_64" ]; then
 fi
 
 echo "Finding the newest Outpost..."
-curl -fsSL "$BASE/latest.json" -o "$TMP/latest.json"
-read -r VERSION URL SHA < <(python3 - "$TMP/latest.json" <<'PY'
+curl -fsSL --retry 3 "$BASE/latest.json" -o "$TMP/latest.json" 2>/dev/null \
+  || curl -fsSL "$MIRROR/latest.json" -o "$TMP/latest.json"
+read -r VERSION URL SHA FIRST < <(python3 - "$TMP/latest.json" <<'PY'
 import json, sys
 m = json.load(open(sys.argv[1]))
 p = m.get("platforms", {}).get("linux-x86_64") or {}
-print(m.get("version", ""), p.get("url", ""), p.get("sha256", ""))
+first = (m.get("mirror") or {}).get("linux-x86_64") or "-"
+print(m.get("version", "") or "-", p.get("url", "") or "-", p.get("sha256", "") or "-", first)
 PY
 )
+[ "$URL" = "-" ] && URL=""
+[ "$SHA" = "-" ] && SHA=""
 if [ -z "$URL" ]; then
   echo "The newest release has no Linux server build yet." >&2
   exit 1
 fi
 
 echo "Downloading Outpost $VERSION..."
-curl -fL --progress-bar "$URL" -o "$TMP/outpost-gateway"
-if [ -n "$SHA" ]; then
-  echo "$SHA  $TMP/outpost-gateway" | sha256sum -c --quiet - || { echo "The download is damaged; nothing was installed." >&2; exit 1; }
+fetched() { [ -z "$SHA" ] || echo "$SHA  $TMP/outpost-gateway" | sha256sum -c --quiet - >/dev/null 2>&1; }
+# Outpost's own download server first (when it has this release), then GitHub.
+if ! { [ "$FIRST" != "-" ] && [ -n "$SHA" ] && curl -fL --progress-bar "$FIRST" -o "$TMP/outpost-gateway" && fetched; }; then
+  curl -fL --retry 3 --progress-bar "$URL" -o "$TMP/outpost-gateway"
+  fetched || { echo "The download is damaged; nothing was installed." >&2; exit 1; }
 fi
 
 mkdir -p "$BIN_DIR" "$UNIT_DIR"

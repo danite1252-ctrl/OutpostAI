@@ -177,6 +177,15 @@ if (-not $SkipPhone) {
     $apkHash = (Get-FileHash (Join-Path $out $apkName) -Algorithm SHA256).Hash.ToLower()
     $manifest.mobile = [ordered]@{ version = $Version; url = "$download/$apkName"; sha256 = $apkHash }
 }
+# The same files on Outpost's own download server (mirror.ps1 puts them there), tried first.
+$mirrorConfig = Join-Path $keys "mirror.json"
+if (Test-Path $mirrorConfig) {
+    $mirrorUrl = ((Get-Content $mirrorConfig -Raw | ConvertFrom-Json).url).TrimEnd("/")
+    $mirror = [ordered]@{ "windows-x86_64" = "$mirrorUrl/Outpost-setup.exe" }
+    if (-not $SkipLinux) { $mirror."linux-x86_64" = "$mirrorUrl/outpost-gateway-linux-x86_64" }
+    if (-not $SkipPhone) { $mirror.mobile = "$mirrorUrl/Outpost.apk" }
+    $manifest.mirror = $mirror
+}
 # UTF-8 without a byte-order mark (GitHub serves it as-is).
 [IO.File]::WriteAllText((Join-Path $out "latest.json"), ($manifest | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
 
@@ -196,6 +205,10 @@ if ($changed -and -not $Publish) {
 if ($Publish) {
     Step "Publishing $tag on github.com/$repo"
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "The gh tool isn't installed (winget install GitHub.cli), so publish by hand: see docs\releasing.md." }
+    # Outpost's own download server first, so it has the files before anyone hears there's a
+    # new release. If that fails, GitHub still has everything.
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "mirror.ps1") -Version $Version
+    if ($LASTEXITCODE -ne 0) { Write-Host "The download server wasn't updated (apps use GitHub's copy). Retry later with: scripts\release\mirror.ps1 -Version $Version" -ForegroundColor Yellow }
     $files = Get-ChildItem $out | ForEach-Object { $_.FullName }
     $notesText = if ($Notes) { $Notes } else { "Outpost $Version" }
     # The tag goes on the commit you're on (pushed to GitHub).

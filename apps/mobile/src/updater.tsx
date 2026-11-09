@@ -24,7 +24,8 @@ export function isNewer(a: string, b: string) {
   return false;
 }
 
-type Mobile = { version: string; url: string; sha256?: string | null };
+/** `mirror`: the same APK on Outpost's own download server, tried before GitHub. */
+type Mobile = { version: string; url: string; sha256?: string | null; mirror?: string | null };
 
 export type UpdateState =
   | { phase: "none" }
@@ -50,7 +51,8 @@ async function newestMobile(api: Outpost): Promise<Mobile | null> {
   if (lastGithub && Date.now() - lastGithub.at < GITHUB_EVERY) return lastGithub.mobile ?? u.mobile;
   try {
     const text = await OutpostNet.fetchText(`https://github.com/${u.repo}/releases/latest/download/latest.json`);
-    const m = (JSON.parse(text) as { mobile?: Mobile }).mobile ?? null;
+    const json = JSON.parse(text) as { mobile?: Mobile; mirror?: { mobile?: string } };
+    const m = json.mobile ? { ...json.mobile, mirror: json.mirror?.mobile ?? null } : null;
     lastGithub = { at: Date.now(), mobile: m && typeof m.url === "string" && m.url.startsWith("https://") ? m : null };
     return lastGithub.mobile ?? u.mobile;
   } catch {
@@ -85,7 +87,7 @@ export function usePhoneUpdate(api: Outpost) {
             return;
           }
           setState({ phase: "downloading", version: m.version, percent: 0 });
-          file = await OutpostNet.downloadUpdate(m.url, name, m.sha256 ?? null);
+          file = await OutpostNet.downloadUpdate(m.url, name, m.sha256 ?? null, m.mirror ?? null);
         }
         path.current = file;
         const st = OutpostNet.updateStatus();

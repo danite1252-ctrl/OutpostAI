@@ -59,6 +59,29 @@ pushes the version change, and publishes the release. It asks for both key passw
 part way, fix the problem and run it again with the same `-Version`. The server's runner must be
 running (it builds the Linux part); `-SkipLinux` / `-SkipPhone` leave parts out.
 
+## The download server
+
+Each release's files also go on Outpost's own download server, over the last release's, under
+names that don't change: `Outpost-setup.exe`, `Outpost.apk`, `outpost-gateway-linux-x86_64`,
+`install.sh` and a `latest.json` pointing at them. Apps still learn about new releases from
+GitHub, then download from the download server first and from GitHub when its copy is missing
+or doesn't check out (every file is held to its signature or checksum). When GitHub doesn't
+answer at all, apps read the download server's `latest.json` instead.
+
+`scripts\release\mirror.ps1` does the copying (`release.ps1` runs it just before publishing on
+GitHub; run it by hand with `-Version` to retry). It needs PuTTY's `psftp` and, on this PC,
+`%USERPROFILE%\.outpost\mirror.json` (never in the repo):
+
+```json
+{ "url": "https://outpost.hartspace.cc/downloads",
+  "host": "<web server>", "user": "<you>",
+  "folder": "/var/www/hartspace.cc/public_html/outpost/downloads",
+  "key": "C:\\Users\\<you>\\.ssh\\<key>.ppk" }
+```
+
+Without `key`, Pageant must hold the key; with it, psftp asks for its passphrase once. Without
+`mirror.json`, releases only go on GitHub.
+
 ## Each release, step by step
 
 1. Commit and push everything (the script refuses uncommitted changes).

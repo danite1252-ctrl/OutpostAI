@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, SERVER, systemApi, waitForServer, type CrashSummary, type Diagnostics, type UpdateStatus } from "../api";
 import { Button, ErrorNote, ToggleRow, areYouSure } from "./ui";
+import type { Update as AppUpdate } from "@tauri-apps/plugin-updater";
 
 function message(err: unknown) {
   if (err instanceof ApiError) return err.message;
@@ -16,26 +17,63 @@ function when(secs: number) {
  * Download the newer version, check its signature (against the key built into Outpost),
  * install it and restart. Only works in the installed app (not `npm run dev`).
  */
+/**
+ * GitHub's download pages sometimes time out (a 504 after ten seconds, then fine the next
+ * try): a few tries, a little apart, when that's what went wrong.
+ */
+async function retrying<T>(work: () => Promise<T>): Promise<T> {
+  const waits = [2000, 5000, 10000];
+  for (let i = 0; ; i++) {
+    try {
+      return await work();
+    } catch (e) {
+      const passing = /50[0-9]|429|timed out|timeout|error sending request|connection/i.test(message(e));
+      if (!passing || i >= waits.length) throw e;
+      await new Promise((r) => setTimeout(r, waits[i]));
+    }
+  }
+}
+
 export async function installUpdate(onProgress: (text: string) => void) {
-  const { check } = await import("@tauri-apps/plugin-updater");
+  const { check, Update } = await import("@tauri-apps/plugin-updater");
   const { relaunch } = await import("@tauri-apps/plugin-process");
   onProgress("Looking for the update…");
-  const update = await check();
+  const update = await retrying(() => check());
   if (!update) throw new Error("No newer version was found (or this copy of Outpost was started with npm run dev).");
-  let total = 0;
-  let got = 0;
-  await update.download((e) => {
-    if (e.event === "Started") total = e.data.contentLength ?? 0;
-    else if (e.event === "Progress") {
-      got += e.data.chunkLength;
-      onProgress(total ? `Downloading… ${Math.round((got / total) * 100)}%` : "Downloading…");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const fetchInto = (u: AppUpdate) => {
+    let total = 0;
+    let got = 0;
+    return u.download((e) => {
+      if (e.event === "Started") total = e.data.contentLength ?? 0;
+      else if (e.event === "Progress") {
+        got += e.data.chunkLength;
+        onProgress(total ? `Downloading… ${Math.round((got / total) * 100)}%` : "Downloading…");
+      }
+    });
+  };
+  // Outpost's own download server first (one try; its copy must carry this release's
+  // signature), then GitHub.
+  let chosen: AppUpdate | null = null;
+  const mirror = (update.rawJson.mirror as Record<string, unknown> | undefined)?.["windows-x86_64"];
+  if (typeof mirror === "string" && mirror.startsWith("https://")) {
+    try {
+      const rid = await invoke<number>("update_from", { rid: update.rid, url: mirror });
+      const m = new Update({ rid, currentVersion: update.currentVersion, version: update.version, date: update.date, body: update.body, rawJson: update.rawJson });
+      await fetchInto(m);
+      chosen = m;
+    } catch {
+      onProgress("Downloading from GitHub…");
     }
-  });
+  }
+  if (!chosen) {
+    await retrying(() => fetchInto(update));
+    chosen = update;
+  }
   // Downloaded and its signature checked: stop the engines, then hand over to the installer.
   onProgress("Installing…");
-  const { invoke } = await import("@tauri-apps/api/core");
   await invoke("before_update").catch(() => undefined);
-  await update.install();
+  await chosen.install();
   onProgress("Restarting…");
   await relaunch();
 }
@@ -52,7 +90,7 @@ function useAppUpdate() {
       const { getVersion } = await import("@tauri-apps/api/app");
       setVersion(await getVersion());
       const { check } = await import("@tauri-apps/plugin-updater");
-      const u = await check();
+      const u = await retrying(() => check());
       setNewer(u ? u.version : null);
       setLast({ at: new Date(), problem: null });
       return u ? u.version : null;

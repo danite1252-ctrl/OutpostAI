@@ -106,7 +106,7 @@ export function ServerCard({ api }: { api: Outpost }) {
           {st.server_can_install !== undefined && (
             <Toggle
               title="Install server updates automatically"
-              hint="As soon as nothing is running (it checks every minute)."
+              hint="As soon as nothing is running (it checks every 15 minutes)."
               on={st.auto_install ?? true}
               onChange={(on) => void setAuto(on)}
             />

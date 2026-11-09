@@ -284,10 +284,10 @@ class OutpostNetModule : Module() {
       }.start()
     }
 
-    AsyncFunction("downloadUpdate") { url: String, name: String, sha256: String?, promise: Promise ->
+    AsyncFunction("downloadUpdate") { url: String, name: String, sha256: String?, mirror: String?, promise: Promise ->
       Thread {
         try {
-          promise.resolve(updater.download(url, name, sha256))
+          promise.resolve(updater.download(url, name, sha256, mirror))
         } catch (e: Exception) {
           promise.reject("ERR_UPDATE", e.message ?: "The update couldn't be downloaded.", e)
         }

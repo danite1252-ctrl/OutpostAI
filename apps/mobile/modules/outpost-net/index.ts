@@ -162,8 +162,9 @@ declare class OutpostNetModule extends NativeModule<Events> {
   updateDownloaded(name: string): string | null;
   /** A small text file over ordinary HTTPS (GitHub's latest.json). */
   fetchText(url: string): Promise<string>;
-  /** Download an update (HTTPS); resolves with its path. */
-  downloadUpdate(url: string, name: string, sha256: string | null): Promise<string>;
+  /** Download an update (HTTPS); resolves with its path. `mirror`: the same file on Outpost's
+   *  own download server, tried first (held to `sha256`), with `url` when that fails. */
+  downloadUpdate(url: string, name: string, sha256: string | null, mirror: string | null): Promise<string>;
   /** Hand a downloaded update to Android's installer (it closes Outpost to update). */
   installUpdate(path: string): Promise<void>;
   stopDiscovery(): void;

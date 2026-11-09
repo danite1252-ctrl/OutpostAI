@@ -21,10 +21,6 @@ $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $root
 
-$attribution = @(
-    "-m", "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
-    "-m", "Claude-Session: https://claude.ai/code/session_01FHR5gRyQFyLM1MATPFBpEv"
-)
 function Invoke-Git([string[]]$GitArgs) {
     & git @GitArgs
     if ($LASTEXITCODE -ne 0) { throw "git $($GitArgs -join ' ') failed." }
@@ -40,7 +36,7 @@ if ($pending) {
     }
     Write-Host "== Committing: $Commit" -ForegroundColor Cyan
     Invoke-Git @("add", "-A")
-    Invoke-Git (@("commit", "-m", $Commit) + $attribution)
+    Invoke-Git (@("commit", "-m", $Commit))
     Invoke-Git @("push")
 }
 
@@ -81,7 +77,7 @@ if ($LASTEXITCODE -ne 0) { throw "The build stopped. Fix the problem above and r
 if (git status --porcelain) {
     Write-Host "== Committing the version change" -ForegroundColor Cyan
     Invoke-Git @("add", "-A")
-    Invoke-Git (@("commit", "-m", "Outpost $Version") + $attribution)
+    Invoke-Git (@("commit", "-m", "Outpost $Version"))
 }
 Invoke-Git @("push")
 

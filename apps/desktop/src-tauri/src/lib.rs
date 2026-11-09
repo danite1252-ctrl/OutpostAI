@@ -773,6 +773,23 @@ fn start_server_tunnel(server: &Server) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The update `check()` found, but downloaded from `url` (the same file on Outpost's own
+/// download server): a second update to download and install; the first stays for GitHub.
+/// The signature is still checked against the key built into Outpost.
+#[tauri::command]
+fn update_from(webview: tauri::Webview, rid: tauri::ResourceId, url: String) -> Result<tauri::ResourceId, String> {
+    if !url.starts_with("https://") {
+        return Err("Updates only come over HTTPS.".into());
+    }
+    let update = webview
+        .resources_table()
+        .get::<tauri_plugin_updater::Update>(rid)
+        .map_err(|e| e.to_string())?;
+    let mut copy = (*update).clone();
+    copy.download_url = url.parse().map_err(|_| "That isn't a web address.".to_string())?;
+    Ok(webview.resources_table().add(copy))
+}
+
 /// Just before an update installs (Windows closes Outpost to replace it): stop the engines
 /// and note a normal exit, so nothing is left holding the graphics card and the next start
 /// doesn't report a crash.
@@ -862,6 +879,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             gateway_url,
             before_update,
+            update_from,
             get_close_to_tray,
             set_close_to_tray,
             server_status,

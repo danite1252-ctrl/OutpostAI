@@ -47,6 +47,10 @@ pub fn manifest_url() -> String {
     format!("https://github.com/{RELEASES_REPO}/releases/latest/download/latest.json")
 }
 
+/// The same `latest.json` on Outpost's own download server (its files there too): asked when
+/// GitHub doesn't answer.
+pub const MIRROR_MANIFEST: &str = "https://outpost.hartspace.cc/downloads/latest.json";
+
 pub fn releases_page() -> String {
     format!("https://github.com/{RELEASES_REPO}/releases")
 }
@@ -62,6 +66,10 @@ struct Manifest {
     mobile: Option<MobileRelease>,
     #[serde(default)]
     platforms: std::collections::HashMap<String, Platform>,
+    /// The same files on Outpost's own download server, by platform (and "mobile"): tried
+    /// first, with GitHub's copy when they're missing, old or don't check out.
+    #[serde(default)]
+    mirror: std::collections::HashMap<String, String>,
 }
 
 /// One platform's download in a release, signed with the update key.
@@ -70,6 +78,9 @@ pub struct Platform {
     pub url: String,
     /// The download's signature (minisign, base64), as the desktop updater uses.
     pub signature: String,
+    /// The same file on Outpost's own download server (from the manifest's `mirror`).
+    #[serde(skip)]
+    pub mirror: Option<String>,
 }
 
 /// The release key's public half: the same one the desktop app checks its updates with.
@@ -114,6 +125,10 @@ pub struct MobileRelease {
     /// SHA-256 of the APK (lowercase hex), checked by the phone after downloading.
     #[serde(default)]
     pub sha256: Option<String>,
+    /// The same APK on Outpost's own download server, tried first (the phone checks it against
+    /// `sha256` too, and uses `url` when it doesn't match or can't be had).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirror: Option<String>,
 }
 
 /// A newer release.
@@ -235,11 +250,26 @@ pub fn install_server(state: &AppState) -> Result<(), String> {
 }
 
 async fn download_and_replace(state: &AppState, platform: &Platform, version: &str) -> Result<(), String> {
-    let data = release_file(&platform.url, Duration::from_secs(600)).await.map_err(|e| match e {
+    // Outpost's own download server first; GitHub when it doesn't have this version.
+    let mirrored = match &platform.mirror {
+        Some(url) => match mirror_file(url).await {
+            Some(data) if signature_ok(&data, &platform.signature) => Some(data),
+            Some(_) => {
+                tracing::info!(url, "the download server's copy isn't this release; using GitHub");
+                None
+            }
+            None => None,
+        },
+        None => None,
+    };
+    let data = match mirrored {
+        Some(data) => data,
+        None => release_file(&platform.url, Duration::from_secs(600)).await.map_err(|e| match e {
         Fetched::Status(code) => format!("The download failed ({code})."),
         Fetched::Unreachable => "Couldn't download the update.".to_string(),
         Fetched::CutOff => "The download was cut off.".to_string(),
-    })?;
+    })?,
+    };
     if !signature_ok(&data, &platform.signature) {
         return Err("The download's signature doesn't match Outpost's release key, so it wasn't installed.".into());
     }
@@ -314,8 +344,11 @@ pub async fn check(state: &AppState) {
         match result {
             Ok(m) => {
                 f.latest = Some(Release { version: m.version.trim_start_matches('v').to_string(), notes: m.notes, date: m.pub_date });
-                f.mobile = m.mobile;
-                f.server = server_platform().and_then(|p| m.platforms.get(p).cloned());
+                let mirror = |key: &str| m.mirror.get(key).filter(|u| u.starts_with("https://")).cloned();
+                f.mobile = m.mobile.clone().map(|r| MobileRelease { mirror: mirror("mobile"), ..r });
+                f.server = server_platform().and_then(|p| {
+                    m.platforms.get(p).cloned().map(|x| Platform { mirror: mirror(p), ..x })
+                });
                 f.error = None;
             }
             Err(e) => f.error = Some(e),
@@ -327,11 +360,20 @@ async fn fetch() -> Result<Manifest, String> {
     if !repo_configured() {
         return Err("No releases address is set yet.".into());
     }
-    let data = release_file(&manifest_url(), Duration::from_secs(20)).await.map_err(|e| match e {
-        Fetched::Status(404) => "No release has been published yet.".to_string(),
-        Fetched::Status(code) => format!("GitHub said no ({code})."),
-        Fetched::Unreachable | Fetched::CutOff => "Couldn't reach GitHub to check for updates.".to_string(),
-    })?;
+    let data = match release_file(&manifest_url(), Duration::from_secs(20)).await {
+        Ok(data) => data,
+        // GitHub's not answering: Outpost's own download server has the same latest.json.
+        Err(e) => match mirror_file(MIRROR_MANIFEST).await {
+            Some(data) => data,
+            None => {
+                return Err(match e {
+                    Fetched::Status(404) => "No release has been published yet.".to_string(),
+                    Fetched::Status(code) => format!("GitHub said no ({code})."),
+                    Fetched::Unreachable | Fetched::CutOff => "Couldn't reach GitHub to check for updates.".to_string(),
+                })
+            }
+        },
+    };
     serde_json::from_slice::<Manifest>(&data).map_err(|_| "The release information couldn't be read.".to_string())
 }
 
@@ -352,11 +394,20 @@ async fn release_file(url: &str, timeout: Duration) -> Result<Vec<u8>, Fetched> 
         .user_agent(concat!("Outpost/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|_| Fetched::Unreachable)?;
-    let first = match client.get(url).send().await {
-        Ok(r) if r.status().is_success() => return r.bytes().await.map(|b| b.to_vec()).map_err(|_| Fetched::CutOff),
-        Ok(r) => Fetched::Status(r.status().as_u16()),
-        Err(_) => Fetched::Unreachable,
-    };
+    // GitHub's download pages sometimes time out (a 504 after ten seconds, then fine the next
+    // try): a few tries, a little apart.
+    let mut first = Fetched::Unreachable;
+    for wait in [0u64, 2, 5] {
+        tokio::time::sleep(Duration::from_secs(wait)).await;
+        first = match client.get(url).send().await {
+            Ok(r) if r.status().is_success() => return r.bytes().await.map(|b| b.to_vec()).map_err(|_| Fetched::CutOff),
+            Ok(r) => Fetched::Status(r.status().as_u16()),
+            Err(_) => Fetched::Unreachable,
+        };
+        if !matches!(first, Fetched::Unreachable | Fetched::Status(429 | 500..=599)) {
+            break;
+        }
+    }
     // Not there at all: no other way will find it.
     if first == Fetched::Status(404) {
         return Err(first);
@@ -379,6 +430,30 @@ async fn release_file(url: &str, timeout: Duration) -> Result<Vec<u8>, Fetched> 
         Ok(r) if r.status().is_success() => r.bytes().await.map(|b| b.to_vec()).map_err(|_| Fetched::CutOff),
         Ok(r) => Err(Fetched::Status(r.status().as_u16())),
         Err(_) => Err(first),
+    }
+}
+
+/// A file from Outpost's own download server, or None (it's only a faster first try).
+async fn mirror_file(url: &str) -> Option<Vec<u8>> {
+    if !url.starts_with("https://") {
+        return None;
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(600))
+        .connect_timeout(Duration::from_secs(10))
+        .user_agent(concat!("Outpost/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .ok()?;
+    match client.get(url).send().await {
+        Ok(r) if r.status().is_success() => r.bytes().await.ok().map(|b| b.to_vec()),
+        Ok(r) => {
+            tracing::info!(url, status = %r.status(), "the download server didn't have it; using GitHub");
+            None
+        }
+        Err(e) => {
+            tracing::info!(url, error = %e, "couldn't reach the download server; using GitHub");
+            None
+        }
     }
 }
 

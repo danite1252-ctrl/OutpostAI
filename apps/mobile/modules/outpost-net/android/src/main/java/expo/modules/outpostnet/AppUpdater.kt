@@ -67,9 +67,14 @@ class AppUpdater(
   /** A small text file over ordinary HTTPS (the release's latest.json on GitHub). */
   fun fetchText(url: String): String {
     require(url.startsWith("https://")) { "Only HTTPS." }
+    return retrying { fetchOnce(url) }
+  }
+
+  private fun fetchOnce(url: String): String {
     client.newBuilder().callTimeout(20, TimeUnit.SECONDS).build()
       .newCall(Request.Builder().url(url).header("Accept", "application/json").build())
       .execute().use { resp ->
+        if (resp.code >= 500 || resp.code == 429) throw Busy("GitHub said no (${resp.code}).")
         if (!resp.isSuccessful) throw IllegalStateException("GitHub said no (${resp.code}).")
         val body = resp.body?.string() ?: ""
         if (body.length > 256 * 1024) throw IllegalStateException("That was too big to be release information.")
@@ -83,14 +88,54 @@ class AppUpdater(
     return if (f.isFile && f.length() > 0) f.absolutePath else null
   }
 
-  /** Download in the background; resolves with the file's path. Old downloads are removed. */
-  fun download(url: String, name: String, sha256: String?): String {
+  /**
+   * Download in the background; resolves with the file's path. Old downloads are removed.
+   * `mirror`: the same file on Outpost's own download server, tried once first (only when
+   * there's a checksum to hold it to); GitHub's `url` when it fails or doesn't match.
+   */
+  fun download(url: String, name: String, sha256: String?, mirror: String? = null): String {
     require(url.startsWith("https://")) { "Updates only come over HTTPS." }
     val target = File(dir(), safe(name))
     dir().listFiles()?.filter { it.name != target.name }?.forEach { it.delete() }
     if (target.isFile && target.length() > 0) return target.absolutePath
     val part = File(dir(), "${target.name}.part")
+    val fromMirror = !mirror.isNullOrBlank() && mirror.startsWith("https://") && !sha256.isNullOrBlank() &&
+      try {
+        downloadOnce(mirror, part, sha256)
+        true
+      } catch (e: Exception) {
+        part.delete()
+        false
+      }
+    if (!fromMirror) retrying { downloadOnce(url, part, sha256) }
+    if (!part.renameTo(target)) throw IllegalStateException("The download couldn't be saved.")
+    return target.absolutePath
+  }
+
+  /**
+   * GitHub's download pages sometimes time out (a 504 after ten seconds, then fine the next
+   * try): try again a few times, waiting a little longer each time.
+   */
+  private fun <T> retrying(work: () -> T): T {
+    val waits = longArrayOf(2_000, 5_000, 10_000)
+    var attempt = 0
+    while (true) {
+      try {
+        return work()
+      } catch (e: Exception) {
+        val passing = e is Busy || e is java.io.IOException
+        if (!passing || attempt >= waits.size) throw if (e is Busy) IllegalStateException(e.message) else e
+        Thread.sleep(waits[attempt++])
+      }
+    }
+  }
+
+  /** A failure worth trying again: GitHub busy or timing out. */
+  private class Busy(message: String) : Exception(message)
+
+  private fun downloadOnce(url: String, part: File, sha256: String?) {
     client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+      if (resp.code >= 500 || resp.code == 429) throw Busy("The download said no (${resp.code}).")
       if (!resp.isSuccessful) throw IllegalStateException("The download said no (${resp.code}).")
       val body = resp.body ?: throw IllegalStateException("The download was empty.")
       val total = body.contentLength()
@@ -120,8 +165,6 @@ class AppUpdater(
         throw IllegalStateException("The download was damaged (its checksum didn't match). It will try again later.")
       }
     }
-    if (!part.renameTo(target)) throw IllegalStateException("The download couldn't be saved.")
-    return target.absolutePath
   }
 
   /**
