@@ -557,3 +557,82 @@ mod turn_tests {
         assert!(!super::is_speech("  ."));
     }
 }
+
+/// Did they really say the wake word? The two seconds the phone heard it in.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct HeardRequest {
+    /// The audio (a WAV), as base64.
+    pub audio: String,
+    /// The wake word ("Hey Jarvis").
+    pub word: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HeardReply {
+    /// It was said: go ahead (beep and listen).
+    pub heard: bool,
+    /// What Whisper heard.
+    pub text: String,
+}
+
+/// The wake word's key word ("jarvis" of "Hey Jarvis") in what was heard, allowing for
+/// Whisper's spelling ("Jarvis," "Jervis").
+pub fn said_word(text: &str, word: &str) -> bool {
+    let clean = |s: &str| -> Vec<String> {
+        s.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let Some(key) = clean(word).into_iter().filter(|w| w != "hey" && w != "ok" && w != "okay").last() else {
+        return false;
+    };
+    let room = if key.chars().count() >= 6 { 2 } else { 1 };
+    clean(text).iter().any(|w| w.contains(&key) || distance(w, &key) <= room)
+}
+
+/// Edits between two words (Levenshtein).
+fn distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let here = row[j + 1];
+            row[j + 1] = (row[j + 1] + 1).min(row[j] + 1).min(prev + usize::from(ca != cb));
+            prev = here;
+        }
+    }
+    row[b.len()]
+}
+
+/// The phone thinks it heard its wake word: check what was said (TV and talk can sound like
+/// it to the phone's small detector), before it beeps.
+#[utoipa::path(post, path = "/api/voice/heard", tag = "voice", security(("bearer" = [])), request_body = HeardRequest,
+    responses((status = 200, description = "Whether the word was said", body = HeardReply), (status = 400, description = "Unreadable audio", body = ErrorBody)))]
+pub async fn heard(State(state): State<AppState>, auth: Auth, Json(req): Json<HeardRequest>) -> ApiResult<Json<HeardReply>> {
+    auth.require_person("Checking the wake word")?;
+    let audio = decode_audio(&req.audio)?;
+    // No hints: a hint can make Whisper "hear" the very word it's told to listen for.
+    let text = transcribe_bytes(&state, audio, None, "").await?.text.trim().to_string();
+    Ok(Json(HeardReply { heard: said_word(&text, &req.word), text }))
+}
+
+#[cfg(test)]
+mod heard_tests {
+    use super::said_word;
+
+    #[test]
+    fn the_wake_word_is_heard_allowing_for_spelling() {
+        assert!(said_word("Hey Jarvis.", "Hey Jarvis"));
+        assert!(said_word("hey jervis turn on the lamp", "Hey Jarvis"));
+        assert!(said_word("Alexa?", "Alexa"));
+        assert!(said_word("Hey, Mycroft.", "Hey Mycroft"));
+        assert!(!said_word("and here's the weather for the weekend", "Hey Jarvis"));
+        assert!(!said_word("Hey there!", "Hey Jarvis"));
+        assert!(!said_word("", "Hey Jarvis"));
+        assert!(!said_word("I'll text you", "Alexa"));
+    }
+}

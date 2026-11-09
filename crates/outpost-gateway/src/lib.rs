@@ -352,6 +352,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/voice/speak", post(voice::speak))
         .route("/api/voice/turn", post(voice::turn))
+        .route("/api/voice/heard", post(voice::heard))
         .route("/api/voice/wyoming", get(wyoming::get_settings).put(wyoming::set_settings))
         .route("/api/voice/wyoming/devices", get(wyoming::get_devices))
         .route("/api/voice/wyoming/devices/{id}", put(wyoming::set_device).delete(wyoming::forget_device))

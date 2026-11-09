@@ -12,6 +12,8 @@ export interface WakeStatus {
   batteryNow: number;
   charging: boolean;
   wakes: number;
+  /** Times the phone thought it heard the word but the Outpost found it wasn't said (TV...). */
+  ignored?: number;
   lastWake: number;
   error: string | null;
   words: { id: string; name: string }[];

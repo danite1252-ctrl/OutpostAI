@@ -111,11 +111,26 @@ class WakeService : Service() {
           rec.startRecording()
           detector.reset()
           var floor = 300.0
+          var hits = 0
+          val recent = ArrayDeque<ShortArray>()
           while (running && !held()) {
             if (!readFully(rec, chunk)) break
+            recent.addLast(chunk.copyOf())
+            if (recent.size > RECENT_CHUNKS) recent.removeFirst()
             val level = rms(chunk)
             floor = if (level < floor) floor * 0.9 + level * 0.1 else floor * 0.995 + level * 0.005
-            if (detector.feed(chunk) < threshold) continue
+            // It has to hold for two readings in a row (a single spike is TV or a bump).
+            hits = if (detector.feed(chunk) >= threshold) hits + 1 else 0
+            if (hits < PATIENCE) continue
+            hits = 0
+            // Then the Outpost checks it was really said, before it beeps.
+            if (!confirmed(recent)) {
+              p.edit().putInt("ignored", p.getInt("ignored", 0) + 1).apply()
+              detector.reset()
+              recent.clear()
+              continue
+            }
+            recent.clear()
             // Heard it.
             p.edit().putInt("wakes", p.getInt("wakes", 0) + 1).putLong("last_wake", System.currentTimeMillis()).apply()
             conversation(rec, floor)
@@ -207,6 +222,21 @@ class WakeService : Service() {
       pcm.write((s.toInt() shr 8) and 0xff)
     }
     return wav(pcm.toByteArray())
+  }
+
+  /** The last two seconds, checked by the Outpost (Whisper): was the word really said? */
+  private fun confirmed(recent: ArrayDeque<ShortArray>): Boolean {
+    val pcm = ByteArrayOutputStream()
+    for (c in recent) for (x in c) {
+      pcm.write(x.toInt() and 0xff)
+      pcm.write((x.toInt() shr 8) and 0xff)
+    }
+    val p = prefs(this)
+    val body = JSONObject()
+      .put("audio", Base64.encodeToString(wav(pcm.toByteArray()), Base64.NO_WRAP))
+      .put("word", wordName(this))
+    val answer = JobNotifier.post(this, p, "/api/voice/heard", body, 10) ?: return false
+    return answer.optBoolean("heard", false)
   }
 
   /** To the Outpost: what was said; back: what to say. */
@@ -330,6 +360,8 @@ class WakeService : Service() {
     private const val ACTION_STOP = "expo.modules.outpostnet.WAKE_STOP"
     private const val RATE = 16000
     private const val FRAME = 320 // 20 ms
+    private const val PATIENCE = 2 // readings in a row (160 ms) before it counts
+    private const val RECENT_CHUNKS = 25 // the last 2 s, for the check
 
     /** What else in Outpost is using the microphone (Talk, the Mic button): it pauses for them. */
     private val holders = java.util.Collections.synchronizedSet(HashSet<String>())
@@ -364,6 +396,7 @@ class WakeService : Service() {
         .putLong("since", System.currentTimeMillis())
         .putInt("battery_start", battery(ctx))
         .putInt("wakes", 0)
+        .putInt("ignored", 0)
         .remove("error")
         .apply()
       ContextCompat.startForegroundService(ctx, Intent(ctx, WakeService::class.java))
@@ -385,6 +418,7 @@ class WakeService : Service() {
         .putLong("since", System.currentTimeMillis())
         .putInt("battery_start", battery(ctx))
         .putInt("wakes", 0)
+        .putInt("ignored", 0)
         .remove("error")
         .apply()
       ContextCompat.startForegroundService(ctx, Intent(ctx, WakeService::class.java))
@@ -409,6 +443,7 @@ class WakeService : Service() {
         "batteryNow" to battery(ctx),
         "charging" to charging,
         "wakes" to p.getInt("wakes", 0),
+        "ignored" to p.getInt("ignored", 0),
         "lastWake" to p.getLong("last_wake", 0L).toDouble(),
         "error" to p.getString("error", null),
         "words" to WakeWord.WORDS.map { (id, v) -> mapOf("id" to id, "name" to v.first) }

@@ -125,6 +125,7 @@ export function WakeScreen({ api, saved, onClose }: { api: Outpost; saved: Saved
             For {hours(since)}
             {used != null && !status?.charging ? `, battery down ${Math.max(0, used)}% since then (everything on the phone, not just this)` : ""}
             {status?.charging ? " (charging now)" : ""} · heard {status?.wakes ?? 0} time{status?.wakes === 1 ? "" : "s"}
+            {status?.ignored ? ` · ignored ${status.ignored} that weren't the word (TV, talk)` : ""}
           </Text>
         )}
         {!!status?.error && <Text style={{ color: C.danger, fontSize: 13 }}>{status.error}</Text>}
@@ -151,7 +152,8 @@ export function WakeScreen({ api, saved, onClose }: { api: Outpost; saved: Saved
       </View>
       {on && <P muted>Changes take effect when you stop and start it again.</P>}
       <P muted>
-        It beeps when it hears the word: then say what you want. Anything that asks first (a lock, a door, an alarm) is asked aloud: say
+        It beeps when it hears the word: then say what you want. Before it beeps, your Outpost checks the word was really said
+        (TV can sound like it to the phone), so the beep comes about half a second after the word. Anything that asks first (a lock, a door, an alarm) is asked aloud: say
         yes or no. The talk is kept in a chat called "Phone voice". Talk and the Mic button pause it while they're in use. After the phone
         restarts, Android doesn't let it start by itself: it comes back on when you next open Outpost (unless you stopped it).
       </P>

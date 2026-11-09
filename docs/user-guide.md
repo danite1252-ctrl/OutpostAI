@@ -389,6 +389,10 @@ asks first (a lock, a door, an alarm) is asked aloud; say yes or no.
   **Unrestricted**, or it may stop with the screen off. After the phone restarts, Android
   doesn't let it start by itself: it comes back on when you next open Outpost (unless you
   stopped it).
+- **TV and talk**: the phone's detector can mistake other speech for the word, so before it
+  beeps, your Outpost checks (with Whisper) that the word was really said; if not, it's
+  ignored silently (the screen counts these). That's why the beep comes about half a second
+  after the word.
 - **How easily it wakes**: Less if it wakes by itself, More if it misses you across a room.
   **Check the wake word works on this phone** runs it on a test recording.
 - The talk is kept in a chat called **Phone voice**. Wake words are openWakeWord's (free for
