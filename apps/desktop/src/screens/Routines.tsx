@@ -514,6 +514,7 @@ function RoutineEditor({
     if (sc.kind === "event") setEvent(sc.event);
   }
   const [allow, setAllow] = useState<RoutineAllow>(routine?.allow ?? { tools: true, changes: "wait", commands: true });
+  const [sayOn, setSayOn] = useState<string[]>(routine?.say_on ?? []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -540,7 +541,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule(), notify, allow };
+      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule(), notify, allow, say_on: sayOn };
       onSaved(routine ? await routinesApi.update(token, routine.id, input) : await routinesApi.create(token, input));
     } catch (e) {
       setError(message(e));
@@ -700,6 +701,10 @@ function RoutineEditor({
         )}
       </fieldset>
 
+      {notify !== "never" && notify !== "failures" && (
+        <SayOutLoud token={token} personaId={personaId} sayOn={sayOn} onChange={setSayOn} />
+      )}
+
       <fieldset className="flex flex-col gap-2 text-sm">
         <legend className="mb-2 text-sm text-muted">While it runs on its own (nobody is there to say OK)</legend>
         <label className="flex cursor-pointer items-center gap-2">
@@ -734,6 +739,94 @@ function RoutineEditor({
         </Button>
       </div>
     </section>
+  );
+}
+
+/** Where a routine says its result out loud: the phone, and Home Assistant's speakers. */
+function SayOutLoud({
+  token,
+  personaId,
+  sayOn,
+  onChange,
+}: {
+  token: string;
+  personaId: string;
+  sayOn: string[];
+  onChange: (s: string[]) => void;
+}) {
+  const [found, setFound] = useState<{ speakers: { id: string; name: string }[]; home_assistant: boolean; problem: string | null } | null>(null);
+  const [trying, setTrying] = useState<string | null>(null);
+  const [tried, setTried] = useState<{ id: string; error: string | null } | null>(null);
+  useEffect(() => {
+    routinesApi
+      .speakers(token)
+      .then(setFound)
+      .catch((e) => setFound({ speakers: [], home_assistant: false, problem: message(e) }));
+  }, [token]);
+  const flip = (id: string, on: boolean) => onChange(on ? [...sayOn.filter((x) => x !== id), id] : sayOn.filter((x) => x !== id));
+  async function tryIt(id: string) {
+    setTrying(id);
+    setTried(null);
+    try {
+      await routinesApi.trySpeaker(token, id, personaId);
+      setTried({ id, error: null });
+    } catch (e) {
+      setTried({ id, error: message(e) });
+    } finally {
+      setTrying(null);
+    }
+  }
+  // Speakers it was set to that Home Assistant doesn't list now (renamed, unplugged).
+  const missing = sayOn.filter((id) => id !== "phone" && found && !found.speakers.some((s) => s.id === id));
+  return (
+    <fieldset className="flex flex-col gap-2 text-sm">
+      <legend className="mb-2 text-sm text-muted">Say it out loud too</legend>
+      <label className="flex cursor-pointer items-center gap-2">
+        <input type="checkbox" checked={sayOn.includes("phone")} onChange={(e) => flip("phone", e.target.checked)} />
+        On my phone
+      </label>
+      {found === null ? (
+        <p className="text-xs text-muted">Looking for speakers…</p>
+      ) : found.speakers.length > 0 ? (
+        found.speakers.map((s) => (
+          <div key={s.id} className="flex flex-wrap items-center gap-2">
+            <label className="flex cursor-pointer items-center gap-2">
+              <input type="checkbox" checked={sayOn.includes(s.id)} onChange={(e) => flip(s.id, e.target.checked)} />
+              {s.name}
+            </label>
+            <button
+              type="button"
+              className="text-xs text-muted underline hover:text-ink disabled:opacity-50"
+              disabled={trying !== null}
+              onClick={() => void tryIt(s.id)}
+            >
+              {trying === s.id ? "Saying…" : "Try it"}
+            </button>
+            {tried?.id === s.id && (
+              <span className={`text-xs ${tried.error ? "text-danger" : "text-ok"}`}>{tried.error ?? "Sent. Did you hear it?"}</span>
+            )}
+          </div>
+        ))
+      ) : (
+        <p className="text-xs text-muted">
+          {found.problem
+            ? `Home Assistant's speakers couldn't be listed: ${found.problem}`
+            : found.home_assistant
+              ? "Home Assistant has no speakers."
+              : "To use your speakers, add Home Assistant as a tool (Tools)."}
+        </p>
+      )}
+      {missing.map((id) => (
+        <label key={id} className="flex cursor-pointer items-center gap-2 text-muted">
+          <input type="checkbox" checked onChange={() => flip(id, false)} />
+          {id} (not in Home Assistant now)
+        </label>
+      ))}
+      <p className="text-xs text-muted">
+        When it tells you, it also says the result out loud, in the persona's voice when Outpost is Home Assistant's voice
+        service. Not during quiet hours or tools-off hours.
+      </p>
+    </fieldset>
   );
 }
 

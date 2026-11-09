@@ -1984,6 +1984,8 @@ export interface Routine {
   has_link: boolean;
   /** What it may do while it runs on its own. */
   allow: RoutineAllow;
+  /** Where it says its result out loud: "phone", and Home Assistant speakers ("media_player.kitchen"). */
+  say_on: string[];
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -2012,6 +2014,7 @@ export interface QuietHours {
 
 export interface RoutineInput {
   allow?: RoutineAllow;
+  say_on?: string[];
   name?: string;
   notify?: Notify;
   persona_id?: string;
@@ -2087,4 +2090,10 @@ export const routinesApi = {
   quiet: (token: string) => request<{ quiet: QuietHours | null }>("GET", "/api/routines/quiet", { token }),
   setQuiet: (token: string, quiet: QuietHours | null) =>
     request<{ quiet: QuietHours | null }>("PUT", "/api/routines/quiet", { token, body: { quiet } }),
+  /** Home Assistant's speakers, through my Home Assistant tool. */
+  speakers: (token: string) =>
+    request<{ speakers: { id: string; name: string }[]; home_assistant: boolean; problem: string | null }>("GET", "/api/speakers", { token }),
+  /** Say a test line on a speaker. */
+  trySpeaker: (token: string, speaker: string, personaId?: string) =>
+    request<void>("POST", "/api/speakers/try", { token, body: { speaker, persona_id: personaId || undefined } }),
 };

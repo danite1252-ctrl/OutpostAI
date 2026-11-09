@@ -598,6 +598,12 @@ pub struct FinishedJob {
     /// A routine's run: its chat (where the full result is).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chat_id: Option<String>,
+    /// A routine's result to say out loud on the phone (it was set to, and it's not quiet hours).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub say: Option<String>,
+    /// The voice to say it in (the routine's persona's).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub say_voice: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -636,6 +642,14 @@ pub async fn finished_jobs(State(state): State<AppState>, auth: Auth, Query(q): 
             // Routines' runs worth telling about, worded the same way.
             for run in outpost_core::routines::told_since(&state.pool, &auth.account.id, q.since, now).await.unwrap_or_default() {
                 let ok = run.status == "ok";
+                let on_phone = serde_json::from_str::<Vec<String>>(&run.say_on).unwrap_or_default().iter().any(|s| s == "phone");
+                let say = (ok && on_phone && run.on_time)
+                    .then(|| crate::speak::spoken(run.note.as_deref().unwrap_or_default()))
+                    .filter(|t| !t.trim().is_empty());
+                let say_voice = match &say {
+                    Some(_) => Some(crate::speak::voice_for(&state, &auth.account.id, run.persona_id.as_deref()).await),
+                    None => None,
+                };
                 out.push(FinishedJob {
                     id: run.id,
                     pack_id: String::new(),
@@ -646,6 +660,8 @@ pub async fn finished_jobs(State(state): State<AppState>, auth: Auth, Query(q): 
                     long: true,
                     finished_at: run.finished_at,
                     chat_id: run.chat_id,
+                    say,
+                    say_voice,
                 });
             }
             let (next_routine_at, routines_running) =
@@ -707,6 +723,8 @@ pub(crate) async fn finished_view(state: &AppState, job: Job) -> FinishedJob {
         title,
         finished_at: job.finished_at.unwrap_or(0),
         chat_id: None,
+        say: None,
+        say_voice: None,
     }
 }
 

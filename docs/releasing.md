@@ -79,7 +79,7 @@ GitHub; run it by hand with `-Version` to retry). It needs PuTTY's `psftp` and, 
   "key": "C:\\Users\\<you>\\.ssh\\<key>.ppk" }
 ```
 
-Without `key`, Pageant must hold the key; with it, psftp asks for its passphrase once. Without
+Without `key`, Pageant must already hold the key. With it, `ship.ps1` opens Pageant with the key at the start (type the passphrase there), because the web server only waits two minutes for a passphrase and the build takes longer. Without
 `mirror.json`, releases only go on GitHub.
 
 ## Each release, step by step

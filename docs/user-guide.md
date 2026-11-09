@@ -304,6 +304,14 @@ PC: **Routines** in the sidebar; on the phone: **You › Routines**).
 - **Quiet hours** (at the top of Routines): routines still run, but news from a run that
   finishes in them is told when they end (a 6:30 morning brief with quiet hours until 7:00
   notifies you at 7:00).
+- **Say it out loud too**: when a routine tells you, it can also say the result out loud on
+  your phone (when the notification arrives) and on Home Assistant speakers (Google / Nest,
+  Sonos and others). Speakers come from your Home Assistant tool, with nothing more to set up;
+  press **Try it** to hear one. When Outpost is Home Assistant's voice service (see Home
+  Assistant voice devices), it speaks in the routine persona's voice; otherwise in Home
+  Assistant's own text-to-speech. It stays silent during quiet hours (the notification waits as
+  usual) and the person's tools-off hours, and each time it speaks shows in Activity. In chat,
+  "remind me at 5 on the kitchen speaker" sets this up too.
 - **Tell me**: each routine sends a notification to your phone and PC when it runs (**Every
   time**), **Only when there's news** (the persona decides; when there's nothing new it says so
   quietly in the chat, and a quick separate check of each result decides; failures are always told), **Only if it fails**, or **Never**.

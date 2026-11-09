@@ -82,6 +82,8 @@ interface Routine {
   notify: Notify;
   has_link: boolean;
   allow: Allow;
+  /** Where it says its result out loud: "phone", and Home Assistant speakers. */
+  say_on: string[];
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -415,6 +417,7 @@ function RoutineEditor({
     if (sc.kind === "event") setEvent(sc.event);
   }
   const [allow, setAllow] = useState<Allow>(routine?.allow ?? { tools: true, changes: "wait", commands: true });
+  const [sayOn, setSayOn] = useState<string[]>(routine?.say_on ?? []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -450,7 +453,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, notify, allow, ...myZone() };
+      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, notify, allow, say_on: sayOn, ...myZone() };
       onSaved(routine ? await api.json<Routine>("PUT", `/api/routines/${routine.id}`, body) : await api.json<Routine>("POST", "/api/routines", body));
     } catch (e) {
       setError(message(e));
@@ -547,6 +550,7 @@ function RoutineEditor({
       {notify === "worth" && (
         <P muted>The persona decides: when there's nothing new it says so quietly in the chat. Failures are always told.</P>
       )}
+      {notify !== "never" && notify !== "failures" && <SayOutLoud api={api} personaId={personaId} sayOn={sayOn} onChange={setSayOn} />}
       <Text style={s.label}>While it runs on its own (nobody is there to say OK)</Text>
       <View style={{ gap: 6 }}>
         <Chip label="Use its chat's tools (web search, your PC's tools)" active={allow.tools} onPress={() => setAllow({ ...allow, tools: !allow.tools })} />
@@ -569,6 +573,73 @@ function RoutineEditor({
         onPress={() => void save()}
       />
     </Screen>
+  );
+}
+
+type Speakers = { speakers: { id: string; name: string }[]; home_assistant: boolean; problem: string | null };
+
+/** Where a routine says its result out loud: this phone, and Home Assistant's speakers. */
+function SayOutLoud({ api, personaId, sayOn, onChange }: { api: Outpost; personaId: string; sayOn: string[]; onChange: (s: string[]) => void }) {
+  const [found, setFound] = useState<Speakers | null>(null);
+  const [trying, setTrying] = useState<string | null>(null);
+  const [tried, setTried] = useState<{ id: string; error: string | null } | null>(null);
+  useEffect(() => {
+    api
+      .get<Speakers>("/api/speakers")
+      .then(setFound)
+      .catch((e) => setFound({ speakers: [], home_assistant: false, problem: message(e) }));
+  }, [api]);
+  const flip = (id: string) => onChange(sayOn.includes(id) ? sayOn.filter((x) => x !== id) : [...sayOn, id]);
+  async function tryIt(id: string) {
+    setTrying(id);
+    setTried(null);
+    try {
+      await api.json<void>("POST", "/api/speakers/try", { speaker: id, persona_id: personaId || undefined });
+      setTried({ id, error: null });
+    } catch (e) {
+      setTried({ id, error: message(e) });
+    } finally {
+      setTrying(null);
+    }
+  }
+  const missing = sayOn.filter((id) => id !== "phone" && found && !found.speakers.some((x) => x.id === id));
+  return (
+    <>
+      <Text style={s.label}>Say it out loud too</Text>
+      <View style={{ gap: 6 }}>
+        <Chip label="On this phone" active={sayOn.includes("phone")} onPress={() => flip("phone")} />
+        {found === null ? (
+          <P muted>Looking for speakers…</P>
+        ) : found.speakers.length > 0 ? (
+          found.speakers.map((sp) => (
+            <View key={sp.id} style={[s.row, { flexWrap: "wrap", alignItems: "center" }]}>
+              <Chip label={sp.name} active={sayOn.includes(sp.id)} onPress={() => flip(sp.id)} />
+              <Pressable accessibilityRole="button" disabled={trying !== null} onPress={() => void tryIt(sp.id)} style={{ padding: 8 }}>
+                <Text style={{ color: C.muted, textDecorationLine: "underline" }}>{trying === sp.id ? "Saying…" : "Try it"}</Text>
+              </Pressable>
+              {tried?.id === sp.id && (
+                <Text style={{ color: tried.error ? C.danger : C.ok, flexShrink: 1 }}>{tried.error ?? "Sent. Did you hear it?"}</Text>
+              )}
+            </View>
+          ))
+        ) : (
+          <P muted>
+            {found.problem
+              ? `Home Assistant's speakers couldn't be listed: ${found.problem}`
+              : found.home_assistant
+                ? "Home Assistant has no speakers."
+                : "To use your speakers, add Home Assistant as a tool (on the PC: Tools)."}
+          </P>
+        )}
+        {missing.map((id) => (
+          <Chip key={id} label={`${id} (not in Home Assistant now)`} active onPress={() => flip(id)} />
+        ))}
+      </View>
+      <P muted>
+        When it tells you, it also says the result out loud, in the persona's voice. Not during quiet hours or tools-off hours. The phone
+        says it when the notification arrives.
+      </P>
+    </>
   );
 }
 

@@ -34,6 +34,7 @@ pub mod routines;
 pub mod runner;
 pub mod server_tools;
 pub mod setup_code;
+pub mod speak;
 pub mod tailscale;
 pub mod tls;
 pub mod train;
@@ -255,6 +256,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/chats/{id}/watch", get(chat::watch))
         .route("/api/routines", get(routines::list).post(routines::create))
         .route("/api/activity", get(activity::list))
+        .route("/api/speakers", get(speak::list))
+        .route("/api/speakers/try", post(speak::try_one))
         .route("/api/accounts/{id}/tool-hours", get(activity::get_hours).put(activity::set_hours))
         .route("/api/routines/quiet", get(routines::get_quiet).put(routines::set_quiet))
         .route("/api/routines/{id}", put(routines::update).delete(routines::delete))

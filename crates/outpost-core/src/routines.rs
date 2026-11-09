@@ -303,6 +303,9 @@ pub struct Routine {
     pub has_link: bool,
     /// What it may do while it runs on its own.
     pub allow: Allow,
+    /// Where it says its result out loud (when it tells you, outside quiet hours): "phone",
+    /// and Home Assistant speakers by entity id ("media_player.kitchen").
+    pub say_on: Vec<String>,
     /// Its chat (where each run's reply goes), once it has run.
     pub chat_id: Option<String>,
     /// When it runs next (Unix seconds); none when paused or finished.
@@ -337,6 +340,7 @@ struct Row {
     allow_tools: i64,
     allow_changes: String,
     allow_commands: i64,
+    say_on: String,
     chat_id: Option<String>,
     next_at: Option<i64>,
     last_at: Option<i64>,
@@ -365,6 +369,7 @@ impl Row {
                 changes: if self.allow_changes == "apply" { Changes::Apply } else { Changes::Wait },
                 commands: self.allow_commands != 0,
             },
+            say_on: serde_json::from_str(&self.say_on).unwrap_or_default(),
             chat_id: self.chat_id,
             next_at: self.next_at,
             last_at: self.last_at,
@@ -377,7 +382,7 @@ impl Row {
 }
 
 const COLUMNS: &str = "id, account_id, name, persona_id, instructions, schedule, time_zone, utc_offset_minutes, enabled, \
-                       notify, hook_hash IS NOT NULL AS has_link, allow_tools, allow_changes, allow_commands, chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
+                       notify, hook_hash IS NOT NULL AS has_link, allow_tools, allow_changes, allow_commands, say_on, chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
 
 /// A new routine, or changes to one (fields left out stay as they are).
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
@@ -393,6 +398,9 @@ pub struct RoutineInput {
     pub notify: Option<Notify>,
     /// What it may do while it runs on its own.
     pub allow: Option<Allow>,
+    /// Where it says its result out loud: "phone" and/or Home Assistant speakers
+    /// ("media_player.kitchen").
+    pub say_on: Option<Vec<String>>,
     /// The person's time zone ("Australia/Sydney"), from their app.
     pub time_zone: Option<String>,
     /// Minutes ahead of UTC, from their app (used when the zone's name isn't known).
@@ -486,14 +494,15 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: RoutineInput) ->
     }
     let enabled = input.enabled.unwrap_or(true);
     let allow = input.allow.unwrap_or_default();
+    let say_on = clean_say_on(input.say_on.unwrap_or_default())?;
     let zone = zone(input.time_zone.as_deref(), input.utc_offset_minutes);
     let next_at = next_for(&schedule, enabled, &zone, None);
     let t = now();
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO routines (id, account_id, name, persona_id, instructions, schedule, time_zone, utc_offset_minutes, \
-         enabled, notify, allow_tools, allow_changes, allow_commands, next_at, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         enabled, notify, allow_tools, allow_changes, allow_commands, say_on, next_at, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(account_id)
@@ -508,6 +517,7 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: RoutineInput) ->
     .bind(allow.tools as i64)
     .bind(changes_str(allow.changes))
     .bind(allow.commands as i64)
+    .bind(say_json(&say_on))
     .bind(next_at)
     .bind(t)
     .bind(t)
@@ -544,12 +554,16 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Routin
     let enabled = input.enabled.unwrap_or(r.enabled);
     let notify = input.notify.unwrap_or(r.notify);
     let allow = input.allow.unwrap_or(r.allow);
+    let say_on = match input.say_on {
+        Some(s) => clean_say_on(s)?,
+        None => r.say_on.clone(),
+    };
     let time_zone = input.time_zone.or(r.time_zone.clone());
     let offset = input.utc_offset_minutes.or(r.utc_offset_minutes);
     let next_at = next_for(&schedule, enabled, &zone(time_zone.as_deref(), offset), r.last_at);
     sqlx::query(
         "UPDATE routines SET name = ?, persona_id = ?, instructions = ?, schedule = ?, time_zone = ?, utc_offset_minutes = ?, \
-         enabled = ?, notify = ?, allow_tools = ?, allow_changes = ?, allow_commands = ?, next_at = ?, updated_at = ? \
+         enabled = ?, notify = ?, allow_tools = ?, allow_changes = ?, allow_commands = ?, say_on = ?, next_at = ?, updated_at = ? \
          WHERE id = ? AND account_id = ?",
     )
     .bind(&name)
@@ -563,6 +577,7 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Routin
     .bind(allow.tools as i64)
     .bind(changes_str(allow.changes))
     .bind(allow.commands as i64)
+    .bind(say_json(&say_on))
     .bind(next_at)
     .bind(now())
     .bind(id)
@@ -753,6 +768,32 @@ pub struct Run {
     pub reason: String,
 }
 
+/// Where a routine may speak: "phone", or a Home Assistant speaker's entity id. At most five,
+/// no repeats.
+pub fn clean_say_on(list: Vec<String>) -> CoreResult<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for s in list {
+        let s = s.trim().to_string();
+        let speaker = s.strip_prefix("media_player.").is_some_and(|rest| {
+            !rest.is_empty() && rest.len() <= 100 && rest.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        });
+        if s != "phone" && !speaker {
+            return Err(CoreError::Invalid(format!("\"{s}\" isn't the phone or a Home Assistant speaker.")));
+        }
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    }
+    if out.len() > 5 {
+        return Err(CoreError::Invalid("Pick up to five places to say it.".into()));
+    }
+    Ok(out)
+}
+
+fn say_json(list: &[String]) -> String {
+    serde_json::to_string(list).unwrap_or_else(|_| "[]".into())
+}
+
 /// A finished run worth telling someone about (for notifications).
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Told {
@@ -762,13 +803,19 @@ pub struct Told {
     pub status: String,
     pub note: Option<String>,
     pub finished_at: i64,
+    /// The routine's `say_on` (JSON).
+    pub say_on: String,
+    pub persona_id: Option<String>,
+    /// Told when it finished (not held over quiet hours).
+    pub on_time: bool,
 }
 
 /// My routines' runs to tell about now: told since `since`, up to `now` (one that finished in
 /// quiet hours is told when they end).
 pub async fn told_since(pool: &SqlitePool, account_id: &str, since: i64, now: i64) -> CoreResult<Vec<Told>> {
     Ok(sqlx::query_as(
-        "SELECT rr.id, r.name, r.chat_id, rr.status, rr.note, rr.finished_at FROM routine_runs rr \
+        "SELECT rr.id, r.name, r.chat_id, rr.status, rr.note, rr.finished_at, r.say_on, r.persona_id, \
+         COALESCE(rr.tell_at <= rr.finished_at, 0) AS on_time FROM routine_runs rr \
          JOIN routines r ON r.id = rr.routine_id \
          WHERE r.account_id = ? AND rr.tell = 1 AND rr.tell_at >= ? AND rr.tell_at <= ? ORDER BY rr.tell_at LIMIT 20",
     )
@@ -1047,5 +1094,16 @@ mod tests {
         assert_eq!(remove_finished_once(&pool, t + 3601).await.unwrap(), 1);
         let left: Vec<String> = list(&pool, &me.id).await.unwrap().into_iter().map(|r| r.name).collect();
         assert_eq!(left, vec!["Brief".to_string(), "Oven".to_string()]);
+    }
+
+    #[test]
+    fn it_speaks_on_the_phone_or_home_assistant_speakers_only() {
+        let ok = clean_say_on(vec!["phone".into(), " media_player.kitchen_nest ".into(), "phone".into()]).unwrap();
+        assert_eq!(ok, vec!["phone".to_string(), "media_player.kitchen_nest".to_string()]);
+        assert!(clean_say_on(vec!["light.kitchen".into()]).is_err());
+        assert!(clean_say_on(vec!["media_player.".into()]).is_err());
+        assert!(clean_say_on(vec!["media_player.Kitchen; rm".into()]).is_err());
+        let many: Vec<String> = (0..6).map(|i| format!("media_player.s{i}")).collect();
+        assert!(clean_say_on(many).is_err());
     }
 }

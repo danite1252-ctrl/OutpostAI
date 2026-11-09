@@ -130,6 +130,7 @@ object JobNotifier {
     val seen = p.getStringSet("seen", emptySet())!!.toMutableSet()
     val client = pinnedClient(fingerprint)
     var reply: JSONObject? = null
+    var answered = ""
     for (host in hosts) {
       try {
         val req = Request.Builder()
@@ -145,7 +146,10 @@ object JobNotifier {
           }
           if (r.isSuccessful) reply = JSONObject(r.body?.string() ?: "{}")
         }
-        if (reply != null) break
+        if (reply != null) {
+          answered = host
+          break
+        }
       } catch (_: Exception) {
         // Not at this address (away from home): try the next.
       }
@@ -154,12 +158,17 @@ object JobNotifier {
     val front = p.getLong("front", 0L)
     val inFront = front > 0 && System.currentTimeMillis() - front < 30 * 60 * 1000
     val jobs = r.optJSONArray("jobs")
+    val toSay = mutableListOf<Pair<String, String>>()
     for (i in 0 until (jobs?.length() ?: 0)) {
       val j = jobs!!.getJSONObject(i)
       val id = j.optString("id")
       if (id.isEmpty() || !seen.add(id)) continue
       if (j.optBoolean("long") && !inFront) notify(ctx, id, j.optString("title"), j.optString("body"), j.optString("chat_id"))
+      val say = j.optString("say", "")
+      if (say.isNotBlank()) toSay.add(say to j.optString("say_voice", ""))
     }
+    // Routines set to speak on the phone: said out loud, one after another.
+    for ((text, voice) in toSay) sayAloud(ctx, client, answered, port, token, text, voice)
     val now = r.optLong("now", System.currentTimeMillis() / 1000)
     // Routines: look again just after the next one's due, or soon if one's running now.
     val running = r.optInt("routines_running", 0)
@@ -174,6 +183,54 @@ object JobNotifier {
       .putStringSet("seen", if (seen.size > 100) seen.toList().takeLast(50).toSet() else seen)
       .apply()
     return r.optInt("unfinished", 0)
+  }
+
+  /**
+   * Say a routine's result out loud (the server's voice, as the persona sounds). Waits until
+   * it's finished; any failure is skipped (the notification still says it).
+   */
+  private fun sayAloud(ctx: Context, client: OkHttpClient, host: String, port: Int, token: String, text: String, voice: String) {
+    if (host.isEmpty()) return
+    var file: java.io.File? = null
+    var player: android.media.MediaPlayer? = null
+    try {
+      val body = JSONObject().put("text", text).apply { if (voice.isNotEmpty()) put("voice", voice) }
+        .toString().toRequestBody("application/json".toMediaType())
+      val req = Request.Builder()
+        .url("https://$host:$port/api/voice/speak")
+        .header("Authorization", "Bearer $token")
+        .post(body)
+        .build()
+      val bytes = client.newBuilder().readTimeout(120, TimeUnit.SECONDS).build().newCall(req).execute().use { r ->
+        if (r.isSuccessful) r.body?.bytes() else null
+      } ?: return
+      val f = java.io.File(ctx.cacheDir, "said-${System.nanoTime()}.wav")
+      f.writeBytes(bytes)
+      file = f
+      val done = java.util.concurrent.CountDownLatch(1)
+      // The wake word doesn't listen to Outpost talking.
+      WakeService.hold("said", true)
+      val p = android.media.MediaPlayer()
+      player = p
+      p.setAudioAttributes(
+        android.media.AudioAttributes.Builder()
+          .setUsage(android.media.AudioAttributes.USAGE_ASSISTANT)
+          .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+          .build()
+      )
+      p.setDataSource(f.absolutePath)
+      p.setOnCompletionListener { done.countDown() }
+      p.setOnErrorListener { _, _, _ -> done.countDown(); true }
+      p.prepare()
+      p.start()
+      done.await(3, TimeUnit.MINUTES)
+    } catch (_: Exception) {
+      // Couldn't fetch or play it: the notification still says it.
+    } finally {
+      try { player?.release() } catch (_: Exception) {}
+      file?.delete()
+      WakeService.hold("said", false)
+    }
   }
 
   /** Keep a connection (for the wake word) in its own storage, the sign-in encrypted. */

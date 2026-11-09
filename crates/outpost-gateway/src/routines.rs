@@ -112,7 +112,14 @@ pub async fn run(state: AppState, r: Routine, reason: &'static str, details: Opt
     };
     let tell = r.notify.tells(ok, news);
     // In my quiet hours, it's told when they end.
-    let tell_at = routines::tell_time(&state.pool, &r, outpost_core::now()).await;
+    let finished = outpost_core::now();
+    let tell_at = routines::tell_time(&state.pool, &r, finished).await;
+    // Said out loud on its speakers too, when it's told now (not in quiet hours).
+    if ok && tell && tell_at <= finished {
+        if let Some(text) = &note {
+            crate::speak::routine_said(&state, &r, text);
+        }
+    }
     if let Err(e) =
         routines::finish_run(&state.pool, &r.id, &run_id, ok, message_id.as_deref(), note.as_deref(), tell, tell_at).await
     {

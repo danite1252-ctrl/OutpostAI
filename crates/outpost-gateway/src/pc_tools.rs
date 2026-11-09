@@ -573,7 +573,7 @@ impl PcTools {
             }
             let question = match &self.routes[e.server] {
                 // A routine: say what it is and when.
-                Via::Outpost(ctx) if e.tool == "make_routine" => match crate::outpost_tools::wanted(ctx, &args) {
+                Via::Outpost(ctx) if e.tool == "make_routine" => match crate::outpost_tools::wanted(ctx, &args).await {
                     Ok(w) => format!("Shall I make the routine {}?", w.summary),
                     Err(_) => confirm_question(&server.name, &e.tool, &args, read_only),
                 },
@@ -706,7 +706,7 @@ impl PcTools {
                 Err(why) => done(format!("Couldn't list the routines: {why}"), Some(why), true),
             },
             "make_routine" => {
-                let w = match crate::outpost_tools::wanted(ctx, args) {
+                let w = match crate::outpost_tools::wanted(ctx, args).await {
                     Ok(w) => w,
                     Err(why) => return done(format!("The routine wasn't made: {why} Fix that and call make_routine again."), Some(why), true),
                 };

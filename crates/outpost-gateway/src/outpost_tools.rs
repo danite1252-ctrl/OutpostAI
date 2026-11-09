@@ -50,7 +50,8 @@ pub fn server() -> PcToolServer {
                         "time": { "type": "string", "description": "For daily, weekdays or days: the time, \"HH:MM\" (24-hour), e.g. \"07:30\"" },
                         "days": { "type": "array", "items": { "type": "string", "enum": ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] }, "description": "For days: which days" },
                         "hours": { "type": "integer", "description": "For every_hours: how many hours apart (1 to 168)" },
-                        "notify": { "type": "string", "enum": ["always", "worth"], "description": "always (default): tell the user every time; worth: only when there's something new (for checks)" }
+                        "notify": { "type": "string", "enum": ["always", "worth"], "description": "always (default): tell the user every time; worth: only when there's something new (for checks)" },
+                        "say_on": { "type": "array", "items": { "type": "string" }, "description": "Only when the user asks for it to be said out loud: \"phone\", and/or a Home Assistant speaker's name as the user said it (\"kitchen speaker\")" }
                     },
                     "required": ["name", "instructions", "when"]
                 }),
@@ -87,8 +88,61 @@ fn zone(ctx: &Context) -> jiff::tz::TimeZone {
 }
 
 /// Read make_routine's arguments: what it would make, or what's wrong (said to the model).
-pub fn wanted(ctx: &Context, args: &Value) -> Result<Wanted, String> {
-    parse(ctx.time_zone.clone(), ctx.utc_offset_minutes, ctx.persona_id.clone(), args, &ctx.asked, outpost_core::now())
+pub async fn wanted(ctx: &Context, args: &Value) -> Result<Wanted, String> {
+    let mut w = parse(ctx.time_zone.clone(), ctx.utc_offset_minutes, ctx.persona_id.clone(), args, &ctx.asked, outpost_core::now())?;
+    let asked: Vec<String> = args
+        .get("say_on")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
+    if !asked.is_empty() {
+        let speakers = match crate::speak::home_assistant(&ctx.state, &ctx.account_id).await {
+            Some(_) if asked.iter().all(|s| s.eq_ignore_ascii_case("phone")) => Vec::new(),
+            Some(ha) => ha.speakers().await?,
+            None => Vec::new(),
+        };
+        let (say_on, names) = say_on(&asked, &speakers)?;
+        w.summary.push_str(&format!(", said out loud on {}", names.join(" and ")));
+        w.input.say_on = Some(say_on);
+    }
+    Ok(w)
+}
+
+/// The places to say it the model named ("phone", "kitchen speaker"), as entity ids, and their
+/// names for the person.
+fn say_on(asked: &[String], speakers: &[crate::speak::Speaker]) -> Result<(Vec<String>, Vec<String>), String> {
+    let (mut ids, mut names) = (Vec::new(), Vec::new());
+    let plain = |s: &str| s.to_lowercase().replace(['_', '-'], " ").replace(" speaker", "").trim().to_string();
+    for a in asked {
+        if a.eq_ignore_ascii_case("phone") || a.eq_ignore_ascii_case("my phone") {
+            ids.push("phone".to_string());
+            names.push("the phone".to_string());
+            continue;
+        }
+        let want = plain(a.trim_start_matches("media_player."));
+        let found = speakers
+            .iter()
+            .find(|s| s.id.eq_ignore_ascii_case(a) || plain(&s.name) == want)
+            .or_else(|| speakers.iter().find(|s| plain(&s.name).contains(&want) || want.contains(&plain(&s.name))));
+        match found {
+            Some(s) => {
+                ids.push(s.id.clone());
+                names.push(s.name.clone());
+            }
+            None if speakers.is_empty() => {
+                return Err("There are no Home Assistant speakers to say it on (Home Assistant needs adding as a tool). \
+                    Use \"phone\", or leave say_on out."
+                    .into())
+            }
+            None => {
+                let have: Vec<&str> = speakers.iter().map(|s| s.name.as_str()).collect();
+                return Err(format!("There's no speaker called \"{a}\". The speakers are: {}.", have.join(", ")));
+            }
+        }
+    }
+    let ids = routines::clean_say_on(ids).map_err(|e| e.to_string())?;
+    names.dedup();
+    Ok((ids, names))
 }
 
 /// "in 5 minutes", "in an hour", "in half an hour", "10 mins from now": how many minutes from
@@ -310,6 +364,23 @@ mod tests {
     fn sydney(args: Value) -> Result<Wanted, String> {
         // Fri 6 Nov 2026, 20:00 in Sydney.
         parse(Some("Australia/Sydney".into()), Some(660), None, &args, "", 1_793_955_600)
+    }
+
+    #[test]
+    fn speakers_are_found_by_the_name_the_person_used() {
+        use crate::speak::Speaker;
+        let speakers = vec![
+            Speaker { id: "media_player.kitchen_nest".into(), name: "Kitchen Nest".into() },
+            Speaker { id: "media_player.lounge".into(), name: "Lounge speaker".into() },
+        ];
+        let (ids, names) = say_on(&["kitchen".into(), "phone".into()], &speakers).unwrap();
+        assert_eq!(ids, vec!["media_player.kitchen_nest".to_string(), "phone".to_string()]);
+        assert_eq!(names, vec!["Kitchen Nest".to_string(), "the phone".to_string()]);
+        let (ids, _) = say_on(&["the lounge speaker".into()], &speakers).unwrap();
+        assert_eq!(ids, vec!["media_player.lounge".to_string()]);
+        let e = say_on(&["bathroom".into()], &speakers).unwrap_err();
+        assert!(e.contains("Kitchen Nest, Lounge speaker"), "{e}");
+        assert!(say_on(&["kitchen".into()], &[]).is_err());
     }
 
     #[test]

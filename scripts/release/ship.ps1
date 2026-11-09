@@ -69,6 +69,24 @@ if ($SkipPhone) { $extra += "-SkipPhone" }
 if ($SkipLinux) { $extra += "-SkipLinux" }
 $release = Join-Path $PSScriptRoot "release.ps1"
 
+# The download server's key, unlocked now (in PuTTY's Pageant) rather than at the end: the
+# server only waits two minutes for a passphrase, and the build takes longer than that.
+$mirrorConfig = Join-Path $HOME ".outpost\mirror.json"
+if (Test-Path $mirrorConfig) {
+    $mirrorKey = (Get-Content $mirrorConfig -Raw | ConvertFrom-Json).key
+    $pageant = (Get-Command pageant -ErrorAction SilentlyContinue).Source
+    if (-not $pageant) {
+        foreach ($p in @("$env:ProgramFiles\PuTTY\pageant.exe", "${env:ProgramFiles(x86)}\PuTTY\pageant.exe")) {
+            if (Test-Path $p) { $pageant = $p; break }
+        }
+    }
+    if ($mirrorKey -and $pageant) {
+        Start-Process $pageant -ArgumentList "`"$mirrorKey`""
+        Write-Host "== Type the download server key's passphrase in Pageant's window." -ForegroundColor Cyan
+        Read-Host "Then press Enter here" | Out-Null
+    }
+}
+
 # 3. Build (asks for the key passwords).
 & powershell -ExecutionPolicy Bypass -File $release -Version $Version -Notes $Notes @extra
 if ($LASTEXITCODE -ne 0) { throw "The build stopped. Fix the problem above and run this again with -Version $Version." }
