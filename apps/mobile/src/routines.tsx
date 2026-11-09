@@ -59,6 +59,14 @@ const READY: { name: string; instructions: string; schedule: Schedule; notify: N
     needs: "Google (calendar)",
   },
   {
+    name: "Who's at the door",
+    instructions:
+      "Look at the camera's picture and say in one short sentence who or what is at the door: a courier with a parcel, someone you don't know, a neighbour's cat, nobody. Describe, don't guess names.",
+    schedule: { kind: "link" },
+    notify: "always",
+    needs: "Home Assistant, a camera, and a persona whose model can see",
+  },
+  {
     name: "Reminder",
     instructions: "Remind me to <what>.",
     schedule: { kind: "once", at: Math.floor(Date.now() / 1000 / 60) * 60 + 3600 },
@@ -84,6 +92,8 @@ interface Routine {
   allow: Allow;
   /** Where it says its result out loud: "phone", and Home Assistant speakers. */
   say_on: string[];
+  /** A Home Assistant camera whose picture it looks at each run. */
+  camera: string | null;
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -418,6 +428,7 @@ function RoutineEditor({
   }
   const [allow, setAllow] = useState<Allow>(routine?.allow ?? { tools: true, changes: "wait", commands: true });
   const [sayOn, setSayOn] = useState<string[]>(routine?.say_on ?? []);
+  const [camera, setCamera] = useState(routine?.camera ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -453,7 +464,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, notify, allow, say_on: sayOn, ...myZone() };
+      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, notify, allow, say_on: sayOn, camera, ...myZone() };
       onSaved(routine ? await api.json<Routine>("PUT", `/api/routines/${routine.id}`, body) : await api.json<Routine>("POST", "/api/routines", body));
     } catch (e) {
       setError(message(e));
@@ -550,6 +561,7 @@ function RoutineEditor({
       {notify === "worth" && (
         <P muted>The persona decides: when there's nothing new it says so quietly in the chat. Failures are always told.</P>
       )}
+      <CameraPick api={api} camera={camera} onChange={setCamera} />
       {notify !== "never" && notify !== "failures" && <SayOutLoud api={api} personaId={personaId} sayOn={sayOn} onChange={setSayOn} />}
       <Text style={s.label}>While it runs on its own (nobody is there to say OK)</Text>
       <View style={{ gap: 6 }}>
@@ -576,7 +588,38 @@ function RoutineEditor({
   );
 }
 
-type Speakers = { speakers: { id: string; name: string }[]; home_assistant: boolean; problem: string | null };
+type Speakers = {
+  speakers: { id: string; name: string }[];
+  cameras: { id: string; name: string }[];
+  home_assistant: boolean;
+  problem: string | null;
+};
+
+/** A Home Assistant camera whose picture the routine looks at each run. */
+function CameraPick({ api, camera, onChange }: { api: Outpost; camera: string; onChange: (c: string) => void }) {
+  const [found, setFound] = useState<Speakers | null>(null);
+  useEffect(() => {
+    api
+      .get<Speakers>("/api/speakers")
+      .then(setFound)
+      .catch(() => setFound(null));
+  }, [api]);
+  const cameras = found?.cameras ?? [];
+  if (!found || (!found.home_assistant && !camera) || (cameras.length === 0 && !camera)) return null;
+  return (
+    <>
+      <Text style={s.label}>Look at a camera (its picture now goes with each run)</Text>
+      <View style={[s.row, { flexWrap: "wrap" }]}>
+        <Chip label="No camera" active={!camera} onPress={() => onChange("")} />
+        {cameras.map((c) => (
+          <Chip key={c.id} label={c.name} active={camera === c.id} onPress={() => onChange(c.id)} />
+        ))}
+        {camera && !cameras.some((c) => c.id === camera) && <Chip label={`${camera} (not in Home Assistant now)`} active onPress={() => onChange("")} />}
+      </View>
+      {camera ? <P muted>Its persona's model needs to see pictures (a vision model).</P> : null}
+    </>
+  );
+}
 
 /** Where a routine says its result out loud: this phone, and Home Assistant's speakers. */
 function SayOutLoud({ api, personaId, sayOn, onChange }: { api: Outpost; personaId: string; sayOn: string[]; onChange: (s: string[]) => void }) {
@@ -587,7 +630,7 @@ function SayOutLoud({ api, personaId, sayOn, onChange }: { api: Outpost; persona
     api
       .get<Speakers>("/api/speakers")
       .then(setFound)
-      .catch((e) => setFound({ speakers: [], home_assistant: false, problem: message(e) }));
+      .catch((e) => setFound({ speakers: [], cameras: [], home_assistant: false, problem: message(e) }));
   }, [api]);
   const flip = (id: string) => onChange(sayOn.includes(id) ? sayOn.filter((x) => x !== id) : [...sayOn, id]);
   async function tryIt(id: string) {

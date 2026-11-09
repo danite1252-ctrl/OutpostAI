@@ -27,7 +27,9 @@ function Invoke-Git([string[]]$GitArgs) {
 }
 
 # 1. Changes not committed yet.
-$pending = git status --porcelain
+# (Only the version files changed, by an earlier try of this release: release.ps1 carries on
+# with those, and they're committed with the version change below.)
+$pending = git status --porcelain | Where-Object { $_ -notmatch "Cargo\.(toml|lock)|package(-lock)?\.json|tauri\.conf\.json|app\.json|version\.ts" }
 if ($pending) {
     if (-not $Commit) {
         Write-Host "There are uncommitted changes:" -ForegroundColor Yellow

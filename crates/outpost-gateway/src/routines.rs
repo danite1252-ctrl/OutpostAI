@@ -160,6 +160,16 @@ struct Done {
     model: Option<String>,
 }
 
+/// The camera a run looks at: one named in what started it (a link's JSON `{"camera":
+/// "camera.front_door"}`), else the routine's own.
+fn camera_for(r: &Routine, details: Option<&str>) -> Option<String> {
+    let named = details
+        .and_then(|d| serde_json::from_str::<serde_json::Value>(d.trim()).ok())
+        .and_then(|v| v.get("camera").and_then(|c| c.as_str()).map(str::to_string))
+        .and_then(|c| routines::clean_camera(Some(&c)).ok().flatten());
+    named.or_else(|| r.camera.clone())
+}
+
 /// One run: the routine's instructions sent in its chat, and its reply waited for. Returns
 /// what it said, or why it failed.
 async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result<Done, Failed> {
@@ -202,6 +212,24 @@ async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result
             d.chars().take(8000).collect::<String>()
         ));
     }
+    // A camera's picture to look at: the one the link's message names, or the routine's own.
+    let mut images = Vec::new();
+    if let Some(camera) = camera_for(r, details) {
+        let picture = match crate::speak::home_assistant(state, &r.account_id).await {
+            Some(ha) => ha.snapshot(&camera).await,
+            None => Err("there's no Home Assistant tool to get it through".into()),
+        };
+        match picture {
+            Ok(url) => {
+                content.push_str(&format!("\n\n[The picture from {camera}, taken just now, is attached.]"));
+                images.push(url);
+            }
+            Err(why) => {
+                tracing::warn!(routine = %r.id, camera, error = %why, "couldn't get a camera's picture");
+                content.push_str(&format!("\n\n[The picture from {camera} couldn't be had: {why} Say so in your result.]"));
+            }
+        }
+    }
     let auth = Auth {
         session: Session {
             id: format!("routine-{}", r.id),
@@ -221,6 +249,7 @@ async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result
         use_pc_tools: r.allow.tools,
         routine: Some(r.allow),
         routine_id: Some(r.id.clone()),
+        images,
         ..Default::default()
     };
     let started = outpost_core::now();

@@ -74,6 +74,38 @@ impl HomeAssistant {
         Ok(speakers_in(&self.states().await?))
     }
 
+    /// A camera's picture now (JPEG, as a `data:` URL for the model).
+    pub async fn snapshot(&self, camera: &str) -> Result<String, String> {
+        use base64::Engine;
+        let r = client()
+            .get(format!("{}/api/camera_proxy/{camera}", self.base))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|_| "Home Assistant didn't answer.".to_string())?;
+        match r.status().as_u16() {
+            200 => {}
+            401 | 403 => return Err("Home Assistant turned down the token in your Home Assistant tool.".into()),
+            404 => return Err(format!("Home Assistant has no camera {camera}.")),
+            code => return Err(format!("Home Assistant couldn't get the camera's picture ({code}).")),
+        }
+        let mime = r
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.split(';').next().unwrap_or("").trim().to_string())
+            .filter(|m| matches!(m.as_str(), "image/jpeg" | "image/png" | "image/webp" | "image/gif"))
+            .unwrap_or_else(|| "image/jpeg".into());
+        let bytes = r.bytes().await.map_err(|_| "The camera's picture was cut off.".to_string())?;
+        if bytes.is_empty() {
+            return Err("The camera sent an empty picture.".into());
+        }
+        if bytes.len() > 10 * 1024 * 1024 {
+            return Err("The camera's picture is over 10 MB.".into());
+        }
+        Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)))
+    }
+
     async fn states(&self) -> Result<Vec<Value>, String> {
         let r = client()
             .get(format!("{}/api/states", self.base))
@@ -145,11 +177,16 @@ pub struct Speaker {
 
 /// Home Assistant's speakers (media players that are there now), by name.
 fn speakers_in(states: &[Value]) -> Vec<Speaker> {
+    entities_in(states, "media_player.")
+}
+
+/// Home Assistant's things of one kind ("camera.") that are there now, by name.
+fn entities_in(states: &[Value], kind: &str) -> Vec<Speaker> {
     let mut out: Vec<Speaker> = states
         .iter()
         .filter_map(|s| {
             let id = s["entity_id"].as_str()?;
-            if !id.starts_with("media_player.") || s["state"].as_str() == Some("unavailable") {
+            if !id.starts_with(kind) || s["state"].as_str() == Some("unavailable") {
                 return None;
             }
             let name = s["attributes"]["friendly_name"].as_str().filter(|n| !n.trim().is_empty()).unwrap_or(id);
@@ -165,6 +202,8 @@ fn speakers_in(states: &[Value]) -> Vec<Speaker> {
 pub struct Speakers {
     /// Home Assistant's speakers.
     pub speakers: Vec<Speaker>,
+    /// Home Assistant's cameras, for a routine to look at.
+    pub cameras: Vec<Speaker>,
     /// There's a Home Assistant tool to speak through.
     pub home_assistant: bool,
     /// Why the speakers couldn't be listed.
@@ -176,11 +215,16 @@ pub struct Speakers {
     responses((status = 200, description = "Speakers", body = Speakers), (status = 401, description = "Not signed in", body = ErrorBody)))]
 pub async fn list(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<Speakers>> {
     let Some(ha) = home_assistant(&state, &auth.account.id).await else {
-        return Ok(Json(Speakers { speakers: vec![], home_assistant: false, problem: None }));
+        return Ok(Json(Speakers { speakers: vec![], cameras: vec![], home_assistant: false, problem: None }));
     };
     Ok(Json(match ha.states().await {
-        Ok(states) => Speakers { speakers: speakers_in(&states), home_assistant: true, problem: None },
-        Err(e) => Speakers { speakers: vec![], home_assistant: true, problem: Some(e) },
+        Ok(states) => Speakers {
+            speakers: speakers_in(&states),
+            cameras: entities_in(&states, "camera."),
+            home_assistant: true,
+            problem: None,
+        },
+        Err(e) => Speakers { speakers: vec![], cameras: vec![], home_assistant: true, problem: Some(e) },
     }))
 }
 

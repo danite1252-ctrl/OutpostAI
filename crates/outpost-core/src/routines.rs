@@ -306,6 +306,8 @@ pub struct Routine {
     /// Where it says its result out loud (when it tells you, outside quiet hours): "phone",
     /// and Home Assistant speakers by entity id ("media_player.kitchen").
     pub say_on: Vec<String>,
+    /// A Home Assistant camera ("camera.front_door") whose picture it looks at each run.
+    pub camera: Option<String>,
     /// Its chat (where each run's reply goes), once it has run.
     pub chat_id: Option<String>,
     /// When it runs next (Unix seconds); none when paused or finished.
@@ -341,6 +343,7 @@ struct Row {
     allow_changes: String,
     allow_commands: i64,
     say_on: String,
+    camera: Option<String>,
     chat_id: Option<String>,
     next_at: Option<i64>,
     last_at: Option<i64>,
@@ -370,6 +373,7 @@ impl Row {
                 commands: self.allow_commands != 0,
             },
             say_on: serde_json::from_str(&self.say_on).unwrap_or_default(),
+            camera: self.camera,
             chat_id: self.chat_id,
             next_at: self.next_at,
             last_at: self.last_at,
@@ -382,7 +386,7 @@ impl Row {
 }
 
 const COLUMNS: &str = "id, account_id, name, persona_id, instructions, schedule, time_zone, utc_offset_minutes, enabled, \
-                       notify, hook_hash IS NOT NULL AS has_link, allow_tools, allow_changes, allow_commands, say_on, chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
+                       notify, hook_hash IS NOT NULL AS has_link, allow_tools, allow_changes, allow_commands, say_on, camera, chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
 
 /// A new routine, or changes to one (fields left out stay as they are).
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
@@ -401,6 +405,9 @@ pub struct RoutineInput {
     /// Where it says its result out loud: "phone" and/or Home Assistant speakers
     /// ("media_player.kitchen").
     pub say_on: Option<Vec<String>>,
+    /// A Home Assistant camera whose picture it looks at each run ("camera.front_door"); an
+    /// empty string for none.
+    pub camera: Option<String>,
     /// The person's time zone ("Australia/Sydney"), from their app.
     pub time_zone: Option<String>,
     /// Minutes ahead of UTC, from their app (used when the zone's name isn't known).
@@ -495,14 +502,15 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: RoutineInput) ->
     let enabled = input.enabled.unwrap_or(true);
     let allow = input.allow.unwrap_or_default();
     let say_on = clean_say_on(input.say_on.unwrap_or_default())?;
+    let camera = clean_camera(input.camera.as_deref())?;
     let zone = zone(input.time_zone.as_deref(), input.utc_offset_minutes);
     let next_at = next_for(&schedule, enabled, &zone, None);
     let t = now();
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO routines (id, account_id, name, persona_id, instructions, schedule, time_zone, utc_offset_minutes, \
-         enabled, notify, allow_tools, allow_changes, allow_commands, say_on, next_at, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         enabled, notify, allow_tools, allow_changes, allow_commands, say_on, camera, next_at, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(account_id)
@@ -518,6 +526,7 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: RoutineInput) ->
     .bind(changes_str(allow.changes))
     .bind(allow.commands as i64)
     .bind(say_json(&say_on))
+    .bind(&camera)
     .bind(next_at)
     .bind(t)
     .bind(t)
@@ -558,12 +567,16 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Routin
         Some(s) => clean_say_on(s)?,
         None => r.say_on.clone(),
     };
+    let camera = match input.camera.as_deref() {
+        Some(c) => clean_camera(Some(c))?,
+        None => r.camera.clone(),
+    };
     let time_zone = input.time_zone.or(r.time_zone.clone());
     let offset = input.utc_offset_minutes.or(r.utc_offset_minutes);
     let next_at = next_for(&schedule, enabled, &zone(time_zone.as_deref(), offset), r.last_at);
     sqlx::query(
         "UPDATE routines SET name = ?, persona_id = ?, instructions = ?, schedule = ?, time_zone = ?, utc_offset_minutes = ?, \
-         enabled = ?, notify = ?, allow_tools = ?, allow_changes = ?, allow_commands = ?, say_on = ?, next_at = ?, updated_at = ? \
+         enabled = ?, notify = ?, allow_tools = ?, allow_changes = ?, allow_commands = ?, say_on = ?, camera = ?, next_at = ?, updated_at = ? \
          WHERE id = ? AND account_id = ?",
     )
     .bind(&name)
@@ -578,6 +591,7 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Routin
     .bind(changes_str(allow.changes))
     .bind(allow.commands as i64)
     .bind(say_json(&say_on))
+    .bind(&camera)
     .bind(next_at)
     .bind(now())
     .bind(id)
@@ -788,6 +802,18 @@ pub fn clean_say_on(list: Vec<String>) -> CoreResult<Vec<String>> {
         return Err(CoreError::Invalid("Pick up to five places to say it.".into()));
     }
     Ok(out)
+}
+
+/// A Home Assistant camera's entity id ("camera.front_door"), or none.
+pub fn clean_camera(camera: Option<&str>) -> CoreResult<Option<String>> {
+    let Some(c) = camera.map(str::trim).filter(|c| !c.is_empty()) else { return Ok(None) };
+    let ok = c.strip_prefix("camera.").is_some_and(|rest| {
+        !rest.is_empty() && rest.len() <= 100 && rest.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+    });
+    if !ok {
+        return Err(CoreError::Invalid(format!("\"{c}\" isn't a Home Assistant camera.")));
+    }
+    Ok(Some(c.to_string()))
 }
 
 fn say_json(list: &[String]) -> String {
@@ -1105,5 +1131,14 @@ mod tests {
         assert!(clean_say_on(vec!["media_player.Kitchen; rm".into()]).is_err());
         let many: Vec<String> = (0..6).map(|i| format!("media_player.s{i}")).collect();
         assert!(clean_say_on(many).is_err());
+    }
+
+    #[test]
+    fn cameras_are_home_assistant_camera_entities() {
+        assert_eq!(clean_camera(Some(" camera.front_door ")).unwrap().as_deref(), Some("camera.front_door"));
+        assert_eq!(clean_camera(Some("")).unwrap(), None);
+        assert_eq!(clean_camera(None).unwrap(), None);
+        assert!(clean_camera(Some("media_player.lounge")).is_err());
+        assert!(clean_camera(Some("camera.Front Door")).is_err());
     }
 }

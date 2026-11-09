@@ -312,6 +312,16 @@ PC: **Routines** in the sidebar; on the phone: **You › Routines**).
   Assistant's own text-to-speech. It stays silent during quiet hours (the notification waits as
   usual) and the person's tools-off hours, and each time it speaks shows in Activity. In chat,
   "remind me at 5 on the kitchen speaker" sets this up too.
+- **Look at a camera**: a routine can look at a Home Assistant camera's picture each time it
+  runs (the picture is taken just then, through your Home Assistant tool, and goes to the
+  persona with its instructions; its model needs to see pictures). With **Who's at the door**
+  (a ready-made routine started from its link), a doorbell press gets "A courier holding a
+  parcel" as a notification and, with Say it out loud, on your speakers. To set up the doorbell:
+  make the routine's link, open **For Home Assistant** under it on the PC and copy the lines into
+  Home Assistant's configuration.yaml, restart Home Assistant, then make an automation: the
+  doorbell (or motion) as the trigger, `rest_command.outpost_...` as the action. A link can name
+  a different camera each time: send `{"camera": "camera.back_door"}`. The picture isn't kept,
+  except in the routine's chat.
 - **Tell me**: each routine sends a notification to your phone and PC when it runs (**Every
   time**), **Only when there's news** (the persona decides; when there's nothing new it says so
   quietly in the chat, and a quick separate check of each result decides; failures are always told), **Only if it fails**, or **Never**.

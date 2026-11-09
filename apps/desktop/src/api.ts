@@ -1986,6 +1986,8 @@ export interface Routine {
   allow: RoutineAllow;
   /** Where it says its result out loud: "phone", and Home Assistant speakers ("media_player.kitchen"). */
   say_on: string[];
+  /** A Home Assistant camera whose picture it looks at each run ("camera.front_door"). */
+  camera: string | null;
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -2012,9 +2014,19 @@ export interface QuietHours {
   to: string;
 }
 
+/** Home Assistant's speakers and cameras, through my Home Assistant tool. */
+export interface HomeAssistantThings {
+  speakers: { id: string; name: string }[];
+  cameras: { id: string; name: string }[];
+  home_assistant: boolean;
+  problem: string | null;
+}
+
 export interface RoutineInput {
   allow?: RoutineAllow;
   say_on?: string[];
+  /** A Home Assistant camera ("camera.front_door"); "" for none. */
+  camera?: string;
   name?: string;
   notify?: Notify;
   persona_id?: string;
@@ -2092,7 +2104,7 @@ export const routinesApi = {
     request<{ quiet: QuietHours | null }>("PUT", "/api/routines/quiet", { token, body: { quiet } }),
   /** Home Assistant's speakers, through my Home Assistant tool. */
   speakers: (token: string) =>
-    request<{ speakers: { id: string; name: string }[]; home_assistant: boolean; problem: string | null }>("GET", "/api/speakers", { token }),
+    request<HomeAssistantThings>("GET", "/api/speakers", { token }),
   /** Say a test line on a speaker. */
   trySpeaker: (token: string, speaker: string, personaId?: string) =>
     request<void>("POST", "/api/speakers/try", { token, body: { speaker, persona_id: personaId || undefined } }),

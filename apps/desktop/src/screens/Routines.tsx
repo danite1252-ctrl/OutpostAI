@@ -2,7 +2,7 @@
 // a morning brief"). Each run is a reply in the routine's own chat.
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { api, GATEWAY, SERVER, routinesApi, type Notify, type Persona, type QuietHours, type Routine, type RoutineAllow, type RoutineRun, type Schedule } from "../api";
+import { api, GATEWAY, SERVER, routinesApi, type HomeAssistantThings, type Notify, type Persona, type QuietHours, type Routine, type RoutineAllow, type RoutineRun, type Schedule } from "../api";
 import { Avatar, Button, ErrorNote, Field, areYouSure } from "../components/ui";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -401,9 +401,47 @@ function LinkPanel({
             verify_ssl: false.
             {local ? " From another machine, use this PC's network address instead of 127.0.0.1." : ""}
           </p>
+          <HomeAssistantCall url={url} routine={r} />
         </div>
       )}
     </div>
+  );
+}
+
+/** The link, ready to paste into Home Assistant's configuration.yaml, and how to call it. */
+function HomeAssistantCall({ url, routine: r }: { url: string; routine: Routine }) {
+  const [copied, setCopied] = useState(false);
+  const slug = r.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "routine";
+  const yaml = [
+    "rest_command:",
+    `  outpost_${slug}:`,
+    `    url: "${url}"`,
+    "    method: POST",
+    "    verify_ssl: false",
+    ...(r.camera ? ['    content_type: "application/json"', `    payload: '{"camera": "${r.camera}"}'`] : []),
+  ].join("\n");
+  return (
+    <details className="text-xs">
+      <summary className="cursor-pointer text-muted">For Home Assistant (a doorbell, motion, a button…)</summary>
+      <div className="mt-2 flex flex-col gap-2">
+        <p className="text-muted">
+          Add this to Home Assistant's configuration.yaml and restart it. Then, in an automation (Settings › Automations), choose
+          the trigger (the doorbell pressed, say) and add the action <code>rest_command.outpost_{slug}</code>.
+        </p>
+        <pre className="overflow-x-auto rounded-lg bg-deep px-2 py-1.5">{yaml}</pre>
+        <Button
+          variant="ghost"
+          onClick={() =>
+            void navigator.clipboard.writeText(yaml).then(
+              () => setCopied(true),
+              () => setCopied(false),
+            )
+          }
+        >
+          {copied ? "Copied" : "Copy for Home Assistant"}
+        </Button>
+      </div>
+    </details>
   );
 }
 
@@ -437,6 +475,14 @@ const READY: { name: string; instructions: string; schedule: Schedule; notify: N
     schedule: { kind: "days", time: "07:30", days: [1] },
     notify: "always",
     needs: "Google (calendar)",
+  },
+  {
+    name: "Who's at the door",
+    instructions:
+      "Look at the camera's picture and say in one short sentence who or what is at the door: a courier with a parcel, someone you don't know, a neighbour's cat, nobody. Describe, don't guess names.",
+    schedule: { kind: "link" },
+    notify: "always",
+    needs: "Home Assistant, a camera, and a persona whose model can see",
   },
   {
     name: "Reminder",
@@ -515,6 +561,7 @@ function RoutineEditor({
   }
   const [allow, setAllow] = useState<RoutineAllow>(routine?.allow ?? { tools: true, changes: "wait", commands: true });
   const [sayOn, setSayOn] = useState<string[]>(routine?.say_on ?? []);
+  const [camera, setCamera] = useState(routine?.camera ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -541,7 +588,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule(), notify, allow, say_on: sayOn };
+      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule(), notify, allow, say_on: sayOn, camera };
       onSaved(routine ? await routinesApi.update(token, routine.id, input) : await routinesApi.create(token, input));
     } catch (e) {
       setError(message(e));
@@ -701,6 +748,8 @@ function RoutineEditor({
         )}
       </fieldset>
 
+      <CameraPick token={token} camera={camera} onChange={setCamera} />
+
       {notify !== "never" && notify !== "failures" && (
         <SayOutLoud token={token} personaId={personaId} sayOn={sayOn} onChange={setSayOn} />
       )}
@@ -742,6 +791,50 @@ function RoutineEditor({
   );
 }
 
+/** Home Assistant's speakers and cameras (null while looking). */
+function useHomeAssistant(token: string) {
+  const [found, setFound] = useState<HomeAssistantThings | null>(null);
+  useEffect(() => {
+    routinesApi
+      .speakers(token)
+      .then(setFound)
+      .catch((e) => setFound({ speakers: [], cameras: [], home_assistant: false, problem: message(e) }));
+  }, [token]);
+  return found;
+}
+
+/** A Home Assistant camera whose picture the routine looks at each run. */
+function CameraPick({ token, camera, onChange }: { token: string; camera: string; onChange: (c: string) => void }) {
+  const found = useHomeAssistant(token);
+  const cameras = found?.cameras ?? [];
+  if (!found || (!found.home_assistant && !camera)) return null;
+  return (
+    <label className="flex flex-col gap-1 text-sm">
+      <span className="text-muted">Look at a camera (each run, its picture now goes with the instructions)</span>
+      <select
+        className="min-h-10 rounded-lg border border-line bg-surface px-2 text-ink"
+        value={camera}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">No camera</option>
+        {cameras.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.name}
+          </option>
+        ))}
+        {camera && !cameras.some((c) => c.id === camera) && <option value={camera}>{camera} (not in Home Assistant now)</option>}
+      </select>
+      {camera && (
+        <span className="text-xs text-muted">
+          Its persona's model needs to see pictures (a vision model). A link can name another camera each time:{" "}
+          <code>{'{"camera": "camera.back_door"}'}</code>.
+        </span>
+      )}
+      {found.problem && <span className="text-xs text-danger">Home Assistant's cameras couldn't be listed: {found.problem}</span>}
+    </label>
+  );
+}
+
 /** Where a routine says its result out loud: the phone, and Home Assistant's speakers. */
 function SayOutLoud({
   token,
@@ -754,15 +847,9 @@ function SayOutLoud({
   sayOn: string[];
   onChange: (s: string[]) => void;
 }) {
-  const [found, setFound] = useState<{ speakers: { id: string; name: string }[]; home_assistant: boolean; problem: string | null } | null>(null);
+  const found = useHomeAssistant(token);
   const [trying, setTrying] = useState<string | null>(null);
   const [tried, setTried] = useState<{ id: string; error: string | null } | null>(null);
-  useEffect(() => {
-    routinesApi
-      .speakers(token)
-      .then(setFound)
-      .catch((e) => setFound({ speakers: [], home_assistant: false, problem: message(e) }));
-  }, [token]);
   const flip = (id: string, on: boolean) => onChange(on ? [...sayOn.filter((x) => x !== id), id] : sayOn.filter((x) => x !== id));
   async function tryIt(id: string) {
     setTrying(id);
