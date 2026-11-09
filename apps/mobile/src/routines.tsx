@@ -61,7 +61,7 @@ const READY: { name: string; instructions: string; schedule: Schedule; notify: N
   {
     name: "Who's at the door",
     instructions:
-      "Look at the camera's picture and say in one short sentence who or what is at the door: a courier with a parcel, someone you don't know, a neighbour's cat, nobody. Describe, don't guess names.",
+      "Look at the doorbell's pictures and say in one short sentence who or what is at the door: a courier with a parcel, someone you don't know, a neighbour's cat, nobody. Describe, don't guess names.",
     schedule: { kind: "link" },
     notify: "always",
     needs: "Home Assistant, a camera, and a persona whose model can see",

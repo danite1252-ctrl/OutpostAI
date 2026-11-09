@@ -160,14 +160,34 @@ struct Done {
     model: Option<String>,
 }
 
-/// The camera a run looks at: one named in what started it (a link's JSON `{"camera":
-/// "camera.front_door"}`), else the routine's own.
-fn camera_for(r: &Routine, details: Option<&str>) -> Option<String> {
-    let named = details
-        .and_then(|d| serde_json::from_str::<serde_json::Value>(d.trim()).ok())
-        .and_then(|v| v.get("camera").and_then(|c| c.as_str()).map(str::to_string))
-        .and_then(|c| routines::clean_camera(Some(&c)).ok().flatten());
-    named.or_else(|| r.camera.clone())
+/// What a run looks at.
+enum Look {
+    /// A picture Home Assistant has from an event (its path).
+    Event(String),
+    /// A camera's picture now.
+    Camera(String),
+}
+
+impl Look {
+    fn name(&self) -> String {
+        match self {
+            Look::Event(_) => "the doorbell or camera, when it went off".into(),
+            Look::Camera(c) => format!("{c}, taken just now"),
+        }
+    }
+}
+
+/// What a run looks at: a picture named in what started it (a link's JSON `{"image":
+/// "/api/nest/event_media/.../thumbnail"}`), a camera named there (`{"camera":
+/// "camera.front_door"}`), else the routine's own camera.
+fn look_for(r: &Routine, details: Option<&str>) -> Option<Look> {
+    let sent = details.and_then(|d| serde_json::from_str::<serde_json::Value>(d.trim()).ok());
+    let field = |k: &str| sent.as_ref().and_then(|v| v.get(k)).and_then(|c| c.as_str()).map(str::trim).filter(|c| !c.is_empty());
+    if let Some(path) = field("image").filter(|p| p.starts_with("/api/") || p.starts_with("http")) {
+        return Some(Look::Event(path.to_string()));
+    }
+    let named = field("camera").and_then(|c| routines::clean_camera(Some(c)).ok().flatten());
+    named.or_else(|| r.camera.clone()).map(Look::Camera)
 }
 
 /// One run: the routine's instructions sent in its chat, and its reply waited for. Returns
@@ -212,21 +232,30 @@ async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result
             d.chars().take(8000).collect::<String>()
         ));
     }
-    // A camera's picture to look at: the one the link's message names, or the routine's own.
+    // What to look at: a picture Home Assistant sent (a Nest doorbell's clip preview), else a
+    // camera's picture now (the one the link names, or the routine's own).
     let mut images = Vec::new();
-    if let Some(camera) = camera_for(r, details) {
-        let picture = match crate::speak::home_assistant(state, &r.account_id).await {
-            Some(ha) => ha.snapshot(&camera).await,
-            None => Err("there's no Home Assistant tool to get it through".into()),
+    if let Some(look) = look_for(r, details) {
+        let (what, pictures) = match crate::speak::home_assistant(state, &r.account_id).await {
+            None => (look.name(), Err("there's no Home Assistant tool to get it through".to_string())),
+            Some(ha) => match &look {
+                Look::Event(path) => (look.name(), ha.event_pictures(path).await),
+                Look::Camera(camera) => (look.name(), ha.snapshot(camera).await.map(|p| vec![p])),
+            },
         };
-        match picture {
-            Ok(url) => {
-                content.push_str(&format!("\n\n[The picture from {camera}, taken just now, is attached.]"));
-                images.push(url);
+        match pictures {
+            Ok(mut p) => {
+                let n = p.len();
+                content.push_str(&if n > 1 {
+                    format!("\n\n[{n} stills from {what}, in order, are attached.]")
+                } else {
+                    format!("\n\n[The picture from {what} is attached.]")
+                });
+                images.append(&mut p);
             }
             Err(why) => {
-                tracing::warn!(routine = %r.id, camera, error = %why, "couldn't get a camera's picture");
-                content.push_str(&format!("\n\n[The picture from {camera} couldn't be had: {why} Say so in your result.]"));
+                tracing::warn!(routine = %r.id, what, error = %why, "couldn't get a picture to look at");
+                content.push_str(&format!("\n\n[The picture from {what} couldn't be had: {why} Say so in your result.]"));
             }
         }
     }

@@ -106,6 +106,34 @@ impl HomeAssistant {
         Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)))
     }
 
+    /// A picture Home Assistant has from an event (a Nest doorbell's clip preview,
+    /// `/api/nest/event_media/<device>/<event>/thumbnail`), as up to three still frames
+    /// (`data:` URLs): first, middle and last of an animation.
+    pub async fn event_pictures(&self, path: &str) -> Result<Vec<String>, String> {
+        let path = path.trim();
+        let path = path.strip_prefix(&self.base).unwrap_or(path);
+        if !path.starts_with("/api/") || path.contains("..") || path.len() > 500 {
+            return Err("That isn't a picture in Home Assistant.".into());
+        }
+        let r = client()
+            .get(format!("{}{path}", self.base))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|_| "Home Assistant didn't answer.".to_string())?;
+        match r.status().as_u16() {
+            200 => {}
+            401 | 403 => return Err("Home Assistant turned down the token in your Home Assistant tool.".into()),
+            404 => return Err("Home Assistant doesn't have that picture (any more).".into()),
+            code => return Err(format!("Home Assistant couldn't get the picture ({code}).")),
+        }
+        let bytes = r.bytes().await.map_err(|_| "The picture was cut off.".to_string())?;
+        if bytes.len() > 20 * 1024 * 1024 {
+            return Err("The picture is over 20 MB.".into());
+        }
+        tokio::task::spawn_blocking(move || stills(&bytes)).await.map_err(|_| "The picture couldn't be read.".to_string())?
+    }
+
     async fn states(&self) -> Result<Vec<Value>, String> {
         let r = client()
             .get(format!("{}/api/states", self.base))
@@ -165,6 +193,38 @@ fn tts_engine(states: &[Value]) -> Option<(String, bool)> {
         return Some((id.to_string(), true));
     }
     engines.first().map(|(id, _)| (id.to_string(), false))
+}
+
+/// A picture as up to three JPEG stills (`data:` URLs): an animation's first, middle and last
+/// frames, or the picture itself. Big ones are scaled down to 1280 pixels across.
+pub fn stills(bytes: &[u8]) -> Result<Vec<String>, String> {
+    use base64::Engine;
+    use image::AnimationDecoder;
+    let format = image::guess_format(bytes).map_err(|_| "That isn't a picture (a video, maybe: send its thumbnail).".to_string())?;
+    let frames: Vec<image::DynamicImage> = if format == image::ImageFormat::Gif {
+        let decoder = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).map_err(|e| format!("The picture couldn't be read: {e}"))?;
+        let all: Vec<image::Frame> = decoder.into_frames().take(400).filter_map(Result::ok).collect();
+        if all.is_empty() {
+            return Err("The picture has no frames.".into());
+        }
+        let n = all.len();
+        let mut picks = vec![0, n / 2, n - 1];
+        picks.dedup();
+        picks.into_iter().map(|i| image::DynamicImage::ImageRgba8(all[i].buffer().clone())).collect()
+    } else {
+        vec![image::load_from_memory_with_format(bytes, format).map_err(|e| format!("The picture couldn't be read: {e}"))?]
+    };
+    frames
+        .into_iter()
+        .map(|f| {
+            let f = if f.width() > 1280 { f.resize(1280, 1280 * f.height() / f.width().max(1), image::imageops::FilterType::Triangle) } else { f };
+            let mut out = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(f.to_rgb8())
+                .write_to(&mut out, image::ImageFormat::Jpeg)
+                .map_err(|e| format!("The picture couldn't be made into a still: {e}"))?;
+            Ok(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(out.into_inner())))
+        })
+        .collect()
 }
 
 /// A speaker Home Assistant can play on.
@@ -343,5 +403,23 @@ mod tests {
         ];
         let names: Vec<String> = speakers_in(&states).into_iter().map(|s| s.name).collect();
         assert_eq!(names, vec!["Kitchen speaker", "Lounge Nest"]);
+    }
+
+    #[test]
+    fn a_doorbell_clip_becomes_three_stills() {
+        use image::codecs::gif::GifEncoder;
+        use image::{Delay, Frame, Rgba, RgbaImage};
+        let mut gif = Vec::new();
+        {
+            let mut enc = GifEncoder::new(&mut gif);
+            for shade in [0u8, 60, 120, 180, 240] {
+                let img = RgbaImage::from_pixel(8, 6, Rgba([shade, shade, shade, 255]));
+                enc.encode_frame(Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(100, 1))).unwrap();
+            }
+        }
+        let stills = stills(&gif).unwrap();
+        assert_eq!(stills.len(), 3);
+        assert!(stills.iter().all(|s| s.starts_with("data:image/jpeg;base64,")));
+        assert!(super::stills(b"not a picture").is_err());
     }
 }

@@ -317,10 +317,16 @@ PC: **Routines** in the sidebar; on the phone: **You › Routines**).
   persona with its instructions; its model needs to see pictures). With **Who's at the door**
   (a ready-made routine started from its link), a doorbell press gets "A courier holding a
   parcel" as a notification and, with Say it out loud, on your speakers. To set up the doorbell:
-  make the routine's link, open **For Home Assistant** under it on the PC and copy the lines into
-  Home Assistant's configuration.yaml, restart Home Assistant, then make an automation: the
-  doorbell (or motion) as the trigger, `rest_command.outpost_...` as the action. A link can name
-  a different camera each time: send `{"camera": "camera.back_door"}`. The picture isn't kept,
+  make the routine's link, open **For Home Assistant** under it on the PC and copy the first lines
+  into Home Assistant's configuration.yaml and restart Home Assistant. For a **Google Nest
+  doorbell**, paste the second part as a new automation (⋮ › Edit in YAML): it runs on the ring
+  and passes on the ring's clip preview, from which Outpost takes three stills (battery Nest
+  doorbells don't give Home Assistant a live picture, so a camera picture would be black). For
+  other cameras or a button, make an automation with that trigger and `rest_command.outpost_...`
+  as the action. A link can name a different camera each time (`{"camera": "camera.back_door"}`)
+  or a picture Home Assistant has (`{"image": "/api/..."}`). The description arrives some
+  seconds after the ring (Google's own chime on your Nest speakers stays the instant one); a
+  smaller vision model for this persona makes it quicker. The picture isn't kept,
   except in the routine's chat.
 - **Tell me**: each routine sends a notification to your phone and PC when it runs (**Every
   time**), **Only when there's news** (the persona decides; when there's nothing new it says so

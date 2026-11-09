@@ -409,37 +409,64 @@ function LinkPanel({
 }
 
 /** The link, ready to paste into Home Assistant's configuration.yaml, and how to call it. */
-function HomeAssistantCall({ url, routine: r }: { url: string; routine: Routine }) {
+function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      variant="ghost"
+      onClick={() =>
+        void navigator.clipboard.writeText(text).then(
+          () => setCopied(true),
+          () => setCopied(false),
+        )
+      }
+    >
+      {copied ? "Copied" : "Copy"}
+    </Button>
+  );
+}
+
+function HomeAssistantCall({ url, routine: r }: { url: string; routine: Routine }) {
   const slug = r.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "routine";
+  const payload = r.camera ? `{"image": "{{ image | default('') }}", "camera": "${r.camera}"}` : `{"image": "{{ image | default('') }}"}`;
   const yaml = [
     "rest_command:",
     `  outpost_${slug}:`,
     `    url: "${url}"`,
     "    method: POST",
     "    verify_ssl: false",
-    ...(r.camera ? ['    content_type: "application/json"', `    payload: '{"camera": "${r.camera}"}'`] : []),
+    '    content_type: "application/json"',
+    `    payload: '${payload}'`,
+  ].join("\n");
+  // A Nest doorbell: its ring, with the clip preview's picture passed on.
+  const nest = [
+    `alias: Outpost - ${r.name}`,
+    "triggers:",
+    "  - trigger: event",
+    "    event_type: nest_event",
+    "    event_data:",
+    "      type: doorbell_chime",
+    "actions:",
+    `  - action: rest_command.outpost_${slug}`,
+    "    data:",
+    `      image: "{{ trigger.event.data.attachment.image | default('') }}"`,
   ].join("\n");
   return (
     <details className="text-xs">
       <summary className="cursor-pointer text-muted">For Home Assistant (a doorbell, motion, a button…)</summary>
       <div className="mt-2 flex flex-col gap-2">
         <p className="text-muted">
-          Add this to Home Assistant's configuration.yaml and restart it. Then, in an automation (Settings › Automations), choose
-          the trigger (the doorbell pressed, say) and add the action <code>rest_command.outpost_{slug}</code>.
+          1. Add this to Home Assistant's configuration.yaml and restart Home Assistant:
         </p>
         <pre className="overflow-x-auto rounded-lg bg-deep px-2 py-1.5">{yaml}</pre>
-        <Button
-          variant="ghost"
-          onClick={() =>
-            void navigator.clipboard.writeText(yaml).then(
-              () => setCopied(true),
-              () => setCopied(false),
-            )
-          }
-        >
-          {copied ? "Copied" : "Copy for Home Assistant"}
-        </Button>
+        <CopyButton text={yaml} />
+        <p className="text-muted">
+          2. A Google Nest doorbell: make a new automation, choose ⋮ › Edit in YAML, and paste this. It runs when the bell is
+          pressed, and passes on the picture of who pressed it (its clip preview). For another camera or a button, make an
+          automation with that trigger and the action <code>rest_command.outpost_{slug}</code>.
+        </p>
+        <pre className="overflow-x-auto rounded-lg bg-deep px-2 py-1.5">{nest}</pre>
+        <CopyButton text={nest} />
       </div>
     </details>
   );
@@ -479,7 +506,7 @@ const READY: { name: string; instructions: string; schedule: Schedule; notify: N
   {
     name: "Who's at the door",
     instructions:
-      "Look at the camera's picture and say in one short sentence who or what is at the door: a courier with a parcel, someone you don't know, a neighbour's cat, nobody. Describe, don't guess names.",
+      "Look at the doorbell's pictures and say in one short sentence who or what is at the door: a courier with a parcel, someone you don't know, a neighbour's cat, nobody. Describe, don't guess names.",
     schedule: { kind: "link" },
     notify: "always",
     needs: "Home Assistant, a camera, and a persona whose model can see",
