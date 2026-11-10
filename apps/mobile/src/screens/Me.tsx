@@ -164,6 +164,12 @@ export default function Me({
                       ? `Installing Outpost ${u.version}…`
                       : `Outpost ${u.version}: ${u.message}`}
         </P>
+        {update.checkedAt !== null && (u.phase === "none" || u.phase === "available") && (
+          <P muted>Checked {new Date(update.checkedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.</P>
+        )}
+        {(u.phase === "none" || u.phase === "available") && (
+          <Button kind="ghost" title={update.checking ? "Checking…" : "Check for updates"} onPress={update.checkNow} />
+        )}
         {u.phase === "available" && <Button title="Download it" onPress={update.download} />}
         {(u.phase === "ready" || u.phase === "error") && <Button title="Restart to update" onPress={() => void update.install()} />}
         {u.phase === "permission" && <Button title="Allow updates" onPress={update.allow} />}

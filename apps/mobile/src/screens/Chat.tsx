@@ -198,8 +198,10 @@ export default function Chat({
     );
   };
 
+  const automatic = chats.filter((c) => c.automatic);
   return (
-    <ScrollView style={s.screen} contentContainerStyle={s.pad}>
+    <View style={s.screen}>
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={s.pad}>
       <H1>Chat</H1>
       {starting && (
         <View style={[s.card, { borderColor: C.ember, gap: 8 }]}>
@@ -222,22 +224,6 @@ export default function Chat({
       </View>
       <ErrorText>{error}</ErrorText>
       {chats.filter((c) => !c.automatic).map(chatRow)}
-      {chats.some((c) => c.automatic) && (
-        // Routines' and voice chats: out of the way at the bottom, opened when wanted.
-        <>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ expanded: autoOpen }}
-            onPress={() => setAutoOpen((o) => !o)}
-            style={[s.row, { paddingVertical: 10, borderTopWidth: 1, borderTopColor: C.line, marginTop: 4 }]}
-          >
-            <Text style={{ color: C.muted, fontSize: 15, flex: 1 }}>
-              {autoOpen ? "▾" : "▸"}  Routines and voice ({chats.filter((c) => c.automatic).length})
-            </Text>
-          </Pressable>
-          {autoOpen && chats.filter((c) => c.automatic).map(chatRow)}
-        </>
-      )}
       {chats.length === 0 ? <P muted>No chats yet. Everything stays on your PC.</P> : <P muted>Long-press a chat to rename or delete it.</P>}
       <Modal visible={!!renaming} transparent animationType="fade" onRequestClose={() => setRenaming(null)}>
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", padding: 24 }}>
@@ -262,6 +248,25 @@ export default function Chat({
         </View>
       </Modal>
     </ScrollView>
+    {automatic.length > 0 && (
+      // Routines' and voice chats: anchored at the bottom, out of the way, opened when wanted.
+      <View style={{ borderTopWidth: 1, borderTopColor: C.line, backgroundColor: C.night, maxHeight: autoOpen ? "50%" : undefined }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: autoOpen }}
+          onPress={() => setAutoOpen((o) => !o)}
+          style={({ pressed }) => [s.row, { paddingVertical: 12, paddingHorizontal: 16 }, pressed && { backgroundColor: C.raised }]}
+        >
+          <Text style={{ color: C.muted, fontSize: 15, flex: 1 }}>
+            {autoOpen ? "▾" : "▴"}  Routines and voice ({automatic.length})
+          </Text>
+        </Pressable>
+        {autoOpen && (
+          <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 12, gap: 10 }}>{automatic.map(chatRow)}</ScrollView>
+        )}
+      </View>
+    )}
+    </View>
   );
 }
 

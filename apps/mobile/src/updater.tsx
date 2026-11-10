@@ -62,6 +62,9 @@ async function newestMobile(api: Outpost): Promise<Mobile | null> {
 
 export function usePhoneUpdate(api: Outpost) {
   const [state, setState] = useState<UpdateState>({ phase: "none" });
+  /** When it last looked, and whether it's looking now (for Check now). */
+  const [checkedAt, setCheckedAt] = useState<number | null>(null);
+  const [checking, setChecking] = useState(false);
   const latest = useRef<Mobile | null>(null);
   const path = useRef<string | null>(null);
   const busy = useRef(false);
@@ -72,8 +75,10 @@ export function usePhoneUpdate(api: Outpost) {
     async (download: boolean) => {
       if (busy.current) return;
       busy.current = true;
+      setChecking(true);
       try {
         const m = await newestMobile(api);
+        setCheckedAt(Date.now());
         if (!m || !isNewer(m.version, APP_VERSION)) {
           setState({ phase: "none" });
           return;
@@ -98,6 +103,7 @@ export function usePhoneUpdate(api: Outpost) {
         if (v) setState({ phase: "error", version: v, message: e instanceof Error ? e.message : "The update couldn't be downloaded." });
       } finally {
         busy.current = false;
+        setChecking(false);
       }
     },
     [api],
@@ -149,7 +155,13 @@ export function usePhoneUpdate(api: Outpost) {
     };
   }, [prepare, install]);
 
-  return { state, install, download: () => void prepare(true), allow: () => OutpostNet.openInstallSettings() };
+  /** Look now, asking GitHub again (not the answer from the last 20 minutes). */
+  const checkNow = useCallback(() => {
+    lastGithub = null;
+    void prepare(false);
+  }, [prepare]);
+
+  return { state, checkedAt, checking, checkNow, install, download: () => void prepare(true), allow: () => OutpostNet.openInstallSettings() };
 }
 
 /** A slim bar under the connection banner while an update needs you. */
