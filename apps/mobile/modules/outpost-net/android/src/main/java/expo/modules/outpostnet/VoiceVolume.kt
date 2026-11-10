@@ -58,23 +58,41 @@ object VoiceVolume {
     }
   }
 
+  /** Bluetooth audio (a car, headphones, hearing aids) is the way out: it needs a moment to wake up. */
+  private fun bluetoothOut(audio: AudioManager): Boolean = try {
+    audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
+      it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+        it.type == android.media.AudioDeviceInfo.TYPE_HEARING_AID ||
+        it.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET ||
+        it.type == android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER
+    }
+  } catch (_: Exception) {
+    false
+  }
+
   /**
-   * A short two-note chime (rising: listening; falling: that didn't work), soft at the edges
-   * so it's clear without being harsh. At the media volume, raised to the voice level if set.
+   * Three notes, about two thirds of a second: rising (C, E, G) for "listening", falling for
+   * "that didn't work". Held at a steady level with soft edges, so it's obvious without being
+   * harsh. A little silence first, more over Bluetooth, which otherwise swallows the start of
+   * a sound while its link wakes up. At the media volume, raised to the voice level if set.
    */
   fun chime(ctx: Context, up: Boolean) {
     try {
+      val audio = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
       val rate = 24000
-      val notes = if (up) listOf(660.0 to 0.16, 990.0 to 0.26) else listOf(660.0 to 0.16, 440.0 to 0.26)
+      val notes = if (up) listOf(523.25 to 0.15, 659.25 to 0.15, 783.99 to 0.36) else listOf(659.25 to 0.15, 523.25 to 0.15, 392.0 to 0.36)
+      val lead = if (bluetoothOut(audio)) 0.6 else 0.08
       val samples = ArrayList<Short>()
+      repeat((rate * lead).toInt()) { samples.add(0) }
       for ((freq, secs) in notes) {
         val n = (rate * secs).toInt()
         for (i in 0 until n) {
           val t = i.toDouble() / rate
-          // Quick fade in, gentle fade out (a bell-like tail), with a soft octave for warmth.
-          val env = minOf(1.0, t / 0.012) * Math.exp(-3.5 * t / secs)
-          val v = (Math.sin(2 * Math.PI * freq * t) + 0.25 * Math.sin(4 * Math.PI * freq * t)) / 1.25
-          samples.add((v * env * 0.55 * Short.MAX_VALUE).toInt().toShort())
+          // 10 ms in, 40 ms out, a slight settle in between; a soft octave and fifth for warmth.
+          val edge = minOf(1.0, t / 0.010, (secs - t) / 0.040)
+          val env = edge * (0.75 + 0.25 * Math.exp(-4.0 * t / secs))
+          val v = (Math.sin(2 * Math.PI * freq * t) + 0.3 * Math.sin(4 * Math.PI * freq * t) + 0.12 * Math.sin(6 * Math.PI * freq * t)) / 1.42
+          samples.add((v * env * 0.85 * Short.MAX_VALUE).toInt().toShort())
         }
       }
       val pcm = ShortArray(samples.size) { samples[it] }

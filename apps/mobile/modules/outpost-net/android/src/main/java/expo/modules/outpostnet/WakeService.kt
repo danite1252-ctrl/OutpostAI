@@ -193,6 +193,11 @@ class WakeService : Service() {
       if (Build.VERSION.SDK_INT >= 26 && focus != null) audio.requestAudioFocus(focus)
     } catch (_: Exception) {
     }
+    // A moment for the music to fade out, so the chime isn't lost under it.
+    try {
+      Thread.sleep(300)
+    } catch (_: InterruptedException) {
+    }
     try {
       talk(rec, floor)
     } finally {
