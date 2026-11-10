@@ -1990,6 +1990,8 @@ export interface Routine {
   say_on: string[];
   /** A Home Assistant camera whose picture it looks at each run ("camera.front_door"). */
   camera: string | null;
+  /** Name people in Known faces it sees. */
+  recognise: boolean;
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -2029,6 +2031,7 @@ export interface RoutineInput {
   say_on?: string[];
   /** A Home Assistant camera ("camera.front_door"); "" for none. */
   camera?: string;
+  recognise?: boolean;
   name?: string;
   notify?: Notify;
   persona_id?: string;

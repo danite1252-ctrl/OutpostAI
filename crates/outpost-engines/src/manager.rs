@@ -125,7 +125,20 @@ pub struct EngineManager {
     trainer: Arc<Slot>,
     /// A listening model being downloaded (its id), or why the last download failed.
     listening: Arc<Mutex<ListeningFetch>>,
+    /// Known faces being set up, or why the last try failed.
+    faces: Arc<Mutex<FacesFetch>>,
     gpus: OnceCell<Vec<Gpu>>,
+}
+
+/// Setting up known faces (OpenCV and its two face models, in the voice service).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct FacesFetch {
+    /// Set up and usable.
+    pub ready: bool,
+    /// Being set up now.
+    pub busy: bool,
+    /// Why the last try failed.
+    pub error: Option<String>,
 }
 
 /// A listening (speech-to-text) model download.
@@ -206,6 +219,7 @@ impl EngineManager {
         Arc::new(EngineManager {
             trainer,
             listening: Default::default(),
+            faces: Default::default(),
             models_root: data_dir.join("models"),
             engines_root,
             download_client: reqwest::Client::builder()
@@ -571,6 +585,38 @@ impl EngineManager {
                     f.failed = Some(id);
                     f.error = Some(e);
                 }
+            }
+        });
+        Ok(())
+    }
+
+    /// Known faces: set up, being set up, or why not.
+    pub fn faces(&self) -> FacesFetch {
+        let mut f = self.faces.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        f.ready = voice::faces_ready(&self.models_root);
+        f
+    }
+
+    /// Set up known faces in the background (in the installed voice service).
+    pub fn fetch_faces(self: &Arc<Self>) -> Result<(), EngineError> {
+        {
+            let mut f = self.faces.lock().unwrap_or_else(|p| p.into_inner());
+            if f.busy {
+                return Err(EngineError::Busy);
+            }
+            *f = FacesFetch { busy: true, ..Default::default() };
+        }
+        let me = self.clone();
+        tokio::spawn(async move {
+            let slot = me.slots[&EngineId::Voice].clone();
+            let result =
+                voice::fetch_faces(&me.download_client, &me.engines_root, &slot.dir, &me.models_root, &slot.log).await;
+            let mut f = me.faces.lock().unwrap_or_else(|p| p.into_inner());
+            f.busy = false;
+            if let Err(e) = result {
+                let e = format!("{e:#}");
+                slot.log.push(format!("ERROR: {e}"));
+                f.error = Some(e);
             }
         });
         Ok(())

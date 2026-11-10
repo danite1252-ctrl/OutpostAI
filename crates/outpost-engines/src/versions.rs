@@ -35,6 +35,17 @@ pub const VOICE_VERSION: &str = "1.0.0";
 pub const VOICE_PYTHON: &str = "3.12";
 /// Speech recognition (MIT) and speech (MIT, on ONNX Runtime).
 pub const VOICE_PACKAGES: [&str; 2] = ["faster-whisper==1.2.1", "kokoro-onnx==0.6.1"];
+/// Known faces (Apache 2.0), added to the voice service when they're first set up, so a voice
+/// service installed before them doesn't need reinstalling.
+pub const FACE_PACKAGE: &str = "opencv-python-headless==4.11.0.86";
+/// Finding faces: YuNet (MIT), from OpenCV's model zoo.
+pub const FACE_DETECT_URL: &str =
+    "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx";
+pub const FACE_DETECT_SHA256: &str = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4";
+/// Telling faces apart: SFace (Apache 2.0), from OpenCV's model zoo.
+pub const FACE_MATCH_URL: &str =
+    "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx";
+pub const FACE_MATCH_SHA256: &str = "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79";
 /// Kokoro's model and voices (54), from the kokoro-onnx project's model release.
 pub const KOKORO_MODEL_URL: &str =
     "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/kokoro-v1.0.onnx";

@@ -94,6 +94,8 @@ interface Routine {
   say_on: string[];
   /** A Home Assistant camera whose picture it looks at each run. */
   camera: string | null;
+  /** Name people in Known faces it sees. */
+  recognise: boolean;
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -429,6 +431,7 @@ function RoutineEditor({
   const [allow, setAllow] = useState<Allow>(routine?.allow ?? { tools: true, changes: "wait", commands: true });
   const [sayOn, setSayOn] = useState<string[]>(routine?.say_on ?? []);
   const [camera, setCamera] = useState(routine?.camera ?? "");
+  const [recognise, setRecognise] = useState(routine?.recognise ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -464,7 +467,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, notify, allow, say_on: sayOn, camera, ...myZone() };
+      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, notify, allow, say_on: sayOn, camera, recognise, ...myZone() };
       onSaved(routine ? await api.json<Routine>("PUT", `/api/routines/${routine.id}`, body) : await api.json<Routine>("POST", "/api/routines", body));
     } catch (e) {
       setError(message(e));
@@ -562,6 +565,12 @@ function RoutineEditor({
         <P muted>The persona decides: when there's nothing new it says so quietly in the chat. Failures are always told.</P>
       )}
       <CameraPick api={api} camera={camera} onChange={setCamera} />
+      {(camera || kind === "link") && (
+        <View style={{ gap: 4 }}>
+          <Chip label={recognise ? "Say who it is: on" : "Say who it is: off"} active={recognise} onPress={() => setRecognise((r) => !r)} />
+          <P muted>When the pictures show someone in Known faces (You › People), the persona is told who; anyone else is described.</P>
+        </View>
+      )}
       {notify !== "never" && notify !== "failures" && <SayOutLoud api={api} personaId={personaId} sayOn={sayOn} onChange={setSayOn} />}
       <Text style={s.label}>While it runs on its own (nobody is there to say OK)</Text>
       <View style={{ gap: 6 }}>

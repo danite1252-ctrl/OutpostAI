@@ -247,11 +247,16 @@ async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result
         match pictures {
             Ok(mut p) => {
                 let n = p.len();
+                // Who it is, when the routine says so and someone's been added.
+                let who = if r.recognise { crate::faces::describe(state, &p).await } else { None };
                 content.push_str(&if n > 1 {
                     format!("\n\n[{n} stills from {what}, in order, are attached.]")
                 } else {
                     format!("\n\n[The picture from {what} is attached.]")
                 });
+                if let Some(who) = who {
+                    content.push_str(&format!("\n{who}"));
+                }
                 images.append(&mut p);
             }
             Err(why) => {

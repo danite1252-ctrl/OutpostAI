@@ -328,6 +328,16 @@ PC: **Routines** in the sidebar; on the phone: **You › Routines**).
   seconds after the ring (Google's own chime on your Nest speakers stays the instant one); a
   smaller vision model for this persona makes it quicker. The picture isn't kept,
   except in the routine's chat.
+- **Say who it is (known faces)**: with this on, a routine that looks at a camera or doorbell
+  is told who's in the pictures when it's someone in **Known faces**, and describes anyone
+  else. Owners add people under Settings › Known faces on the PC, or You › People on the phone:
+  a name, then 5 to 10 clear photos of their face (the phone can take them). The first time,
+  **Set up known faces** adds a small add-on to Voice (about 80 MB: OpenCV, with the YuNet and
+  SFace face models), so Voice must be installed. Faces are found and matched on your server;
+  nothing is sent anywhere. When it's only fairly sure, it says "possibly"; when two people are
+  too alike to tell apart, it names neither. At night (infrared), faces are often too washed out
+  to match. Only add people who are happy to be recognised, and remove anyone (or one bad photo)
+  at any time.
 - **Tell me**: each routine sends a notification to your phone and PC when it runs (**Every
   time**), **Only when there's news** (the persona decides; when there's nothing new it says so
   quietly in the chat, and a quick separate check of each result decides; failures are always told), **Only if it fails**, or **Never**.

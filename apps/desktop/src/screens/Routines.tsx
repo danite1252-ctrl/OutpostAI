@@ -591,6 +591,7 @@ function RoutineEditor({
   const [allow, setAllow] = useState<RoutineAllow>(routine?.allow ?? { tools: true, changes: "wait", commands: true });
   const [sayOn, setSayOn] = useState<string[]>(routine?.say_on ?? []);
   const [camera, setCamera] = useState(routine?.camera ?? "");
+  const [recognise, setRecognise] = useState(routine?.recognise ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -617,7 +618,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule(), notify, allow, say_on: sayOn, camera };
+      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule(), notify, allow, say_on: sayOn, camera, recognise };
       onSaved(routine ? await routinesApi.update(token, routine.id, input) : await routinesApi.create(token, input));
     } catch (e) {
       setError(message(e));
@@ -778,6 +779,17 @@ function RoutineEditor({
       </fieldset>
 
       <CameraPick token={token} camera={camera} onChange={setCamera} />
+      {(camera || kind === "link") && (
+        <label className="flex cursor-pointer items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={recognise} onChange={(e) => setRecognise(e.target.checked)} />
+          <span>
+            Say who it is
+            <span className="block text-xs text-muted">
+              When the pictures show someone in Known faces (Settings), the persona is told who; anyone else is described.
+            </span>
+          </span>
+        </label>
+      )}
 
       {notify !== "never" && notify !== "failures" && (
         <SayOutLoud token={token} personaId={personaId} sayOn={sayOn} onChange={setSayOn} />

@@ -308,6 +308,8 @@ pub struct Routine {
     pub say_on: Vec<String>,
     /// A Home Assistant camera ("camera.front_door") whose picture it looks at each run.
     pub camera: Option<String>,
+    /// Name known faces in what it looks at (see `faces`).
+    pub recognise: bool,
     /// Its chat (where each run's reply goes), once it has run.
     pub chat_id: Option<String>,
     /// When it runs next (Unix seconds); none when paused or finished.
@@ -344,6 +346,7 @@ struct Row {
     allow_commands: i64,
     say_on: String,
     camera: Option<String>,
+    recognise: i64,
     chat_id: Option<String>,
     next_at: Option<i64>,
     last_at: Option<i64>,
@@ -374,6 +377,7 @@ impl Row {
             },
             say_on: serde_json::from_str(&self.say_on).unwrap_or_default(),
             camera: self.camera,
+            recognise: self.recognise != 0,
             chat_id: self.chat_id,
             next_at: self.next_at,
             last_at: self.last_at,
@@ -386,7 +390,7 @@ impl Row {
 }
 
 const COLUMNS: &str = "id, account_id, name, persona_id, instructions, schedule, time_zone, utc_offset_minutes, enabled, \
-                       notify, hook_hash IS NOT NULL AS has_link, allow_tools, allow_changes, allow_commands, say_on, camera, chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
+                       notify, hook_hash IS NOT NULL AS has_link, allow_tools, allow_changes, allow_commands, say_on, camera, recognise, chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
 
 /// A new routine, or changes to one (fields left out stay as they are).
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
@@ -408,6 +412,8 @@ pub struct RoutineInput {
     /// A Home Assistant camera whose picture it looks at each run ("camera.front_door"); an
     /// empty string for none.
     pub camera: Option<String>,
+    /// Name known faces in what it looks at.
+    pub recognise: Option<bool>,
     /// The person's time zone ("Australia/Sydney"), from their app.
     pub time_zone: Option<String>,
     /// Minutes ahead of UTC, from their app (used when the zone's name isn't known).
@@ -509,8 +515,8 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: RoutineInput) ->
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO routines (id, account_id, name, persona_id, instructions, schedule, time_zone, utc_offset_minutes, \
-         enabled, notify, allow_tools, allow_changes, allow_commands, say_on, camera, next_at, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         enabled, notify, allow_tools, allow_changes, allow_commands, say_on, camera, recognise, next_at, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(account_id)
@@ -527,6 +533,7 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: RoutineInput) ->
     .bind(allow.commands as i64)
     .bind(say_json(&say_on))
     .bind(&camera)
+    .bind(input.recognise.unwrap_or(false) as i64)
     .bind(next_at)
     .bind(t)
     .bind(t)
@@ -576,7 +583,7 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Routin
     let next_at = next_for(&schedule, enabled, &zone(time_zone.as_deref(), offset), r.last_at);
     sqlx::query(
         "UPDATE routines SET name = ?, persona_id = ?, instructions = ?, schedule = ?, time_zone = ?, utc_offset_minutes = ?, \
-         enabled = ?, notify = ?, allow_tools = ?, allow_changes = ?, allow_commands = ?, say_on = ?, camera = ?, next_at = ?, updated_at = ? \
+         enabled = ?, notify = ?, allow_tools = ?, allow_changes = ?, allow_commands = ?, say_on = ?, camera = ?, recognise = ?, next_at = ?, updated_at = ? \
          WHERE id = ? AND account_id = ?",
     )
     .bind(&name)
@@ -592,6 +599,7 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Routin
     .bind(allow.commands as i64)
     .bind(say_json(&say_on))
     .bind(&camera)
+    .bind(input.recognise.unwrap_or(r.recognise) as i64)
     .bind(next_at)
     .bind(now())
     .bind(id)

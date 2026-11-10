@@ -134,3 +134,22 @@ export async function saveNotify(on: boolean): Promise<void> {
     // Not kept: stays on.
   }
 }
+
+const WHATS_NEW_KEY = "outpost.whats-new.seen.v1";
+
+/** The app version whose "What's new" was last shown (null: never, a first install). */
+export async function loadWhatsNewSeen(): Promise<string | null> {
+  try {
+    return await SecureStore.getItemAsync(WHATS_NEW_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export async function saveWhatsNewSeen(version: string): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(WHATS_NEW_KEY, version);
+  } catch {
+    // Not kept: it may show again.
+  }
+}

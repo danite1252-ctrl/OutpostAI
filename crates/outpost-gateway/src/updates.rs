@@ -568,6 +568,70 @@ pub fn busy(state: &AppState) -> Busy {
     Busy { replies, jobs, commands, processes, summary }
 }
 
+/// One release's notes, for "What's new".
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct ReleaseNotes {
+    pub version: String,
+    pub notes: String,
+    /// When it came out (RFC 3339), if GitHub said.
+    pub date: Option<String>,
+}
+
+/// GitHub's list of releases, kept ten minutes (it's the same for everyone).
+static NOTES: std::sync::Mutex<Option<(std::time::Instant, Vec<ReleaseNotes>)>> = std::sync::Mutex::new(None);
+
+/// The notes of every release after `since`, up to and including `upto`, newest first.
+pub async fn notes_between(since: &str, upto: &str) -> Result<Vec<ReleaseNotes>, String> {
+    let cached = NOTES
+        .lock()
+        .ok()
+        .and_then(|c| c.as_ref().filter(|(at, _)| at.elapsed() < Duration::from_secs(600)).map(|(_, l)| l.clone()));
+    let all = match cached {
+        Some(list) => list,
+        None => {
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .user_agent(concat!("Outpost/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .map_err(|e| e.to_string())?;
+            let r = client
+                .get(format!("https://api.github.com/repos/{RELEASES_REPO}/releases?per_page=40"))
+                .header("accept", "application/vnd.github+json")
+                .send()
+                .await
+                .map_err(|_| "Couldn't reach GitHub.".to_string())?;
+            if !r.status().is_success() {
+                return Err(format!("GitHub said no ({}).", r.status().as_u16()));
+            }
+            let list: Vec<serde_json::Value> = r.json().await.map_err(|_| "GitHub's answer couldn't be read.".to_string())?;
+            let list: Vec<ReleaseNotes> = list
+                .into_iter()
+                .filter(|r| !r["draft"].as_bool().unwrap_or(false))
+                .filter_map(|r| {
+                    Some(ReleaseNotes {
+                        version: r["tag_name"].as_str()?.trim_start_matches('v').to_string(),
+                        notes: r["body"].as_str().unwrap_or("").trim().to_string(),
+                        date: r["published_at"].as_str().map(str::to_string),
+                    })
+                })
+                .collect();
+            if let Ok(mut c) = NOTES.lock() {
+                *c = Some((std::time::Instant::now(), list.clone()));
+            }
+            list
+        }
+    };
+    Ok(between(all, since, upto))
+}
+
+fn between(all: Vec<ReleaseNotes>, since: &str, upto: &str) -> Vec<ReleaseNotes> {
+    let mut out: Vec<ReleaseNotes> =
+        all.into_iter().filter(|r| newer(&r.version, since) && !newer(&r.version, upto) && !r.notes.is_empty()).collect();
+    out.sort_by(|a, b| if newer(&a.version, &b.version) { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater });
+    out.truncate(15);
+    out
+}
+
 /// `a` is a newer version than `b` (`0.10.0` > `0.9.2`; `1.0.0` > `1.0.0-beta.1`).
 pub fn newer(a: &str, b: &str) -> bool {
     fn parts(v: &str) -> (Vec<u64>, bool) {
@@ -593,7 +657,15 @@ pub fn newer(a: &str, b: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{api_route, RELEASES_REPO};
+    use super::{api_route, between, ReleaseNotes, RELEASES_REPO};
+
+    #[test]
+    fn whats_new_is_the_releases_since_the_last_one_seen() {
+        let r = |v: &str, n: &str| ReleaseNotes { version: v.into(), notes: n.into(), date: None };
+        let all = vec![r("1.5.12", "chime"), r("1.5.11", "button"), r("1.5.10", ""), r("1.5.9", "old"), r("1.6.0", "future")];
+        let got: Vec<String> = between(all, "1.5.9", "1.5.12").into_iter().map(|x| x.version).collect();
+        assert_eq!(got, vec!["1.5.12", "1.5.11"]);
+    }
 
     #[test]
     fn the_service_gets_its_out_of_memory_policy_once() {

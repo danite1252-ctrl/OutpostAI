@@ -12,6 +12,7 @@ pub mod chat_files;
 pub mod chats;
 pub mod db;
 pub mod documents;
+pub mod faces;
 pub mod error;
 pub mod jobs;
 pub mod media;

@@ -1,4 +1,5 @@
 import { HomeAssistantVoice } from "../components/wyoming";
+import { KnownFacesPanel } from "../components/faces";
 import { NotificationsPanel } from "../components/notify";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, SERVER, secretProblem, type Account, type EnginesStatus, type Role, type SignInResponse } from "../api";
@@ -66,6 +67,12 @@ export default function Settings({
       {isOwner && (
         <Section id="accounts" title="Accounts" summary="People, invites and PIN resets">
           <AccountsPanel token={auth.token} selfId={auth.account.id} />
+        </Section>
+      )}
+
+      {isOwner && (
+        <Section id="faces" title="Known faces" summary="People Outpost can name at the door">
+          <KnownFacesPanel token={auth.token} />
         </Section>
       )}
 

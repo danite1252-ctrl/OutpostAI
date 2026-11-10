@@ -10,6 +10,7 @@ import Create from "./src/screens/Create";
 import Gallery from "./src/screens/Gallery";
 import Me from "./src/screens/Me";
 import { UpdateBar, usePhoneUpdate } from "./src/updater";
+import { WhatsNew } from "./src/whatsnew";
 import Pair from "./src/screens/Pair";
 import Share, { type ChatStart } from "./src/screens/Share";
 import OutpostNet, { type Shared } from "./modules/outpost-net";
@@ -310,6 +311,7 @@ function Main({
     <View style={s.screen}>
       <Connection api={api} />
       <UpdateBar update={update} />
+      <WhatsNew api={api} />
       <View style={{ flex: 1 }} key={reconnects}>
         {tab === "chat" && (
           <Chat api={api} onError={onError} incoming={chatStart} onIncomingUsed={clearChatStart} openId={chatToOpen} onOpenUsed={clearChatToOpen} />

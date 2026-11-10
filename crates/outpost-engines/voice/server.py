@@ -8,6 +8,9 @@ chat or pictures for the graphics card.
   GET  /voices            {"voices": ["af_heart", ...]}
   POST /stt?language=xx&hotwords=Kat,zk4t&model=small   body: audio in any common format -> {"text", "language", "duration"}
   POST /tts               {"text", "voice", "speed"} -> audio/wav
+  POST /faces             body: a picture (JPEG/PNG) -> {"faces": [{"box", "score", "feature", "crop"}], "width", "height"}
+                          (once known faces are set up: OpenCV with YuNet to find faces and SFace to
+                          describe each as 128 numbers; "crop" is the face, straightened, as base64 JPEG)
 
 `python server.py --prefetch` downloads the speech-recognition model and exits;
 `python server.py --prefetch-stt large-v3-turbo` downloads just that listening model.
@@ -35,6 +38,9 @@ _stt = None
 _stt_name = None
 _tts = None
 _stt_lock = threading.Lock()
+FACES_DIR = os.path.join(MODELS, "faces")
+_faces = None
+_faces_lock = threading.Lock()
 _tts_lock = threading.Lock()
 
 
@@ -123,6 +129,52 @@ def to_wav(samples, rate):
     return out.getvalue()
 
 
+def find_faces(body):
+    """Every face in a picture: where, how sure, its 128 numbers (unit length) and a crop."""
+    global _faces
+    import base64
+
+    import cv2
+    import numpy as np
+
+    img = cv2.imdecode(np.frombuffer(body, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("That isn't a picture Outpost can read.")
+    h, w = img.shape[:2]
+    # Small doorbell stills are enlarged so small faces are found; big photos are shrunk.
+    scale = 1.0
+    if max(w, h) < 640:
+        scale = 640 / max(w, h)
+    elif max(w, h) > 1600:
+        scale = 1600 / max(w, h)
+    if scale != 1.0:
+        img = cv2.resize(img, (max(1, round(w * scale)), max(1, round(h * scale))))
+    with _faces_lock:
+        if _faces is None:
+            det = cv2.FaceDetectorYN.create(os.path.join(FACES_DIR, "face_detection_yunet_2023mar.onnx"), "", (320, 320), 0.75, 0.3, 50)
+            rec = cv2.FaceRecognizerSF.create(os.path.join(FACES_DIR, "face_recognition_sface_2021dec.onnx"), "")
+            _faces = (det, rec)
+        det, rec = _faces
+        det.setInputSize((img.shape[1], img.shape[0]))
+        _, found = det.detect(img)
+        out = []
+        for f in found if found is not None else []:
+            aligned = rec.alignCrop(img, f)
+            feat = rec.feature(aligned).flatten().astype("float32")
+            norm = float(np.linalg.norm(feat)) or 1.0
+            ok, jpg = cv2.imencode(".jpg", aligned, [cv2.IMWRITE_JPEG_QUALITY, 88])
+            out.append(
+                {
+                    "box": [round(float(v) / scale, 1) for v in f[:4]],
+                    "score": round(float(f[14]), 3),
+                    "feature": [round(float(v) / norm, 6) for v in feat],
+                    "crop": base64.b64encode(jpg.tobytes()).decode("ascii") if ok else "",
+                }
+            )
+    out.sort(key=lambda x: x["box"][2] * x["box"][3], reverse=True)
+    return {"faces": out, "width": w, "height": h}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "OutpostVoice/1"
 
@@ -193,6 +245,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(wav)))
                 self.end_headers()
                 self.wfile.write(wav)
+            elif url.path == "/faces":
+                if not os.path.isfile(os.path.join(FACES_DIR, "ready")):
+                    self.send_json(409, {"error": "Known faces aren't set up yet."})
+                    return
+                self.send_json(200, find_faces(body))
             else:
                 self.send_json(404, {"error": "not found"})
         except ValueError as e:

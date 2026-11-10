@@ -104,6 +104,63 @@ pub fn command(dir: &Path, models_root: &Path) -> anyhow::Result<Command> {
     Ok(cmd)
 }
 
+// ------------------------------------------------------------------ known faces
+
+fn faces_dir(models_root: &Path) -> PathBuf {
+    models_dir(models_root).join("faces")
+}
+
+/// Known faces can be used: OpenCV is in the voice service and its two models are here.
+pub fn faces_ready(models_root: &Path) -> bool {
+    faces_dir(models_root).join("ready").is_file()
+}
+
+/// Set up known faces in an installed voice service: OpenCV into its Python, and the two
+/// face models (checked against their known checksums).
+pub(crate) async fn fetch_faces(
+    client: &reqwest::Client,
+    engines_root: &Path,
+    dir: &Path,
+    models_root: &Path,
+    log: &crate::process::Log,
+) -> anyhow::Result<()> {
+    let python = venv_python(&dir.join("venv"));
+    if !python.is_file() {
+        return Err(anyhow!("Voice isn't installed. Install it in Settings › Engines first."));
+    }
+    log.push("Setting up known faces: OpenCV (about 40 MB)");
+    let uv = crate::runtimes::ensure_uv(client, engines_root, |_, _| {}).await?;
+    let uv_root = engines_root.join("uv");
+    let mut cmd = Command::new(uv);
+    cmd.args(["pip", "install", "--python"])
+        .arg(&python)
+        .arg(versions::FACE_PACKAGE)
+        .env("UV_PYTHON_INSTALL_DIR", uv_root.join("python"))
+        .env("UV_CACHE_DIR", uv_root.join("cache"))
+        .env("UV_PYTHON_PREFERENCE", "only-managed")
+        .env("UV_LINK_MODE", "copy")
+        .env("UV_NO_PROGRESS", "1")
+        .env("UV_NO_CONFIG", "1");
+    process::run(cmd, log).await?;
+    let faces = faces_dir(models_root);
+    std::fs::create_dir_all(&faces)?;
+    for (url, name, sha) in [
+        (versions::FACE_DETECT_URL, "face_detection_yunet_2023mar.onnx", versions::FACE_DETECT_SHA256),
+        (versions::FACE_MATCH_URL, "face_recognition_sface_2021dec.onnx", versions::FACE_MATCH_SHA256),
+    ] {
+        let target = faces.join(name);
+        log.push(format!("Downloading {name}"));
+        let got = download::download(client, url, &target, |_, _| {}).await?;
+        if !got.eq_ignore_ascii_case(sha) {
+            let _ = std::fs::remove_file(&target);
+            return Err(anyhow!("{name} didn't match its known checksum, so it wasn't kept."));
+        }
+    }
+    std::fs::write(faces.join("ready"), versions::FACE_PACKAGE)?;
+    log.push("Known faces are ready");
+    Ok(())
+}
+
 // ------------------------------------------------------------------ listening models
 
 /// A speech-to-text model Outpost offers.

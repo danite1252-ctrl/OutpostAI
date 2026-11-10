@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { WhatsNew } from "../components/whatsnew";
 import { refreshServerHosts, SERVER, type SignInResponse } from "../api";
 import { engineReady, useEngines } from "../components/engines";
 import { Avatar, Icon, icons, Mark, StatusDot, Wordmark } from "../components/ui";
@@ -74,6 +75,7 @@ export default function Shell({
   return (
     <div className="flex h-full bg-night">
       <SavedToasts />
+      <WhatsNew token={auth.token} version={version} />
       <nav aria-label="Main" className="flex w-[76px] shrink-0 flex-col items-center gap-1.5 border-r border-line py-4">
         <Mark size={44} className="mb-4" />
         {NAV.filter((n) => n.id !== "routines" || auth.account.role !== "restricted").map((n) => (

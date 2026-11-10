@@ -118,6 +118,24 @@ pub async fn update_status(State(state): State<AppState>, _auth: Auth) -> Json<U
     Json(updates::status(&state).await)
 }
 
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+pub struct NotesQuery {
+    /// The last version this app showed notes for.
+    pub since: String,
+    /// This app's version now.
+    pub upto: String,
+}
+
+/// What's new: the notes of each release after `since`, up to `upto`, newest first.
+#[utoipa::path(get, path = "/api/updates/notes", tag = "system", security(("bearer" = [])), params(NotesQuery),
+    responses((status = 200, body = Vec<crate::updates::ReleaseNotes>), (status = 502, description = "GitHub didn't answer", body = ErrorBody)))]
+pub async fn release_notes(_auth: Auth, axum::extract::Query(q): axum::extract::Query<NotesQuery>) -> ApiResult<Json<Vec<updates::ReleaseNotes>>> {
+    updates::notes_between(&q.since, &q.upto)
+        .await
+        .map(Json)
+        .map_err(|e| ApiError::new(axum::http::StatusCode::BAD_GATEWAY, "unreachable", e))
+}
+
 /// Check GitHub for a newer release now. (Owner.)
 #[utoipa::path(post, path = "/api/updates/check", tag = "system", security(("bearer" = [])),
     responses((status = 200, body = UpdateStatus)))]

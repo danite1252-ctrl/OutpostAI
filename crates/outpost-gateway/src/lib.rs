@@ -35,6 +35,7 @@ pub mod runner;
 pub mod server_tools;
 pub mod setup_code;
 pub mod speak;
+pub mod faces;
 pub mod tailscale;
 pub mod tls;
 pub mod train;
@@ -257,6 +258,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/routines", get(routines::list).post(routines::create))
         .route("/api/activity", get(activity::list))
         .route("/api/speakers", get(speak::list))
+        .route("/api/faces", get(faces::list).post(faces::create))
+        .route("/api/faces/setup", post(faces::setup))
+        .route("/api/faces/samples/{id}", get(faces::sample).delete(faces::delete_sample))
+        .route("/api/faces/{id}", axum::routing::patch(faces::update).delete(faces::delete))
+        .route("/api/faces/{id}/photos", post(faces::add_photo))
         .route("/api/speakers/try", post(speak::try_one))
         .route("/api/accounts/{id}/tool-hours", get(activity::get_hours).put(activity::set_hours))
         .route("/api/routines/quiet", get(routines::get_quiet).put(routines::set_quiet))
@@ -442,6 +448,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/helpers/jobs/{id}/finish", post(helpers::finish))
         .route("/api/updates", get(system::update_status))
         .route("/api/updates/check", post(system::check_updates))
+        .route("/api/updates/notes", get(system::release_notes))
         .route("/api/updates/install", post(system::install_server_update))
         .route("/api/system/restart", post(system::restart))
         .route("/api/system/busy", get(system::busy))
