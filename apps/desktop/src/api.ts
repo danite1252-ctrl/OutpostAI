@@ -1992,6 +1992,8 @@ export interface Routine {
   camera: string | null;
   /** Name people in Known faces it sees. */
   recognise: boolean;
+  /** In quiet hours, don't tell at all (rather than when they end). */
+  quiet_skip: boolean;
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -2032,6 +2034,7 @@ export interface RoutineInput {
   /** A Home Assistant camera ("camera.front_door"); "" for none. */
   camera?: string;
   recognise?: boolean;
+  quiet_skip?: boolean;
   name?: string;
   notify?: Notify;
   persona_id?: string;

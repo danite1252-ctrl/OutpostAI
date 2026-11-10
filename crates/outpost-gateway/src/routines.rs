@@ -114,6 +114,8 @@ pub async fn run(state: AppState, r: Routine, reason: &'static str, details: Opt
     // In my quiet hours, it's told when they end.
     let finished = outpost_core::now();
     let tell_at = routines::tell_time(&state.pool, &r, finished).await;
+    // Or not at all, for news that's stale by then (the doorbell): it stays in the chat.
+    let tell = tell && !(r.quiet_skip && tell_at > finished);
     // Said out loud on its speakers too, when it's told now (not in quiet hours).
     if ok && tell && tell_at <= finished {
         if let Some(text) = &note {

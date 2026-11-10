@@ -475,7 +475,7 @@ function HomeAssistantCall({ url, routine: r }: { url: string; routine: Routine 
 }
 
 /** Ready-made routines to start from (the person fills in the parts in <angle brackets>). */
-const READY: { name: string; instructions: string; schedule: Schedule; notify: Notify; needs?: string }[] = [
+const READY: { name: string; instructions: string; schedule: Schedule; notify: Notify; needs?: string; quietSkip?: boolean }[] = [
   {
     name: "Morning brief",
     instructions: "Give me a short morning brief: today's weather where I live, and anything on my calendar today. A few lines, no more.",
@@ -512,6 +512,7 @@ const READY: { name: string; instructions: string; schedule: Schedule; notify: N
     schedule: { kind: "link" },
     notify: "always",
     needs: "Home Assistant, a camera, and a persona whose model can see",
+    quietSkip: true,
   },
   {
     name: "Reminder",
@@ -579,6 +580,7 @@ function RoutineEditor({
     setName(t.name);
     setInstructions(t.instructions);
     setNotify(t.notify);
+    setQuietSkip(t.quietSkip ?? false);
     setKind(kindOf(sc));
     if (sc.kind === "days") {
       setTime(sc.time);
@@ -592,6 +594,7 @@ function RoutineEditor({
   const [sayOn, setSayOn] = useState<string[]>(routine?.say_on ?? []);
   const [camera, setCamera] = useState(routine?.camera ?? "");
   const [recognise, setRecognise] = useState(routine?.recognise ?? false);
+  const [quietSkip, setQuietSkip] = useState(routine?.quiet_skip ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -618,7 +621,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule(), notify, allow, say_on: sayOn, camera, recognise };
+      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule(), notify, allow, say_on: sayOn, camera, recognise, quiet_skip: quietSkip };
       onSaved(routine ? await routinesApi.update(token, routine.id, input) : await routinesApi.create(token, input));
     } catch (e) {
       setError(message(e));
@@ -789,6 +792,20 @@ function RoutineEditor({
             </span>
           </span>
         </label>
+      )}
+
+      {notify !== "never" && (
+        <fieldset className="flex flex-col gap-1 text-sm">
+          <legend className="mb-1 text-sm text-muted">In quiet hours</legend>
+          <label className="flex cursor-pointer items-center gap-2">
+            <input type="radio" name="quiet" checked={!quietSkip} onChange={() => setQuietSkip(false)} />
+            Tell me when they end
+          </label>
+          <label className="flex cursor-pointer items-center gap-2">
+            <input type="radio" name="quiet" checked={quietSkip} onChange={() => setQuietSkip(true)} />
+            Skip it: nothing is sent or said, and the run stays in its chat (for news that's stale by morning, like the doorbell)
+          </label>
+        </fieldset>
       )}
 
       {notify !== "never" && notify !== "failures" && (

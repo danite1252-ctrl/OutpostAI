@@ -28,7 +28,7 @@ const EVENTS = [
 ] as const;
 
 /** Ready-made routines to start from (the person fills in the parts in <angle brackets>). */
-const READY: { name: string; instructions: string; schedule: Schedule; notify: Notify; needs?: string }[] = [
+const READY: { name: string; instructions: string; schedule: Schedule; notify: Notify; needs?: string; quietSkip?: boolean }[] = [
   {
     name: "Morning brief",
     instructions: "Give me a short morning brief: today's weather where I live, and anything on my calendar today. A few lines, no more.",
@@ -65,6 +65,7 @@ const READY: { name: string; instructions: string; schedule: Schedule; notify: N
     schedule: { kind: "link" },
     notify: "always",
     needs: "Home Assistant, a camera, and a persona whose model can see",
+    quietSkip: true,
   },
   {
     name: "Reminder",
@@ -96,6 +97,8 @@ interface Routine {
   camera: string | null;
   /** Name people in Known faces it sees. */
   recognise: boolean;
+  /** In quiet hours, don't tell at all (rather than when they end). */
+  quiet_skip: boolean;
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -415,6 +418,7 @@ function RoutineEditor({
     setName(t.name);
     setInstructions(t.instructions);
     setNotify(t.notify);
+    setQuietSkip(t.quietSkip ?? false);
     setKind(kindOf(sc));
     if (sc.kind === "days") {
       setTime(sc.time);
@@ -432,6 +436,7 @@ function RoutineEditor({
   const [sayOn, setSayOn] = useState<string[]>(routine?.say_on ?? []);
   const [camera, setCamera] = useState(routine?.camera ?? "");
   const [recognise, setRecognise] = useState(routine?.recognise ?? false);
+  const [quietSkip, setQuietSkip] = useState(routine?.quiet_skip ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -467,7 +472,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, notify, allow, say_on: sayOn, camera, recognise, ...myZone() };
+      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, notify, allow, say_on: sayOn, camera, recognise, quiet_skip: quietSkip, ...myZone() };
       onSaved(routine ? await api.json<Routine>("PUT", `/api/routines/${routine.id}`, body) : await api.json<Routine>("POST", "/api/routines", body));
     } catch (e) {
       setError(message(e));
@@ -569,6 +574,16 @@ function RoutineEditor({
         <View style={{ gap: 4 }}>
           <Chip label={recognise ? "Say who it is: on" : "Say who it is: off"} active={recognise} onPress={() => setRecognise((r) => !r)} />
           <P muted>When the pictures show someone in Known faces (You › People), the persona is told who; anyone else is described.</P>
+        </View>
+      )}
+      {notify !== "never" && (
+        <View style={{ gap: 4 }}>
+          <Text style={s.label}>In quiet hours</Text>
+          <View style={[s.row, { flexWrap: "wrap" }]}>
+            <Chip label="Tell me when they end" active={!quietSkip} onPress={() => setQuietSkip(false)} />
+            <Chip label="Skip it" active={quietSkip} onPress={() => setQuietSkip(true)} />
+          </View>
+          <P muted>Skip it for news that's stale by morning, like the doorbell: nothing is sent or said, and the run stays in its chat.</P>
         </View>
       )}
       {notify !== "never" && notify !== "failures" && <SayOutLoud api={api} personaId={personaId} sayOn={sayOn} onChange={setSayOn} />}
