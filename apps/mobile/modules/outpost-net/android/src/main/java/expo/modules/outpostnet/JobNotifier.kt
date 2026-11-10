@@ -191,6 +191,8 @@ object JobNotifier {
    */
   private fun sayAloud(ctx: Context, client: OkHttpClient, host: String, port: Int, token: String, text: String, voice: String) {
     if (host.isEmpty()) return
+    // Turned off on this phone, or the phone's been quietened: the notification is enough.
+    if (!VoiceVolume.sayNews(ctx) || VoiceVolume.quietened(ctx)) return
     var file: java.io.File? = null
     var player: android.media.MediaPlayer? = null
     try {

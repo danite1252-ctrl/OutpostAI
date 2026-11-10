@@ -347,6 +347,8 @@ class OutpostNetModule : Module() {
     }
     Function("wakeStatus") { WakeService.status(context) }
     Function("voiceLevel") { VoiceVolume.level(context) }
+    Function("sayNews") { VoiceVolume.sayNews(context) }
+    Function("setSayNews") { on: Boolean -> VoiceVolume.setSayNews(context, on) }
     Function("setVoiceLevel") { percent: Int -> VoiceVolume.setLevel(context, percent) }
     AsyncFunction("voiceChime") { Thread { VoiceVolume.chime(context, true) }.start() }
     AsyncFunction("wakeCheck") { promise: Promise ->

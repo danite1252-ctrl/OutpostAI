@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Alert, ScrollView, Text, View } from "react-native";
+import OutpostNet from "../../modules/outpost-net";
 import { checkWords } from "../words";
 import { APP_VERSION } from "../version";
 import type { Outpost } from "../outpost";
@@ -211,6 +212,7 @@ export default function Me({
           The phone checks every few minutes while something is running, and every 15 minutes otherwise.
         </P>
         {notifyNote && <P muted>{notifyNote}</P>}
+        <SayNews />
       </View>
       <View style={s.card}>
         <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Troubleshooting</Text>
@@ -234,5 +236,29 @@ export default function Me({
       <P muted>Outpost for Android {APP_VERSION}</P>
       <ErrorText>{error}</ErrorText>
     </ScrollView>
+  );
+}
+
+/** Routine news said out loud on this phone (when a routine has On my phone ticked). */
+function SayNews() {
+  const [on, setOn] = useState(() => OutpostNet.sayNews?.() ?? true);
+  if (!OutpostNet.setSayNews) return null;
+  return (
+    <>
+      <View style={s.row}>
+        <Chip
+          label={on ? "Say routine news out loud: on" : "Say routine news out loud: off"}
+          active={on}
+          onPress={() => {
+            OutpostNet.setSayNews!(!on);
+            setOn(!on);
+          }}
+        />
+      </View>
+      <P muted>
+        For routines with On my phone ticked. It's never said while the phone is on silent or vibrate, in Do Not Disturb, or with the media
+        volume down: then it's a notification only.
+      </P>
+    </>
   );
 }

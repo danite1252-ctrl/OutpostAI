@@ -20,6 +20,29 @@ object VoiceVolume {
     ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(KEY, percent.coerceIn(0, 100)).apply()
   }
 
+  private const val NEWS_KEY = "say_news"
+
+  /** Routine news set to be said on the phone is said on this one (on unless turned off). */
+  fun sayNews(ctx: Context): Boolean = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(NEWS_KEY, true)
+
+  fun setSayNews(ctx: Context, on: Boolean) {
+    ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(NEWS_KEY, on).apply()
+  }
+
+  /**
+   * The phone has been quietened: on silent or vibrate, in Do Not Disturb, or with the media
+   * volume at nothing. Routine news then only notifies (and the volume is never raised for it).
+   */
+  fun quietened(ctx: Context): Boolean = try {
+    val audio = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+    audio.ringerMode != AudioManager.RINGER_MODE_NORMAL ||
+      nm.currentInterruptionFilter != android.app.NotificationManager.INTERRUPTION_FILTER_ALL ||
+      audio.getStreamVolume(AudioManager.STREAM_MUSIC) == 0
+  } catch (_: Exception) {
+    false
+  }
+
   private val lock = Any()
   private var depth = 0
   private var saved = -1

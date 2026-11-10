@@ -153,6 +153,9 @@ declare class OutpostNetModule extends NativeModule<Events> {
   wakeStatus?(): WakeStatus;
   /** How loud Outpost speaks with the app closed: 0 = the phone's media volume, else at least this %. */
   voiceLevel?(): number;
+  /** Routine news set to be said on the phone is said on this one (on unless turned off). */
+  sayNews?(): boolean;
+  setSayNews?(on: boolean): void;
   setVoiceLevel?(percent: number): void;
   /** Play the wake word's "listening" chime, at that level. */
   voiceChime?(): Promise<void>;
