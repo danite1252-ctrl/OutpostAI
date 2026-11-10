@@ -329,6 +329,8 @@ export interface Chat {
   /** Files in chats: "ask" before changing files, or "auto". */
   file_mode?: "ask" | "auto";
   updated_at: number;
+  /** One Outpost keeps for itself (a routine's, or voice), listed apart. */
+  automatic?: "routine" | "voice" | null;
 }
 
 export interface Attachment {

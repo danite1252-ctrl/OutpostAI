@@ -209,6 +209,7 @@ async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result
                 .await
                 .map_err(|e| format!("Couldn't make its chat: {e}"))?;
             routines::set_chat(&state.pool, &r.id, &c.id).await.map_err(|e| e.to_string())?;
+            let _ = outpost_core::chats::set_automatic(&state.pool, &c.id, "routine").await;
             c
         }
     };

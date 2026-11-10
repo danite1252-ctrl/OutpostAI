@@ -37,6 +37,8 @@ export default function Chat({
   const [chats, setChats] = useState<ChatT[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [open, setOpen] = useState<ChatT | null>(null);
+  /** The routines-and-voice section of the list, opened when wanted. */
+  const [autoOpen, setAutoOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // What the new chat starts with (from a share), until it's opened.
   const [starting, setStarting] = useState<ChatStart | null>(null);
@@ -173,6 +175,29 @@ export default function Chat({
     );
   }
 
+  const chatRow = (c: ChatT) => {
+    const p = personas.find((x) => x.id === c.persona_id);
+    return (
+      <Pressable
+        key={c.id}
+        accessibilityRole="button"
+        accessibilityHint="Long-press to rename or delete"
+        onPress={() => setOpen(c)}
+        onLongPress={() => chatMenu(c)}
+        delayLongPress={450}
+        style={({ pressed }) => [s.card, s.row, pressed && { backgroundColor: C.raised }]}
+      >
+        <Avatar name={p?.name ?? "AI"} color={p?.avatar_color ?? C.amber} />
+        <View style={{ flex: 1 }}>
+          <Text numberOfLines={1} style={{ color: C.ink, fontSize: 16 }}>
+            {c.title}
+          </Text>
+          <Text style={{ color: C.muted, fontSize: 13 }}>{p?.name ?? "No persona"}</Text>
+        </View>
+      </Pressable>
+    );
+  };
+
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.pad}>
       <H1>Chat</H1>
@@ -196,28 +221,23 @@ export default function Chat({
         {personas.length === 0 && <Button title="New chat" onPress={() => void start()} />}
       </View>
       <ErrorText>{error}</ErrorText>
-      {chats.map((c) => {
-        const p = personas.find((x) => x.id === c.persona_id);
-        return (
+      {chats.filter((c) => !c.automatic).map(chatRow)}
+      {chats.some((c) => c.automatic) && (
+        // Routines' and voice chats: out of the way at the bottom, opened when wanted.
+        <>
           <Pressable
-            key={c.id}
             accessibilityRole="button"
-            accessibilityHint="Long-press to rename or delete"
-            onPress={() => setOpen(c)}
-            onLongPress={() => chatMenu(c)}
-            delayLongPress={450}
-            style={({ pressed }) => [s.card, s.row, pressed && { backgroundColor: C.raised }]}
+            accessibilityState={{ expanded: autoOpen }}
+            onPress={() => setAutoOpen((o) => !o)}
+            style={[s.row, { paddingVertical: 10, borderTopWidth: 1, borderTopColor: C.line, marginTop: 4 }]}
           >
-            <Avatar name={p?.name ?? "AI"} color={p?.avatar_color ?? C.amber} />
-            <View style={{ flex: 1 }}>
-              <Text numberOfLines={1} style={{ color: C.ink, fontSize: 16 }}>
-                {c.title}
-              </Text>
-              <Text style={{ color: C.muted, fontSize: 13 }}>{p?.name ?? "No persona"}</Text>
-            </View>
+            <Text style={{ color: C.muted, fontSize: 15, flex: 1 }}>
+              {autoOpen ? "▾" : "▸"}  Routines and voice ({chats.filter((c) => c.automatic).length})
+            </Text>
           </Pressable>
-        );
-      })}
+          {autoOpen && chats.filter((c) => c.automatic).map(chatRow)}
+        </>
+      )}
       {chats.length === 0 ? <P muted>No chats yet. Everything stays on your PC.</P> : <P muted>Long-press a chat to rename or delete it.</P>}
       <Modal visible={!!renaming} transparent animationType="fade" onRequestClose={() => setRenaming(null)}>
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", padding: 24 }}>

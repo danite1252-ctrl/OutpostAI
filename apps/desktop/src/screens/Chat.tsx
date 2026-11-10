@@ -34,6 +34,15 @@ import { Avatar, Button, ErrorNote, areYouSure } from "../components/ui";
 import { hasModel } from "./Personas";
 
 const CONTEXT_KEY = "outpost.chat.context";
+const AUTO_KEY = "outpost.chat.automatic";
+
+function loadAutoOpen() {
+  try {
+    return localStorage.getItem(AUTO_KEY) === "open";
+  } catch {
+    return false;
+  }
+}
 
 function loadShowContext() {
   try {
@@ -78,6 +87,12 @@ export default function Chat({
   const [installed, setInstalled] = useState<InstalledModel[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showContext, setShowContext] = useState(loadShowContext);
+  // The routines-and-voice section: opened when wanted, and whenever one of its chats is open.
+  const [autoOpen, setAutoOpen] = useState(loadAutoOpen);
+  const activeIsAutomatic = chats.some((c) => c.id === activeId && c.automatic);
+  useEffect(() => {
+    if (activeIsAutomatic) setAutoOpen(true);
+  }, [activeIsAutomatic]);
   const [docsOpen, setDocsOpen] = useState(false);
   const [fromGallery, setFromGallery] = useState(false);
   const [handsFree, setHandsFree] = useState(false);
@@ -107,7 +122,7 @@ export default function Chat({
 
   useEffect(() => {
     void loadLists().then((c) => {
-      if (c.length > 0) setActiveId((id) => id ?? c[0].id);
+      if (c.length > 0) setActiveId((id) => id ?? (c.find((x) => !x.automatic) ?? c[0]).id);
     });
   }, [loadLists]);
   // Opened from elsewhere (a routine's chat): fetch the list (it may be new) and show it.
@@ -490,12 +505,17 @@ export default function Chat({
     }
   }
 
-  return (
-    <div className="flex h-full min-h-0">
-      <aside aria-label="Chats" className="flex w-72 shrink-0 flex-col gap-3 border-r border-line bg-surface p-4">
-        <Button onClick={() => void newChat()}>+ New chat</Button>
-        <ul className="flex min-h-0 flex-1 flex-col gap-1 overflow-auto">
-          {chats.map((c) => {
+  const toggleAuto = (open: boolean) => {
+    setAutoOpen(open);
+    try {
+      localStorage.setItem(AUTO_KEY, open ? "open" : "closed");
+    } catch {
+      // Not remembered: fine.
+    }
+  };
+  const mine = chats.filter((c) => !c.automatic);
+  const automatic = chats.filter((c) => c.automatic);
+  const chatRow = (c: ChatT) => {
             const p = personas.find((x) => x.id === c.persona_id);
             return (
               <li key={c.id} className="group flex items-center gap-1">
@@ -557,8 +577,34 @@ export default function Chat({
                 </button>
               </li>
             );
-          })}
+  };
+
+  return (
+    <div className="flex h-full min-h-0">
+      <aside aria-label="Chats" className="flex w-72 shrink-0 flex-col gap-3 border-r border-line bg-surface p-4">
+        <Button onClick={() => void newChat()}>+ New chat</Button>
+        <ul className="flex min-h-0 flex-1 flex-col gap-1 overflow-auto">
+          {mine.map(chatRow)}
+          {mine.length === 0 && <li className="px-3 py-2 text-xs text-muted">No chats yet.</li>}
         </ul>
+        {automatic.length > 0 && (
+          // Routines' and voice chats: out of the way, at the bottom, opened when wanted.
+          <div className={`flex min-h-0 flex-col border-t border-line pt-2 ${autoOpen ? "max-h-[45%]" : ""}`}>
+            <button
+              type="button"
+              aria-expanded={autoOpen}
+              onClick={() => toggleAuto(!autoOpen)}
+              className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-left text-xs text-muted hover:bg-raised/60 hover:text-ink"
+            >
+              <span aria-hidden className={`inline-block transition-transform ${autoOpen ? "rotate-90" : ""}`}>
+                ›
+              </span>
+              <span className="flex-1">Routines and voice</span>
+              <span className="rounded-full border border-line px-1.5">{automatic.length}</span>
+            </button>
+            {autoOpen && <ul className="mt-1 flex min-h-0 flex-col gap-1 overflow-auto">{automatic.map(chatRow)}</ul>}
+          </div>
+        )}
       </aside>
 
       <section
@@ -924,7 +970,7 @@ function Bubble({
   const { text: content, routine } = routineView(role, message.content);
   if (role === "user") {
     return (
-      <div className="group flex max-w-[80%] flex-col items-end gap-2 self-end">
+      <div className="group flex max-w-[80%] min-w-0 flex-col items-end gap-2 self-end">
         {attachments.length > 0 && (
           <div className="flex flex-wrap justify-end gap-2">
             {attachments.map((a) => (
@@ -933,7 +979,12 @@ function Bubble({
           </div>
         )}
         {routine !== null && <span className="text-xs text-muted">Routine: {routine}</span>}
-        {content && <div className="rounded-2xl rounded-br-md bg-raised px-4 py-3 whitespace-pre-wrap">{content}</div>}
+        {content && (
+          // Long unbroken text (a link, a path) wraps instead of pushing the bubble off the left edge.
+          <div className="max-w-full rounded-2xl rounded-br-md bg-raised px-4 py-3 whitespace-pre-wrap [overflow-wrap:anywhere]">
+            {content}
+          </div>
+        )}
         {onDelete && <DeleteButton onClick={onDelete} label="Delete this message and its reply" />}
       </div>
     );
@@ -941,7 +992,7 @@ function Bubble({
   return (
     <div className="group flex gap-3">
       <Avatar name={persona?.name ?? "AI"} color={persona?.avatar_color ?? "#FFB547"} size={32} />
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
+      <div className="flex min-w-0 flex-1 flex-col gap-2 [overflow-wrap:anywhere]">
         {thinking && (
           <details className="text-sm" open={live && !content}>
             <summary className="cursor-pointer text-muted">{live && !content ? "Thinking…" : "Show reasoning"}</summary>

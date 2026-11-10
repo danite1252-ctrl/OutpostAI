@@ -299,6 +299,8 @@ export interface Chat {
   updated_at: number;
   /** How replies change files in the chat's folders: ask first, or straight away. */
   file_mode?: "ask" | "auto";
+  /** One Outpost keeps for itself (a routine's, or voice), listed apart. */
+  automatic?: "routine" | "voice" | null;
 }
 
 export interface Attachment {

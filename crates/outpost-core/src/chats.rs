@@ -19,6 +19,9 @@ pub struct Chat {
     /// How replies change files in the chat's folders: `ask` (wait for Apply) or `auto`.
     #[serde(default = "ask")]
     pub file_mode: String,
+    /// One Outpost keeps for itself, not one you started: "routine" or "voice".
+    #[serde(default)]
+    pub automatic: Option<String>,
 }
 
 fn ask() -> String {
@@ -52,7 +55,13 @@ pub struct Message {
     pub files: Vec<crate::chat_files::FileAction>,
 }
 
-const CHAT_COLS: &str = "id, account_id, persona_id, title, model, created_at, updated_at, file_mode";
+const CHAT_COLS: &str = "id, account_id, persona_id, title, model, created_at, updated_at, file_mode, automatic";
+
+/// Mark a chat as one Outpost keeps for itself ("routine", "voice"), listed apart in the apps.
+pub async fn set_automatic(pool: &SqlitePool, chat_id: &str, kind: &str) -> CoreResult<()> {
+    sqlx::query("UPDATE chats SET automatic = ? WHERE id = ?").bind(kind).bind(chat_id).execute(pool).await?;
+    Ok(())
+}
 
 /// "Untitled chat", or the start of the first message.
 pub fn title_from(text: &str) -> String {
@@ -108,6 +117,7 @@ pub async fn create(
         created_at: t,
         updated_at: t,
         file_mode: "ask".into(),
+        automatic: None,
     };
     sqlx::query(
         "INSERT INTO chats (id, account_id, persona_id, title, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",

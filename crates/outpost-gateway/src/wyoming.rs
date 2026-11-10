@@ -567,6 +567,7 @@ async fn voice_chat(state: &AppState, agent: &VoiceAgent, place: &Place) -> Resu
     let c = outpost_core::chats::create(&state.pool, &agent.account_id, Some(&agent.persona_id), Some(place.title))
         .await
         .map_err(|e| format!("Couldn't make the voice chat: {e}"))?;
+    let _ = outpost_core::chats::set_automatic(&state.pool, &c.id, "voice").await;
     let _ = outpost_core::settings::set(&state.pool, &key, &c.id).await;
     Ok(c.id)
 }
