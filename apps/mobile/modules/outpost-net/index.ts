@@ -151,6 +151,11 @@ declare class OutpostNetModule extends NativeModule<Events> {
   /** Turn it back on if it was on (not switched off) and isn't listening: when the app opens. */
   wakeResume?(hosts: string[], port: number, fingerprint: string, token: string): void;
   wakeStatus?(): WakeStatus;
+  /** How loud Outpost speaks with the app closed: 0 = the phone's media volume, else at least this %. */
+  voiceLevel?(): number;
+  setVoiceLevel?(percent: number): void;
+  /** Play the wake word's "listening" chime, at that level. */
+  voiceChime?(): Promise<void>;
   /** The detector on a recording of "Alexa" and of other words: it works on this phone. */
   wakeCheck?(): Promise<{ heard: number; other: number; ok: boolean }>;
   stopConversation(): void;

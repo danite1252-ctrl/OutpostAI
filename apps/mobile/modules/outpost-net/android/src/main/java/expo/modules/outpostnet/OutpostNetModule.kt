@@ -346,6 +346,9 @@ class OutpostNetModule : Module() {
       WakeService.resume(context, hosts, port, fingerprint, token)
     }
     Function("wakeStatus") { WakeService.status(context) }
+    Function("voiceLevel") { VoiceVolume.level(context) }
+    Function("setVoiceLevel") { percent: Int -> VoiceVolume.setLevel(context, percent) }
+    AsyncFunction("voiceChime") { Thread { VoiceVolume.chime(context, true) }.start() }
     AsyncFunction("wakeCheck") { promise: Promise ->
       Thread {
         try {

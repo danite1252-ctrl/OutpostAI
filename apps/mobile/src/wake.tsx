@@ -10,6 +10,42 @@ import { type Outpost } from "./outpost";
 import { type Saved } from "./store";
 import { Button, C, Chip, ErrorText, P, s } from "./ui";
 
+const LEVELS: { label: string; percent: number }[] = [
+  { label: "Phone's media volume", percent: 0 },
+  { label: "At least half", percent: 50 },
+  { label: "Loud", percent: 75 },
+  { label: "Loudest", percent: 100 },
+];
+
+/** How loud it speaks with the app closed (the chime, replies, things said on the phone). */
+function VoiceLevel() {
+  const [level, setLevel] = useState(() => OutpostNet.voiceLevel?.() ?? 0);
+  if (!OutpostNet.setVoiceLevel) return null;
+  return (
+    <>
+      <Text style={s.label}>How loud it speaks</Text>
+      <View style={[s.row, { flexWrap: "wrap" }]}>
+        {LEVELS.map((x) => (
+          <Chip
+            key={x.label}
+            label={x.label}
+            active={level === x.percent}
+            onPress={() => {
+              OutpostNet.setVoiceLevel!(x.percent);
+              setLevel(x.percent);
+              void OutpostNet.voiceChime?.();
+            }}
+          />
+        ))}
+      </View>
+      <P muted>
+        The chime and replies play at the phone's media volume, which is often turned down when nothing's playing. With a level picked,
+        Outpost turns the media volume up to at least that while it speaks, and back afterwards. In the car, it's the car's volume.
+      </P>
+    </>
+  );
+}
+
 interface Persona {
   id: string;
   name: string;
@@ -151,9 +187,12 @@ export function WakeScreen({ api, saved, onClose }: { api: Outpost; saved: Saved
         ))}
       </View>
       {on && <P muted>Changes take effect when you stop and start it again.</P>}
+      <VoiceLevel />
       <P muted>
-        It beeps when it hears the word: then say what you want. Before it beeps, your Outpost checks the word was really said
-        (TV can sound like it to the phone), so the beep comes about half a second after the word. Anything that asks first (a lock, a door, an alarm) is asked aloud: say
+        It chimes when it hears the word (two rising notes): then say what you want. Two falling notes mean it couldn't reach your
+        Outpost or didn't get that. Before it chimes, your Outpost checks the word was really said
+        (TV can sound like it to the phone), so the chime comes about half a second after the word. While it's on, news set to be said on this phone (a routine, the
+        doorbell) is said as soon as it's ready. Anything that asks first (a lock, a door, an alarm) is asked aloud: say
         yes or no. The talk is kept in a chat called "Phone voice". Talk and the Mic button pause it while they're in use. After the phone
         restarts, Android doesn't let it start by itself: it comes back on when you next open Outpost (unless you stopped it).
       </P>

@@ -120,7 +120,7 @@ object JobNotifier {
    * about long ones, and return how many are still waiting or running; null if it can't be
    * reached.
    */
-  fun look(ctx: Context, wait: Int): Int? {
+  fun look(ctx: Context, wait: Int, watch: Boolean = false): Int? {
     val p = prefs(ctx)
     val token = p.getString("token", null)?.let { open(it) } ?: return null
     val hosts = p.getString("hosts", "")!!.split(",").filter { it.isNotBlank() }
@@ -134,7 +134,7 @@ object JobNotifier {
     for (host in hosts) {
       try {
         val req = Request.Builder()
-          .url("https://$host:$port/api/jobs/finished?since=$since&wait=$wait")
+          .url("https://$host:$port/api/jobs/finished?since=$since&wait=$wait" + (if (watch) "&watch=true" else ""))
           .header("Authorization", "Bearer $token")
           .header("Accept", "application/json")
           .build()
@@ -214,7 +214,7 @@ object JobNotifier {
       player = p
       p.setAudioAttributes(
         android.media.AudioAttributes.Builder()
-          .setUsage(android.media.AudioAttributes.USAGE_ASSISTANT)
+          .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
           .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
           .build()
       )
@@ -222,8 +222,10 @@ object JobNotifier {
       p.setOnCompletionListener { done.countDown() }
       p.setOnErrorListener { _, _, _ -> done.countDown(); true }
       p.prepare()
-      p.start()
-      done.await(3, TimeUnit.MINUTES)
+      VoiceVolume.loud(ctx) {
+        p.start()
+        done.await(3, TimeUnit.MINUTES)
+      }
     } catch (_: Exception) {
       // Couldn't fetch or play it: the notification still says it.
     } finally {

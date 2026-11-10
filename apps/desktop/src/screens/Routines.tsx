@@ -436,7 +436,9 @@ function HomeAssistantCall({ url, routine: r }: { url: string; routine: Routine 
     "    method: POST",
     "    verify_ssl: false",
     '    content_type: "application/json"',
-    `    payload: '${payload}'`,
+    // A folded block, not a quoted string: in single quotes, YAML would turn the template's '' into '.
+    "    payload: >-",
+    `      ${payload}`,
   ].join("\n");
   // A Nest doorbell: its ring, with the clip preview's picture passed on.
   const nest = [

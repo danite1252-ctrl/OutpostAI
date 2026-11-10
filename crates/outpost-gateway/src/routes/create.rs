@@ -578,6 +578,10 @@ pub struct FinishedQuery {
     /// Wait up to this many seconds (at most 50) for one to finish, rather than answering
     /// "none" straight away: a phone holding this open hears about a job the moment it ends.
     pub wait: Option<u64>,
+    /// Keep waiting even with nothing running, for news that can come any time (a routine started
+    /// by a doorbell): a phone that's listening anyway (its wake word) holds this open.
+    #[serde(default)]
+    pub watch: bool,
 }
 
 /// A finished job, worded for a notification.
@@ -633,17 +637,21 @@ pub async fn finished_jobs(State(state): State<AppState>, auth: Auth, Query(q): 
             .filter(|j| j.status != JobStatus::Cancelled)
             .collect();
         let unfinished = jobs::unfinished(&state.pool, &auth.account.id).await?;
-        // Answer when something finished, nothing's left to wait for, or the wait is up.
-        if !found.is_empty() || unfinished == 0 || std::time::Instant::now() >= until {
+        let told = outpost_core::routines::told_since(&state.pool, &auth.account.id, q.since, now).await.unwrap_or_default();
+        // Answer when something finished, nothing's left to wait for (unless watching for news),
+        // or the wait is up.
+        if !found.is_empty() || !told.is_empty() || (unfinished == 0 && !q.watch) || std::time::Instant::now() >= until {
             let mut out = Vec::new();
             for job in found {
                 out.push(finished_view(&state, job).await);
             }
             // Routines' runs worth telling about, worded the same way.
-            for run in outpost_core::routines::told_since(&state.pool, &auth.account.id, q.since, now).await.unwrap_or_default() {
+            for run in told {
                 let ok = run.status == "ok";
                 let on_phone = serde_json::from_str::<Vec<String>>(&run.say_on).unwrap_or_default().iter().any(|s| s == "phone");
-                let say = (ok && on_phone && run.on_time)
+                // Said only while it's news: not when the phone hears about it much later.
+                let fresh = now - run.finished_at <= 120;
+                let say = (ok && on_phone && run.on_time && fresh)
                     .then(|| crate::speak::spoken(run.note.as_deref().unwrap_or_default()))
                     .filter(|t| !t.trim().is_empty());
                 let say_voice = match &say {

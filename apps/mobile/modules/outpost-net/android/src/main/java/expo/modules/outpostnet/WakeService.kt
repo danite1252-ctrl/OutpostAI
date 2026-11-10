@@ -15,7 +15,6 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.media.MediaRecorder
-import android.media.ToneGenerator
 import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
@@ -44,6 +43,7 @@ import kotlin.math.sqrt
 class WakeService : Service() {
   @Volatile private var running = false
   private var worker: Thread? = null
+  private var watcher: Thread? = null
   private var lock: PowerManager.WakeLock? = null
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -70,6 +70,9 @@ class WakeService : Service() {
       lock = l
       worker = Thread({ listen() }, "outpost-wake").apply { start() }
     }
+    if (watcher?.isAlive != true) {
+      watcher = Thread({ watch() }, "outpost-wake-watch").apply { start() }
+    }
     return START_STICKY
   }
 
@@ -77,9 +80,24 @@ class WakeService : Service() {
     alive = false
     running = false
     worker?.interrupt()
+    watcher?.interrupt()
     lock?.let { if (it.isHeld) it.release() }
     lock = null
     super.onDestroy()
+  }
+
+  /**
+   * While it listens anyway, it also keeps a line open to the Outpost, so news (a routine's
+   * result, the doorbell) arrives and is said the moment it's ready, not at Android's next check.
+   */
+  private fun watch() {
+    try {
+      while (running) {
+        if (JobNotifier.look(applicationContext, 50, true) == null) Thread.sleep(20_000)
+      }
+    } catch (_: InterruptedException) {
+    } catch (_: Exception) {
+    }
   }
 
   // ------------------------------------------------------------------ listening
@@ -152,8 +170,40 @@ class WakeService : Service() {
     }
   }
 
-  /** After the word: what's said, the answer, and any yes or no it asks for. */
+  /**
+   * After the word: what's said, the answer, and any yes or no it asks for. Music and other
+   * sound on the phone (the car's stereo over Bluetooth) pause while it talks, so you can be
+   * heard, and carry on afterwards.
+   */
   private fun conversation(rec: AudioRecord, floor: Double) {
+    val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+    val focus = if (Build.VERSION.SDK_INT >= 26) {
+      android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+        .setAudioAttributes(
+          android.media.AudioAttributes.Builder()
+            .setUsage(android.media.AudioAttributes.USAGE_ASSISTANT)
+            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        )
+        .build()
+    } else {
+      null
+    }
+    try {
+      if (Build.VERSION.SDK_INT >= 26 && focus != null) audio.requestAudioFocus(focus)
+    } catch (_: Exception) {
+    }
+    try {
+      talk(rec, floor)
+    } finally {
+      try {
+        if (Build.VERSION.SDK_INT >= 26 && focus != null) audio.abandonAudioFocusRequest(focus)
+      } catch (_: Exception) {
+      }
+    }
+  }
+
+  private fun talk(rec: AudioRecord, floor: Double) {
     var brief = false
     var turns = 0
     while (running && turns++ < 4) {
@@ -248,13 +298,13 @@ class WakeService : Service() {
     val answer = JobNotifier.post(this, p, "/api/voice/turn", body, 150)
     if (answer == null) {
       show("Couldn't reach your Outpost")
-      tone(ToneGenerator.TONE_PROP_NACK)
+      chime(false)
       Thread.sleep(1500)
       return null
     }
     answer.optString("error_message", "").takeIf { it.isNotBlank() }?.let {
       show(it.take(120))
-      tone(ToneGenerator.TONE_PROP_NACK)
+      chime(false)
       Thread.sleep(1500)
       return null
     }
@@ -265,32 +315,27 @@ class WakeService : Service() {
     val file = File(cacheDir, "wake-reply.wav")
     try {
       file.writeBytes(Base64.decode(base64, Base64.NO_WRAP))
-      val done = CountDownLatch(1)
-      val player = MediaPlayer()
-      player.setDataSource(file.absolutePath)
-      player.setOnCompletionListener { done.countDown() }
-      player.setOnErrorListener { _, _, _ -> done.countDown(); true }
-      player.prepare()
-      player.start()
-      done.await(120, TimeUnit.SECONDS)
-      player.release()
+      VoiceVolume.loud(this) {
+        val done = CountDownLatch(1)
+        val player = MediaPlayer()
+        player.setDataSource(file.absolutePath)
+        player.setOnCompletionListener { done.countDown() }
+        player.setOnErrorListener { _, _, _ -> done.countDown(); true }
+        player.prepare()
+        player.start()
+        done.await(120, TimeUnit.SECONDS)
+        player.release()
+      }
     } catch (_: Exception) {
     } finally {
       file.delete()
     }
   }
 
-  private fun beep() = tone(ToneGenerator.TONE_PROP_BEEP)
+  /** "I'm listening": a soft rising two-note chime. */
+  private fun beep() = chime(true)
 
-  private fun tone(kind: Int) {
-    try {
-      val t = ToneGenerator(AudioManager.STREAM_MUSIC, 70)
-      t.startTone(kind, 150)
-      Thread.sleep(200)
-      t.release()
-    } catch (_: Exception) {
-    }
-  }
+  private fun chime(up: Boolean) = VoiceVolume.chime(this, up)
 
   @SuppressLint("MissingPermission")
   private fun open(): AudioRecord {
