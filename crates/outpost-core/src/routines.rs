@@ -313,6 +313,8 @@ pub struct Routine {
     /// In quiet hours, don't tell at all (rather than when they end): for news that's stale
     /// by morning, like the doorbell. The run is still kept in its chat.
     pub quiet_skip: bool,
+    /// Other people (account ids) its news also goes to.
+    pub also_tell: Vec<String>,
     /// Its chat (where each run's reply goes), once it has run.
     pub chat_id: Option<String>,
     /// When it runs next (Unix seconds); none when paused or finished.
@@ -351,6 +353,7 @@ struct Row {
     camera: Option<String>,
     recognise: i64,
     quiet_skip: i64,
+    also_tell: String,
     chat_id: Option<String>,
     next_at: Option<i64>,
     last_at: Option<i64>,
@@ -383,6 +386,7 @@ impl Row {
             camera: self.camera,
             recognise: self.recognise != 0,
             quiet_skip: self.quiet_skip != 0,
+            also_tell: serde_json::from_str(&self.also_tell).unwrap_or_default(),
             chat_id: self.chat_id,
             next_at: self.next_at,
             last_at: self.last_at,
@@ -395,7 +399,7 @@ impl Row {
 }
 
 const COLUMNS: &str = "id, account_id, name, persona_id, instructions, schedule, time_zone, utc_offset_minutes, enabled, \
-                       notify, hook_hash IS NOT NULL AS has_link, allow_tools, allow_changes, allow_commands, say_on, camera, recognise, quiet_skip, chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
+                       notify, hook_hash IS NOT NULL AS has_link, allow_tools, allow_changes, allow_commands, say_on, camera, recognise, quiet_skip, also_tell, chat_id, next_at, last_at, last_status, last_note, created_at, updated_at";
 
 /// A new routine, or changes to one (fields left out stay as they are).
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
@@ -421,6 +425,8 @@ pub struct RoutineInput {
     pub recognise: Option<bool>,
     /// In quiet hours, don't tell at all (rather than when they end).
     pub quiet_skip: Option<bool>,
+    /// Other people (account ids) its news also goes to.
+    pub also_tell: Option<Vec<String>>,
     /// The person's time zone ("Australia/Sydney"), from their app.
     pub time_zone: Option<String>,
     /// Minutes ahead of UTC, from their app (used when the zone's name isn't known).
@@ -516,14 +522,15 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: RoutineInput) ->
     let allow = input.allow.unwrap_or_default();
     let say_on = clean_say_on(input.say_on.unwrap_or_default())?;
     let camera = clean_camera(input.camera.as_deref())?;
+    let also_tell = clean_also_tell(pool, account_id, input.also_tell.clone().unwrap_or_default()).await?;
     let zone = zone(input.time_zone.as_deref(), input.utc_offset_minutes);
     let next_at = next_for(&schedule, enabled, &zone, None);
     let t = now();
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO routines (id, account_id, name, persona_id, instructions, schedule, time_zone, utc_offset_minutes, \
-         enabled, notify, allow_tools, allow_changes, allow_commands, say_on, camera, recognise, quiet_skip, next_at, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         enabled, notify, allow_tools, allow_changes, allow_commands, say_on, camera, recognise, quiet_skip, also_tell, next_at, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(account_id)
@@ -542,6 +549,7 @@ pub async fn create(pool: &SqlitePool, account_id: &str, input: RoutineInput) ->
     .bind(&camera)
     .bind(input.recognise.unwrap_or(false) as i64)
     .bind(input.quiet_skip.unwrap_or(false) as i64)
+    .bind(say_json(&also_tell))
     .bind(next_at)
     .bind(t)
     .bind(t)
@@ -586,12 +594,16 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Routin
         Some(c) => clean_camera(Some(c))?,
         None => r.camera.clone(),
     };
+    let also_tell = match input.also_tell.clone() {
+        Some(a) => clean_also_tell(pool, &r.account_id, a).await?,
+        None => r.also_tell.clone(),
+    };
     let time_zone = input.time_zone.or(r.time_zone.clone());
     let offset = input.utc_offset_minutes.or(r.utc_offset_minutes);
     let next_at = next_for(&schedule, enabled, &zone(time_zone.as_deref(), offset), r.last_at);
     sqlx::query(
         "UPDATE routines SET name = ?, persona_id = ?, instructions = ?, schedule = ?, time_zone = ?, utc_offset_minutes = ?, \
-         enabled = ?, notify = ?, allow_tools = ?, allow_changes = ?, allow_commands = ?, say_on = ?, camera = ?, recognise = ?, quiet_skip = ?, next_at = ?, updated_at = ? \
+         enabled = ?, notify = ?, allow_tools = ?, allow_changes = ?, allow_commands = ?, say_on = ?, camera = ?, recognise = ?, quiet_skip = ?, also_tell = ?, next_at = ?, updated_at = ? \
          WHERE id = ? AND account_id = ?",
     )
     .bind(&name)
@@ -609,6 +621,7 @@ pub async fn update(pool: &SqlitePool, account_id: &str, id: &str, input: Routin
     .bind(&camera)
     .bind(input.recognise.unwrap_or(r.recognise) as i64)
     .bind(input.quiet_skip.unwrap_or(r.quiet_skip) as i64)
+    .bind(say_json(&also_tell))
     .bind(next_at)
     .bind(now())
     .bind(id)
@@ -833,6 +846,26 @@ pub fn clean_camera(camera: Option<&str>) -> CoreResult<Option<String>> {
     Ok(Some(c.to_string()))
 }
 
+/// Other people a routine also tells: accounts on this Outpost, not its own, up to ten.
+async fn clean_also_tell(pool: &SqlitePool, owner: &str, list: Vec<String>) -> CoreResult<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for id in list {
+        let id = id.trim().to_string();
+        if id.is_empty() || id == owner || out.contains(&id) {
+            continue;
+        }
+        let there: Option<String> = sqlx::query_scalar("SELECT id FROM accounts WHERE id = ?").bind(&id).fetch_optional(pool).await?;
+        if there.is_none() {
+            return Err(CoreError::Invalid("One of the people to tell isn't on this Outpost.".into()));
+        }
+        out.push(id);
+    }
+    if out.len() > 10 {
+        return Err(CoreError::Invalid("A routine can tell up to ten other people.".into()));
+    }
+    Ok(out)
+}
+
 fn say_json(list: &[String]) -> String {
     serde_json::to_string(list).unwrap_or_else(|_| "[]".into())
 }
@@ -857,11 +890,14 @@ pub struct Told {
 /// quiet hours is told when they end).
 pub async fn told_since(pool: &SqlitePool, account_id: &str, since: i64, now: i64) -> CoreResult<Vec<Told>> {
     Ok(sqlx::query_as(
-        "SELECT rr.id, r.name, r.chat_id, rr.status, rr.note, rr.finished_at, r.say_on, r.persona_id, \
-         COALESCE(rr.tell_at <= rr.finished_at, 0) AS on_time FROM routine_runs rr \
+        // Someone it's also told to gets the news, not the routine's chat (it's not theirs).
+        "SELECT rr.id, r.name, CASE WHEN r.account_id = ? THEN r.chat_id END AS chat_id, rr.status, rr.note, rr.finished_at, \
+         r.say_on, r.persona_id, COALESCE(rr.tell_at <= rr.finished_at, 0) AS on_time FROM routine_runs rr \
          JOIN routines r ON r.id = rr.routine_id \
-         WHERE r.account_id = ? AND rr.tell = 1 AND rr.tell_at >= ? AND rr.tell_at <= ? ORDER BY rr.tell_at LIMIT 20",
+         WHERE (r.account_id = ? OR EXISTS (SELECT 1 FROM json_each(r.also_tell) WHERE json_each.value = ?)) AND rr.tell = 1 AND rr.tell_at >= ? AND rr.tell_at <= ? ORDER BY rr.tell_at LIMIT 20",
     )
+    .bind(account_id)
+    .bind(account_id)
     .bind(account_id)
     .bind(since)
     .bind(now)
@@ -873,16 +909,18 @@ pub async fn told_since(pool: &SqlitePool, account_id: &str, since: i64, now: i6
 /// (so a phone knows when to look).
 pub async fn watch_times(pool: &SqlitePool, account_id: &str) -> CoreResult<(Option<i64>, i64)> {
     let next: Option<i64> = sqlx::query_scalar(
-        "SELECT MIN(next_at) FROM routines WHERE account_id = ? AND enabled = 1 AND next_at IS NOT NULL AND notify <> 'never'",
+        "SELECT MIN(next_at) FROM routines r WHERE (r.account_id = ? OR EXISTS (SELECT 1 FROM json_each(r.also_tell) WHERE json_each.value = ?)) AND enabled = 1 AND next_at IS NOT NULL AND notify <> 'never'",
     )
+    .bind(account_id)
     .bind(account_id)
     .fetch_one(pool)
     .await?;
     // News held back by quiet hours: told when they end.
     let held: Option<i64> = sqlx::query_scalar(
         "SELECT MIN(rr.tell_at) FROM routine_runs rr JOIN routines r ON r.id = rr.routine_id \
-         WHERE r.account_id = ? AND rr.tell = 1 AND rr.tell_at > ?",
+         WHERE (r.account_id = ? OR EXISTS (SELECT 1 FROM json_each(r.also_tell) WHERE json_each.value = ?)) AND rr.tell = 1 AND rr.tell_at > ?",
     )
+    .bind(account_id)
     .bind(account_id)
     .bind(now())
     .fetch_one(pool)

@@ -99,6 +99,8 @@ interface Routine {
   recognise: boolean;
   /** In quiet hours, don't tell at all (rather than when they end). */
   quiet_skip: boolean;
+  /** Other people (account ids) its news also goes to. */
+  also_tell: string[];
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -190,7 +192,17 @@ function Group({ title, count, children }: { title: string; count: number; child
   );
 }
 
-export function RoutinesScreen({ api, onClose, onOpenChat }: { api: Outpost; onClose: () => void; onOpenChat: (chatId: string) => void }) {
+export function RoutinesScreen({
+  api,
+  me = "",
+  onClose,
+  onOpenChat,
+}: {
+  api: Outpost;
+  me?: string;
+  onClose: () => void;
+  onOpenChat: (chatId: string) => void;
+}) {
   const [routines, setRoutines] = useState<Routine[] | null>(null);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [editing, setEditing] = useState<Routine | "new" | null>(null);
@@ -227,6 +239,7 @@ export function RoutinesScreen({ api, onClose, onOpenChat }: { api: Outpost; onC
         api={api}
         routine={editing === "new" ? null : editing}
         personas={personas}
+        me={me}
         onSaved={(r) => {
           setRoutines((list) => (editing === "new" ? [...(list ?? []), r] : (list ?? []).map((x) => (x.id === r.id ? r : x))));
           setEditing(null);
@@ -389,12 +402,14 @@ function RoutineEditor({
   api,
   routine,
   personas,
+  me,
   onSaved,
   onClose,
 }: {
   api: Outpost;
   routine: Routine | null;
   personas: Persona[];
+  me: string;
   onSaved: (r: Routine) => void;
   onClose: () => void;
 }) {
@@ -437,6 +452,7 @@ function RoutineEditor({
   const [camera, setCamera] = useState(routine?.camera ?? "");
   const [recognise, setRecognise] = useState(routine?.recognise ?? false);
   const [quietSkip, setQuietSkip] = useState(routine?.quiet_skip ?? false);
+  const [alsoTell, setAlsoTell] = useState<string[]>(routine?.also_tell ?? []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -472,7 +488,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, notify, allow, say_on: sayOn, camera, recognise, quiet_skip: quietSkip, ...myZone() };
+      const body = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: sc, notify, allow, say_on: sayOn, camera, recognise, quiet_skip: quietSkip, also_tell: alsoTell, ...myZone() };
       onSaved(routine ? await api.json<Routine>("PUT", `/api/routines/${routine.id}`, body) : await api.json<Routine>("POST", "/api/routines", body));
     } catch (e) {
       setError(message(e));
@@ -576,6 +592,7 @@ function RoutineEditor({
           <P muted>When the pictures show someone in Known faces (You › People), the persona is told who; anyone else is described.</P>
         </View>
       )}
+      {notify !== "never" && <AlsoTell api={api} me={me} value={alsoTell} onChange={setAlsoTell} />}
       {notify !== "never" && (
         <View style={{ gap: 4 }}>
           <Text style={s.label}>In quiet hours</Text>
@@ -609,6 +626,34 @@ function RoutineEditor({
         onPress={() => void save()}
       />
     </Screen>
+  );
+}
+
+/** Other people a routine's news also goes to (owners see this). */
+function AlsoTell({ api, me, value, onChange }: { api: Outpost; me: string; value: string[]; onChange: (v: string[]) => void }) {
+  const [people, setPeople] = useState<{ id: string; name: string; role: string }[] | null>(null);
+  useEffect(() => {
+    api
+      .get<{ id: string; name: string; role: string }[]>("/api/accounts")
+      .then((list) => setPeople(list.filter((a) => a.id !== me && a.role !== "service")))
+      .catch(() => setPeople([]));
+  }, [api, me]);
+  if (!people || people.length === 0) return null;
+  return (
+    <>
+      <Text style={s.label}>Tell them too</Text>
+      <View style={[s.row, { flexWrap: "wrap" }]}>
+        {people.map((p) => (
+          <Chip
+            key={p.id}
+            label={p.name}
+            active={value.includes(p.id)}
+            onPress={() => onChange(value.includes(p.id) ? value.filter((x) => x !== p.id) : [...value, p.id])}
+          />
+        ))}
+      </View>
+      <P muted>They get the same notification (and hear it, with On my phone and their wake word on), but not the routine's chat.</P>
+    </>
   );
 }
 

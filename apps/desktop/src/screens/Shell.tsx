@@ -170,6 +170,7 @@ export default function Shell({
           {section === "routines" && auth.account.role !== "restricted" && (
             <Routines
               token={auth.token}
+              me={auth.account.id}
               onOpenChat={(id) => {
                 setChatToOpen(id);
                 setSection("chat");

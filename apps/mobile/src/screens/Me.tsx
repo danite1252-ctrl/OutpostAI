@@ -135,6 +135,7 @@ export default function Me({
       {page === "routines" && (
         <RoutinesScreen
           api={api}
+          me={saved.account.id}
           onClose={() => setPage(null)}
           onOpenChat={(id) => {
             setPage(null);

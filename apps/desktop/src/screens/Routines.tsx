@@ -104,7 +104,7 @@ function Group({ id, title, count, children }: { id: string; title: string; coun
   );
 }
 
-export default function Routines({ token, onOpenChat }: { token: string; onOpenChat: (chatId: string) => void }) {
+export default function Routines({ token, me = "", onOpenChat }: { token: string; me?: string; onOpenChat: (chatId: string) => void }) {
   const [routines, setRoutines] = useState<Routine[] | null>(null);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [editing, setEditing] = useState<Routine | "new" | null>(null);
@@ -156,6 +156,7 @@ export default function Routines({ token, onOpenChat }: { token: string; onOpenC
           token={token}
           routine={editing === "new" ? null : editing}
           personas={personas}
+          me={me}
           onSaved={(r) => {
             setRoutines((list) => (editing === "new" ? [...(list ?? []), r] : (list ?? []).map((x) => (x.id === r.id ? r : x))));
             setEditing(null);
@@ -553,12 +554,14 @@ function RoutineEditor({
   token,
   routine,
   personas,
+  me,
   onSaved,
   onCancel,
 }: {
   token: string;
   routine: Routine | null;
   personas: Persona[];
+  me: string;
   onSaved: (r: Routine) => void;
   onCancel: () => void;
 }) {
@@ -595,6 +598,7 @@ function RoutineEditor({
   const [camera, setCamera] = useState(routine?.camera ?? "");
   const [recognise, setRecognise] = useState(routine?.recognise ?? false);
   const [quietSkip, setQuietSkip] = useState(routine?.quiet_skip ?? false);
+  const [alsoTell, setAlsoTell] = useState<string[]>(routine?.also_tell ?? []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -621,7 +625,7 @@ function RoutineEditor({
     setBusy(true);
     setError(null);
     try {
-      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule(), notify, allow, say_on: sayOn, camera, recognise, quiet_skip: quietSkip };
+      const input = { name: name.trim(), persona_id: personaId, instructions: instructions.trim(), schedule: schedule(), notify, allow, say_on: sayOn, camera, recognise, quiet_skip: quietSkip, also_tell: alsoTell };
       onSaved(routine ? await routinesApi.update(token, routine.id, input) : await routinesApi.create(token, input));
     } catch (e) {
       setError(message(e));
@@ -794,6 +798,8 @@ function RoutineEditor({
         </label>
       )}
 
+      {notify !== "never" && <AlsoTell token={token} me={me} value={alsoTell} onChange={setAlsoTell} />}
+
       {notify !== "never" && (
         <fieldset className="flex flex-col gap-1 text-sm">
           <legend className="mb-1 text-sm text-muted">In quiet hours</legend>
@@ -846,6 +852,37 @@ function RoutineEditor({
         </Button>
       </div>
     </section>
+  );
+}
+
+/** Other people on this Outpost a routine's news also goes to (their phones and PCs). Owners only. */
+function AlsoTell({ token, me, value, onChange }: { token: string; me: string; value: string[]; onChange: (v: string[]) => void }) {
+  const [people, setPeople] = useState<{ id: string; name: string }[] | null>(null);
+  useEffect(() => {
+    api.listAccounts(token).then(
+      (list) => setPeople(list.filter((a) => a.id !== me && a.role !== "service").map((a) => ({ id: a.id, name: a.name }))),
+      () => setPeople([]),
+    );
+  }, [token, me]);
+  if (!people || people.length === 0) return null;
+  return (
+    <fieldset className="flex flex-col gap-1 text-sm">
+      <legend className="mb-1 text-sm text-muted">Tell them too</legend>
+      {people.map((p) => (
+        <label key={p.id} className="flex cursor-pointer items-center gap-2">
+          <input
+            type="checkbox"
+            checked={value.includes(p.id)}
+            onChange={(e) => onChange(e.target.checked ? [...value, p.id] : value.filter((x) => x !== p.id))}
+          />
+          {p.name}
+        </label>
+      ))}
+      <p className="text-xs text-muted">
+        They get the same notification on their phone and PC (and hear it, with On my phone ticked and their wake word on), but not
+        the routine's chat.
+      </p>
+    </fieldset>
   );
 }
 

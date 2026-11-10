@@ -1994,6 +1994,8 @@ export interface Routine {
   recognise: boolean;
   /** In quiet hours, don't tell at all (rather than when they end). */
   quiet_skip: boolean;
+  /** Other people (account ids) its news also goes to. */
+  also_tell: string[];
   chat_id: string | null;
   next_at: number | null;
   last_at: number | null;
@@ -2035,6 +2037,7 @@ export interface RoutineInput {
   camera?: string;
   recognise?: boolean;
   quiet_skip?: boolean;
+  also_tell?: string[];
   name?: string;
   notify?: Notify;
   persona_id?: string;

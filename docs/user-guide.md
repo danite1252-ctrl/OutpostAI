@@ -341,6 +341,9 @@ PC: **Routines** in the sidebar; on the phone: **You › Routines**).
 - **In quiet hours**: by default, news from a run in your quiet hours is told when they end.
   Choose **Skip it** for news that's stale by then, like the doorbell: nothing is sent or said,
   and the run stays in the routine's chat. Who's at the door starts with Skip it.
+- **Tell them too**: an owner can have a routine's news also go to other people on the
+  Outpost (the doorbell on a partner's phone): they get the same notification, and hear it
+  with **On my phone** ticked and their wake word on, but they don't see the routine's chat.
 - **Tell me**: each routine sends a notification to your phone and PC when it runs (**Every
   time**), **Only when there's news** (the persona decides; when there's nothing new it says so
   quietly in the chat, and a quick separate check of each result decides; failures are always told), **Only if it fails**, or **Never**.
