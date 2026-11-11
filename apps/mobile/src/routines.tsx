@@ -589,7 +589,7 @@ function RoutineEditor({
       {(camera || kind === "link") && (
         <View style={{ gap: 4 }}>
           <Chip label={recognise ? "Say who it is: on" : "Say who it is: off"} active={recognise} onPress={() => setRecognise((r) => !r)} />
-          <P muted>When the pictures show someone in Known faces (You › People), the persona is told who; anyone else is described.</P>
+          <P muted>When the pictures show someone in Faces (You › Faces), the persona is told who; anyone else is described.</P>
         </View>
       )}
       {notify !== "never" && <AlsoTell api={api} me={me} value={alsoTell} onChange={setAlsoTell} />}

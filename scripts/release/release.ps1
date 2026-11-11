@@ -181,9 +181,11 @@ if (-not $SkipPhone) {
 $mirrorConfig = Join-Path $keys "mirror.json"
 if (Test-Path $mirrorConfig) {
     $mirrorUrl = ((Get-Content $mirrorConfig -Raw | ConvertFrom-Json).url).TrimEnd("/")
-    $mirror = [ordered]@{ "windows-x86_64" = "$mirrorUrl/Outpost-setup.exe" }
-    if (-not $SkipLinux) { $mirror."linux-x86_64" = "$mirrorUrl/outpost-gateway-linux-x86_64" }
-    if (-not $SkipPhone) { $mirror.mobile = "$mirrorUrl/Outpost.apk" }
+    # "?v=" makes each release its own address, so a cache in front of the server (Cloudflare)
+    # never hands out the last release's file under the same name.
+    $mirror = [ordered]@{ "windows-x86_64" = "$mirrorUrl/Outpost-setup.exe?v=$Version" }
+    if (-not $SkipLinux) { $mirror."linux-x86_64" = "$mirrorUrl/outpost-gateway-linux-x86_64?v=$Version" }
+    if (-not $SkipPhone) { $mirror.mobile = "$mirrorUrl/Outpost.apk?v=$Version" }
     $manifest.mirror = $mirror
 }
 # UTF-8 without a byte-order mark (GitHub serves it as-is).

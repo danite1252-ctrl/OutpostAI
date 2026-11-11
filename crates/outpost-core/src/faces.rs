@@ -221,6 +221,104 @@ pub fn best_match(known: &[(String, String, Vec<f32>)], probe: &[f32]) -> Option
     Some(Match { face_id: id, name, score, good: score >= GOOD_MATCH })
 }
 
+// ------------------------------------------------------------------ seen at the door
+
+/// How long a seen face is kept for someone to say who it was.
+pub const SEEN_DAYS: i64 = 30;
+/// The most seen faces kept (the oldest go first).
+pub const MAX_SEEN: i64 = 200;
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SeenFace {
+    pub id: String,
+    pub routine_id: Option<String>,
+    /// The routine's name (if it's still there).
+    pub routine_name: Option<String>,
+    /// Who it looked like then, and how alike.
+    pub match_name: Option<String>,
+    pub match_score: Option<f32>,
+    pub created_at: i64,
+}
+
+/// Keep a face a routine saw.
+pub async fn add_seen(
+    pool: &SqlitePool,
+    routine_id: Option<&str>,
+    feature: &[f32],
+    crop: &[u8],
+    matched: Option<&Match>,
+) -> CoreResult<()> {
+    let t = now();
+    sqlx::query(
+        "INSERT INTO seen_faces (id, routine_id, feature, crop, match_name, match_score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(routine_id)
+    .bind(to_blob(feature))
+    .bind(crop)
+    .bind(matched.map(|m| m.name.clone()))
+    .bind(matched.map(|m| f64::from(m.score)))
+    .bind(t)
+    .execute(pool)
+    .await?;
+    sqlx::query("DELETE FROM seen_faces WHERE created_at < ?").bind(t - SEEN_DAYS * 86_400).execute(pool).await?;
+    sqlx::query("DELETE FROM seen_faces WHERE id NOT IN (SELECT id FROM seen_faces ORDER BY created_at DESC, rowid DESC LIMIT ?)")
+        .bind(MAX_SEEN)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Faces seen in the last 30 days, newest first.
+pub async fn seen(pool: &SqlitePool) -> CoreResult<Vec<SeenFace>> {
+    let rows: Vec<(String, Option<String>, Option<String>, Option<String>, Option<f64>, i64)> = sqlx::query_as(
+        "SELECT s.id, s.routine_id, r.name, s.match_name, s.match_score, s.created_at FROM seen_faces s \
+         LEFT JOIN routines r ON r.id = s.routine_id WHERE s.created_at >= ? ORDER BY s.created_at DESC",
+    )
+    .bind(now() - SEEN_DAYS * 86_400)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, routine_id, routine_name, match_name, score, created_at)| SeenFace {
+            id,
+            routine_id,
+            routine_name,
+            match_name,
+            match_score: score.map(|s| s as f32),
+            created_at,
+        })
+        .collect())
+}
+
+pub async fn seen_crop(pool: &SqlitePool, id: &str) -> CoreResult<Vec<u8>> {
+    sqlx::query_scalar("SELECT crop FROM seen_faces WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(CoreError::NotFound)
+}
+
+/// Say who a seen face was: it becomes one of their kept faces (and leaves the seen list).
+pub async fn save_seen(pool: &SqlitePool, id: &str, face_id: &str) -> CoreResult<FaceSample> {
+    let (feature, crop): (Vec<u8>, Vec<u8>) = sqlx::query_as("SELECT feature, crop FROM seen_faces WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(CoreError::NotFound)?;
+    let s = add_sample(pool, face_id, &from_blob(&feature), &crop).await?;
+    delete_seen(pool, id).await?;
+    Ok(s)
+}
+
+pub async fn delete_seen(pool: &SqlitePool, id: &str) -> CoreResult<()> {
+    let done = sqlx::query("DELETE FROM seen_faces WHERE id = ?").bind(id).execute(pool).await?;
+    if done.rows_affected() == 0 {
+        return Err(CoreError::NotFound);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,6 +360,14 @@ mod tests {
         assert_eq!(features(&pool).await.unwrap()[0].2, unit(&[1.0]));
         let f = update(&pool, &f.id, Some("Samuel"), None).await.unwrap();
         assert_eq!((f.name.as_str(), f.samples.len()), ("Samuel", 1));
+        // Seen at the door, then said to be Samuel.
+        add_seen(&pool, None, &unit(&[0.9, 0.1]), b"door", None).await.unwrap();
+        let seen_now = seen(&pool).await.unwrap();
+        assert_eq!(seen_now.len(), 1);
+        assert_eq!(seen_crop(&pool, &seen_now[0].id).await.unwrap(), b"door");
+        save_seen(&pool, &seen_now[0].id, &f.id).await.unwrap();
+        assert!(seen(&pool).await.unwrap().is_empty());
+        assert_eq!(get(&pool, &f.id).await.unwrap().samples.len(), 2);
         delete(&pool, &f.id).await.unwrap();
         assert!(crop(&pool, &s.id).await.is_err());
         assert!(list(&pool).await.unwrap().is_empty());

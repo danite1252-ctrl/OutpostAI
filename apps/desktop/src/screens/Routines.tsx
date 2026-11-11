@@ -792,7 +792,7 @@ function RoutineEditor({
           <span>
             Say who it is
             <span className="block text-xs text-muted">
-              When the pictures show someone in Known faces (Settings), the persona is told who; anyone else is described.
+              When the pictures show someone in Faces, the persona is told who; anyone else is described.
             </span>
           </span>
         </label>

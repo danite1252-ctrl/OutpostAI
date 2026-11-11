@@ -250,7 +250,7 @@ async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result
             Ok(mut p) => {
                 let n = p.len();
                 // Who it is, when the routine says so and someone's been added.
-                let who = if r.recognise { crate::faces::describe(state, &p).await } else { None };
+                let who = if r.recognise { crate::faces::describe(state, &r.id, &p).await } else { None };
                 content.push_str(&if n > 1 {
                     format!("\n\n[{n} stills from {what}, in order, are attached.]")
                 } else {

@@ -16,6 +16,13 @@ interface KnownFace {
   account_id: string | null;
   samples: Sample[];
 }
+interface SeenFace {
+  id: string;
+  routine_name: string | null;
+  match_name: string | null;
+  match_score: number | null;
+  created_at: number;
+}
 interface FacesState {
   faces: KnownFace[];
   setup: { ready: boolean; busy: boolean; error: string | null };
@@ -33,6 +40,73 @@ function asDataUrl(file: File): Promise<string> {
     r.onerror = () => reject(new Error(`${file.name} couldn't be read.`));
     r.readAsDataURL(file);
   });
+}
+
+function when(at: number) {
+  const d = new Date(at * 1000);
+  return d.toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+}
+
+/** A face seen at the door: say who it was (kept as one of their faces), or remove it. */
+function Seen({ token, face, people, onDone }: { token: string; face: SeenFace; people: KnownFace[]; onDone: () => void }) {
+  const { src } = useAuthedUrl(token, `/api/faces/seen/${face.id}/picture`);
+  const [who, setWho] = useState(() => people.find((p) => p.name === face.match_name)?.id ?? "");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function act(work: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await work();
+      onDone();
+    } catch (e) {
+      setError(message(e));
+      setBusy(false);
+    }
+  }
+  return (
+    <li className="flex flex-wrap items-center gap-3 rounded-xl border border-line p-2">
+      <div className="h-16 w-16 overflow-hidden rounded-lg bg-deep">{src && <img src={src} alt="" className="h-full w-full object-cover" />}</div>
+      <div className="flex min-w-0 flex-1 flex-col text-xs text-muted">
+        <span>{when(face.created_at)}</span>
+        <span>{face.match_name ? `Looked like ${face.match_name}` : "Not known"}</span>
+      </div>
+      <select aria-label="Who's this?" className="min-h-9 rounded-lg border border-line bg-surface px-2 text-sm text-ink" value={who} onChange={(e) => setWho(e.target.value)}>
+        <option value="">Who's this?</option>
+        {people.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+        <option value="new">Someone new…</option>
+      </select>
+      {who === "new" && (
+        <input
+          aria-label="Their name"
+          placeholder="Their name"
+          value={name}
+          maxLength={60}
+          onChange={(e) => setName(e.target.value)}
+          className="min-h-9 w-36 rounded-lg border border-line bg-surface px-2 text-sm text-ink"
+        />
+      )}
+      <Button
+        disabled={busy || !who || (who === "new" && !name.trim())}
+        onClick={() =>
+          void act(() =>
+            request("POST", `/api/faces/seen/${face.id}/save`, { token, body: who === "new" ? { name: name.trim() } : { face_id: who } }),
+          )
+        }
+      >
+        Save
+      </Button>
+      <Button variant="ghost" disabled={busy} onClick={() => void act(() => request("DELETE", `/api/faces/seen/${face.id}`, { token }))}>
+        Remove
+      </Button>
+      {error && <span className="w-full text-xs text-danger">{error}</span>}
+    </li>
+  );
 }
 
 function Thumb({ token, sample, onRemove }: { token: string; sample: Sample; onRemove: () => void }) {
@@ -54,6 +128,7 @@ function Thumb({ token, sample, onRemove }: { token: string; sample: Sample; onR
 
 export function KnownFacesPanel({ token }: { token: string }) {
   const [state, setState] = useState<FacesState | null>(null);
+  const [seen, setSeen] = useState<SeenFace[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -62,7 +137,9 @@ export function KnownFacesPanel({ token }: { token: string }) {
 
   const load = useCallback(async () => {
     try {
-      setState(await request<FacesState>("GET", "/api/faces", { token }));
+      const s = await request<FacesState>("GET", "/api/faces", { token });
+      setState(s);
+      if (s.setup.ready) setSeen(await request<SeenFace[]>("GET", "/api/faces/seen", { token }));
     } catch (e) {
       setError(message(e));
     }
@@ -226,6 +303,22 @@ export function KnownFacesPanel({ token }: { token: string }) {
               </li>
             ))}
           </ul>
+          <div className="flex flex-col gap-2">
+            <h3 className="font-medium">Seen at the door</h3>
+            <p className="text-muted">
+              Faces from the last 30 days, from routines with Say who it is on. Say who each was to keep it as one of their faces (faces
+              from your own door match best), or remove it.
+            </p>
+            {seen.length === 0 ? (
+              <p className="text-muted">None yet.</p>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {seen.map((f) => (
+                  <Seen key={f.id} token={token} face={f} people={state.faces} onDone={() => void load()} />
+                ))}
+              </ul>
+            )}
+          </div>
         </>
       )}
     </div>

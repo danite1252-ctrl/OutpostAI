@@ -81,7 +81,7 @@
       <li>
         <h3>Download the installer</h3>
         <p>Always the newest version.</p>
-        <p><a class="btn btn-ember" href="/downloads/Outpost-setup.exe" download>
+        <p><a class="btn btn-ember" href="/downloads/Outpost-setup.exe" data-latest="windows" download>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
           Download for Windows</a></p>
         <p class="note-line">Or get <strong>Outpost_<em>version</em>_x64-setup.exe</strong> from the <a href="https://github.com/danite1252-ctrl/OutpostAI/releases/latest">latest release on GitHub</a>.</p>
@@ -178,7 +178,7 @@
       <li>
         <h3>Download the app</h3>
         <p>On the phone, open this page and download the app (always the newest version).</p>
-        <p><a class="btn btn-line" href="/downloads/Outpost.apk" download>Download Outpost.apk</a></p>
+        <p><a class="btn btn-line" href="/downloads/Outpost.apk" data-latest="mobile" download>Download Outpost.apk</a></p>
         <p class="note-line">Or get <strong>Outpost-<em>version</em>.apk</strong> from the <a href="https://github.com/danite1252-ctrl/OutpostAI/releases/latest">latest release on GitHub</a>.</p>
       </li>
       <li>
@@ -217,5 +217,20 @@
 </footer>
 
 <script src="assets/site.js"></script>
+<script>
+  // The download buttons point at this release's own address (its latest.json says which), so
+  // a cache in front of the site never hands out the last release's file.
+  fetch("/downloads/latest.json", { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((m) => {
+      if (!m) return;
+      const urls = { windows: m.platforms && m.platforms["windows-x86_64"] && m.platforms["windows-x86_64"].url, mobile: m.mobile && m.mobile.url };
+      document.querySelectorAll("a[data-latest]").forEach((a) => {
+        const u = urls[a.dataset.latest];
+        if (typeof u === "string" && u.startsWith("https://")) a.href = new URL(u).pathname + new URL(u).search;
+      });
+    })
+    .catch(() => {});
+</script>
 </body>
 </html>

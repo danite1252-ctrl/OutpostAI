@@ -3,7 +3,7 @@
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Pressable, Text, TextInput, View } from "react-native";
-import { message, Section } from "./admin";
+import { message, Screen, Section } from "./admin";
 import { AuthedImage } from "./images";
 import type { Outpost } from "./outpost";
 import { Button, C, Chip, ErrorText, P, s } from "./ui";
@@ -18,6 +18,11 @@ interface KnownFace {
   account_id: string | null;
   samples: Sample[];
 }
+interface SeenFace {
+  id: string;
+  match_name: string | null;
+  created_at: number;
+}
 interface FacesState {
   faces: KnownFace[];
   setup: { ready: boolean; busy: boolean; error: string | null };
@@ -26,6 +31,9 @@ interface FacesState {
 
 export function KnownFaces({ api }: { api: Outpost }) {
   const [state, setState] = useState<FacesState | null>(null);
+  const [seen, setSeen] = useState<SeenFace[]>([]);
+  const [naming, setNaming] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<Record<string, string>>({});
@@ -33,7 +41,9 @@ export function KnownFaces({ api }: { api: Outpost }) {
 
   const load = useCallback(async () => {
     try {
-      setState(await api.get<FacesState>("/api/faces"));
+      const st = await api.get<FacesState>("/api/faces");
+      setState(st);
+      if (st.setup.ready) setSeen(await api.get<SeenFace[]>("/api/faces/seen"));
     } catch (e) {
       setError(message(e));
     }
@@ -162,8 +172,69 @@ export function KnownFaces({ api }: { api: Outpost }) {
               </View>
             </View>
           ))}
+          <Text style={[s.label, { marginTop: 8 }]}>Seen at the door</Text>
+          <P muted>Faces from the last 30 days. Tap who each was to keep it as one of their faces, or remove it.</P>
+          {seen.length === 0 && <P muted>None yet.</P>}
+          {seen.map((x) => (
+            <View key={x.id} style={[s.card, { gap: 8 }]}>
+              <View style={s.row}>
+                <AuthedImage api={api} path={`/api/faces/seen/${x.id}/picture`} style={{ width: 56, height: 56, borderRadius: 8 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: C.ink }}>
+                    {new Date(x.created_at * 1000).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}
+                  </Text>
+                  <Text style={{ color: C.muted, fontSize: 13 }}>{x.match_name ? `Looked like ${x.match_name}` : "Not known"}</Text>
+                </View>
+              </View>
+              <View style={[s.row, { flexWrap: "wrap" }]}>
+                {state.faces.map((f) => (
+                  <Chip
+                    key={f.id}
+                    label={f.name}
+                    active={f.name === x.match_name}
+                    onPress={() => void run(x.id, () => api.json("POST", `/api/faces/seen/${x.id}/save`, { face_id: f.id }))}
+                  />
+                ))}
+                <Chip label="Someone new…" onPress={() => setNaming(naming === x.id ? null : x.id)} />
+                <Chip label="Remove" color={C.danger} onPress={() => void run(x.id, () => api.json("DELETE", `/api/faces/seen/${x.id}`))} />
+              </View>
+              {naming === x.id && (
+                <View style={s.row}>
+                  <TextInput
+                    value={newName}
+                    onChangeText={setNewName}
+                    placeholder="Their name"
+                    placeholderTextColor={C.muted}
+                    maxLength={60}
+                    style={{ flex: 1, color: C.ink, borderWidth: 1, borderColor: C.line, borderRadius: 10, paddingHorizontal: 12, minHeight: 44 }}
+                  />
+                  <Button
+                    title="Save"
+                    onPress={() =>
+                      newName.trim() &&
+                      void run(x.id, () =>
+                        api.json("POST", `/api/faces/seen/${x.id}/save`, { name: newName.trim() }).then(() => {
+                          setNaming(null);
+                          setNewName("");
+                        }),
+                      )
+                    }
+                  />
+                </View>
+              )}
+            </View>
+          ))}
         </>
       )}
     </Section>
+  );
+}
+
+/** Faces (owners): who Outpost can name at the door, and who it's seen there. */
+export function FacesScreen({ api, onClose }: { api: Outpost; onClose: () => void }) {
+  return (
+    <Screen title="Faces" onClose={onClose}>
+      <KnownFaces api={api} />
+    </Screen>
   );
 }

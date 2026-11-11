@@ -60,17 +60,17 @@ $files = [ordered]@{}
 $win = Get-ChildItem $out -Filter "Outpost_$($Version)_x64-setup.exe" | Select-Object -First 1
 if ($win) {
     $files["Outpost-setup.exe"] = $win.FullName
-    $manifest.platforms."windows-x86_64".url = "$($c.url)/Outpost-setup.exe"
+    $manifest.platforms."windows-x86_64".url = "$($c.url)/Outpost-setup.exe?v=$Version"
 }
 $linux = Join-Path $out "outpost-gateway-linux-x86_64"
 if (Test-Path $linux) {
     $files["outpost-gateway-linux-x86_64"] = $linux
-    $manifest.platforms."linux-x86_64".url = "$($c.url)/outpost-gateway-linux-x86_64"
+    $manifest.platforms."linux-x86_64".url = "$($c.url)/outpost-gateway-linux-x86_64?v=$Version"
 }
 $apk = Join-Path $out "Outpost-$Version.apk"
 if (Test-Path $apk) {
     $files["Outpost.apk"] = $apk
-    $manifest.mobile.url = "$($c.url)/Outpost.apk"
+    $manifest.mobile.url = "$($c.url)/Outpost.apk?v=$Version"
 }
 $install = Join-Path $out "install.sh"
 if (Test-Path $install) { $files["install.sh"] = $install }

@@ -6,7 +6,6 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Alert, Share, Text, View } from "react-native";
 import { SvgXml } from "react-native-svg";
 import { ListState, message, Screen, Section, usePin } from "./admin";
-import { KnownFaces } from "./faces";
 import type { Outpost } from "./outpost";
 import { Avatar, Button, C, Chip, ErrorText, Field, P, s } from "./ui";
 
@@ -156,7 +155,6 @@ export function PeopleScreen({ api, isOwner, myAccountId, onClose }: { api: Outp
             ))}
         </Section>
       )}
-      {isOwner && <KnownFaces api={api} />}
       <Section title={isOwner ? "Paired phones and devices" : "Paired with your account"}>
         <Button kind="ghost" title="Pair another device of mine" onPress={() => void pairMine()} />
         <ListState loading={devices === null} error={null} empty={devices?.length === 0} emptyText="None yet." />

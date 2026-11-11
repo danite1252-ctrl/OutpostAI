@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { WhatsNew } from "../components/whatsnew";
+import Faces from "./Faces";
 import { refreshServerHosts, SERVER, type SignInResponse } from "../api";
 import { engineReady, useEngines } from "../components/engines";
 import { Avatar, Icon, icons, Mark, StatusDot, Wordmark } from "../components/ui";
@@ -22,7 +23,7 @@ import { QueueButton } from "../components/queue";
 import { CrashNotice, UpdateBanner } from "../components/system";
 import type { CreateRequest } from "../components/gallery";
 
-type Section = "chat" | "create" | "gallery" | "train" | "routines" | "models" | "personas" | "connections" | "activity" | "api" | "settings";
+type Section = "chat" | "create" | "gallery" | "train" | "routines" | "models" | "personas" | "connections" | "activity" | "faces" | "api" | "settings";
 
 const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "chat", label: "Chat", icon: icons.chat },
@@ -34,6 +35,7 @@ const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "personas", label: "Personas", icon: icons.personas },
   { id: "connections", label: "Connections", icon: icons.connections },
   { id: "activity", label: "Activity", icon: icons.activity },
+  { id: "faces", label: "Faces", icon: icons.faces },
   { id: "api", label: "API", icon: icons.api },
   { id: "settings", label: "Settings", icon: icons.settings },
 ];
@@ -78,7 +80,9 @@ export default function Shell({
       <WhatsNew token={auth.token} version={version} />
       <nav aria-label="Main" className="flex w-[76px] shrink-0 flex-col items-center gap-1.5 border-r border-line py-4">
         <Mark size={44} className="mb-4" />
-        {NAV.filter((n) => n.id !== "routines" || auth.account.role !== "restricted").map((n) => (
+        {NAV.filter(
+          (n) => (n.id !== "routines" || auth.account.role !== "restricted") && (n.id !== "faces" || auth.account.role === "owner"),
+        ).map((n) => (
           <button
             key={n.id}
             type="button"
@@ -157,6 +161,7 @@ export default function Shell({
         )}
         <main className={`min-h-0 flex-1 overflow-auto p-8 ${section === "chat" ? "hidden" : ""}`}>
           {section === "personas" && <Personas token={auth.token} />}
+          {section === "faces" && auth.account.role === "owner" && <Faces token={auth.token} />}
           {section === "activity" && (
             <Activity
               token={auth.token}

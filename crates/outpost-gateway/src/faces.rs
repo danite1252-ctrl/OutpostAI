@@ -79,19 +79,18 @@ fn picture(encoded: &str) -> Result<Vec<u8>, ApiError> {
 }
 
 /// What a routine is told about the faces in its pictures: who it most likely is, and how
-/// many it doesn't know. `None` when known faces aren't set up or nobody's added.
-pub async fn describe(state: &AppState, pictures: &[String]) -> Option<String> {
+/// many it doesn't know. Each face is also kept a while (Seen at the door) so an owner can say
+/// who it was. `None` when known faces aren't set up, or nobody's been added yet.
+pub async fn describe(state: &AppState, routine_id: &str, pictures: &[String]) -> Option<String> {
     if !state.engines.faces().ready {
         return None;
     }
     let known = faces::features(&state.pool).await.ok()?;
-    if known.is_empty() {
-        return None;
-    }
     // Each person once, at their best; unknown faces counted per picture (the most in any one).
     let mut seen: Vec<faces::Match> = Vec::new();
     let mut unknown = 0usize;
-    let mut any = false;
+    // The faces to keep: the same face in several stills is kept once, its biggest.
+    let mut keep: Vec<(Found, Option<faces::Match>)> = Vec::new();
     for p in pictures {
         let Ok(bytes) = picture(p) else { continue };
         let found = match find(state, bytes).await {
@@ -100,19 +99,31 @@ pub async fn describe(state: &AppState, pictures: &[String]) -> Option<String> {
         };
         let mut here_unknown = 0;
         for f in found {
-            any = true;
-            match faces::best_match(&known, &f.feature) {
+            let m = faces::best_match(&known, &f.feature);
+            match &m {
                 Some(m) => match seen.iter_mut().find(|s| s.face_id == m.face_id) {
-                    Some(s) if m.score > s.score => *s = m,
+                    Some(s) if m.score > s.score => *s = m.clone(),
                     Some(_) => {}
-                    None => seen.push(m),
+                    None => seen.push(m.clone()),
                 },
                 None => here_unknown += 1,
+            }
+            let size = f.area[2] * f.area[3];
+            match keep.iter_mut().find(|(k, _)| same_face(&k.feature, &f.feature)) {
+                Some(k) if size > k.0.area[2] * k.0.area[3] => *k = (f, m),
+                Some(_) => {}
+                None => keep.push((f, m)),
             }
         }
         unknown = unknown.max(here_unknown);
     }
-    if !any {
+    for (f, m) in &keep {
+        let _ = faces::add_seen(&state.pool, Some(routine_id), &f.feature, &f.crop, m.as_ref()).await;
+    }
+    if known.is_empty() {
+        return None;
+    }
+    if keep.is_empty() {
         return Some("[Known faces: no face could be made out in the pictures. Don't name anyone.]".into());
     }
     let mut parts: Vec<String> = seen
@@ -128,6 +139,11 @@ pub async fn describe(state: &AppState, pictures: &[String]) -> Option<String> {
         "[Known faces in the pictures: {}. Name only these people, and say \"possibly\" where it says not sure; describe anyone else.]",
         parts.join("; ")
     ))
+}
+
+/// Two faces from the same few seconds that are very alike: the same person.
+fn same_face(a: &[f32], b: &[f32]) -> bool {
+    a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>() > 0.6
 }
 
 // ------------------------------------------------------------------ routes
@@ -266,5 +282,57 @@ pub async fn sample(State(state): State<AppState>, auth: Auth, Path(id): Path<St
 pub async fn delete_sample(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {
     auth.require_owner()?;
     faces::delete_sample(&state.pool, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Faces seen at the door in the last 30 days (by routines with Say who it is on), newest first.
+#[utoipa::path(get, path = "/api/faces/seen", tag = "faces", security(("bearer" = [])),
+    responses((status = 200, body = Vec<faces::SeenFace>)))]
+pub async fn seen(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<Vec<faces::SeenFace>>> {
+    auth.require_owner()?;
+    Ok(Json(faces::seen(&state.pool).await?))
+}
+
+/// A seen face (JPEG).
+#[utoipa::path(get, path = "/api/faces/seen/{id}/picture", tag = "faces", security(("bearer" = [])),
+    responses((status = 200, description = "JPEG"), (status = 404, description = "Not found", body = ErrorBody)))]
+pub async fn seen_picture(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Response> {
+    auth.require_owner()?;
+    let jpeg = faces::seen_crop(&state.pool, &id).await?;
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "image/jpeg")
+        .header(header::CACHE_CONTROL, "private, max-age=86400")
+        .body(Body::from(jpeg))
+        .expect("response"))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct WhoItWas {
+    /// Someone already in Known faces...
+    pub face_id: Option<String>,
+    /// ...or someone new, by name.
+    pub name: Option<String>,
+}
+
+/// Say who a seen face was: it's kept as one of their faces.
+#[utoipa::path(post, path = "/api/faces/seen/{id}/save", tag = "faces", security(("bearer" = [])), request_body = WhoItWas,
+    responses((status = 200, body = KnownFace), (status = 400, description = "Neither someone nor a name", body = ErrorBody)))]
+pub async fn save_seen(State(state): State<AppState>, auth: Auth, Path(id): Path<String>, Json(w): Json<WhoItWas>) -> ApiResult<Json<KnownFace>> {
+    auth.require_owner()?;
+    let face_id = match (w.face_id.filter(|f| !f.is_empty()), w.name.filter(|n| !n.trim().is_empty())) {
+        (Some(f), _) => f,
+        (None, Some(n)) => faces::create(&state.pool, &n, None, &auth.account.id).await?.id,
+        (None, None) => return Err(ApiError::bad_request("Say who it was: someone already added, or a new name.")),
+    };
+    faces::save_seen(&state.pool, &id, &face_id).await?;
+    Ok(Json(faces::get(&state.pool, &face_id).await?))
+}
+
+/// Remove a seen face (a stranger, or too blurry).
+#[utoipa::path(delete, path = "/api/faces/seen/{id}", tag = "faces", security(("bearer" = [])),
+    responses((status = 204, description = "Removed"), (status = 404, description = "Not found", body = ErrorBody)))]
+pub async fn delete_seen(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {
+    auth.require_owner()?;
+    faces::delete_seen(&state.pool, &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

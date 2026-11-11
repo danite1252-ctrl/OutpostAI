@@ -12,6 +12,7 @@ import { ToolsScreen } from "../toolLibrary";
 import { PersonasScreen } from "../personas";
 import { ModelsScreen } from "../modelsScreen";
 import { PeopleScreen } from "../people";
+import { FacesScreen } from "../faces";
 import { ServerCard } from "../server";
 import { DocsMemoryScreen } from "../docsMemory";
 import { ActivityScreen } from "../activity";
@@ -48,7 +49,7 @@ export default function Me({
   }, []);
   const u = update.state;
   const [toolsOpen, setToolsOpen] = useState(false);
-  const [page, setPage] = useState<"personas" | "routines" | "activity" | "wake" | "models" | "people" | "docs" | null>(null);
+  const [page, setPage] = useState<"personas" | "routines" | "activity" | "wake" | "models" | "people" | "docs" | "faces" | null>(null);
   const [checked, setChecked] = useState<{ host: string; ok: boolean; problem?: string }[] | null>(null);
   const [checking, setChecking] = useState(false);
   async function checkConnection() {
@@ -121,6 +122,7 @@ export default function Me({
         {role !== "restricted" && <Button kind="ghost" title="Routines" onPress={() => setPage("routines")} />}
         <Button kind="ghost" title="Tools" onPress={() => setToolsOpen(true)} />
         <Button kind="ghost" title="Activity" onPress={() => setPage("activity")} />
+        {role === "owner" && <Button kind="ghost" title="Faces" onPress={() => setPage("faces")} />}
         <Button kind="ghost" title="Wake word" onPress={() => setPage("wake")} />
         <Button kind="ghost" title="Documents and memory" onPress={() => setPage("docs")} />
         <Button kind="ghost" title="Models" onPress={() => setPage("models")} />
@@ -146,6 +148,7 @@ export default function Me({
       )}
       {page === "models" && <ModelsScreen api={api} isOwner={role === "owner"} onClose={() => setPage(null)} />}
       {page === "docs" && <DocsMemoryScreen api={api} onClose={() => setPage(null)} />}
+      {page === "faces" && <FacesScreen api={api} onClose={() => setPage(null)} />}
       {page === "people" && (
         <PeopleScreen api={api} isOwner={role === "owner"} myAccountId={saved.account.id} onClose={() => setPage(null)} />
       )}
