@@ -88,7 +88,9 @@ pub async fn describe(state: &AppState, routine_id: &str, pictures: &[String]) -
     let known = faces::features(&state.pool).await.ok()?;
     // Each person once, at their best; unknown faces counted per picture (the most in any one).
     let mut seen: Vec<faces::Match> = Vec::new();
-    let mut unknown = 0usize;
+    // The most faces in any one still: how many people are there (the same person turns up
+    // in each still, sometimes recognised in one and not another).
+    let mut most_faces = 0usize;
     // The faces to keep: the same face in several stills is kept once, its biggest.
     let mut keep: Vec<(Found, Option<faces::Match>)> = Vec::new();
     for p in pictures {
@@ -97,7 +99,7 @@ pub async fn describe(state: &AppState, routine_id: &str, pictures: &[String]) -
             Ok(f) => f,
             Err(e) => return Some(format!("[Faces couldn't be checked: {e}]")),
         };
-        let mut here_unknown = 0;
+        most_faces = most_faces.max(found.len());
         for f in found {
             let m = faces::best_match(&known, &f.feature);
             match &m {
@@ -106,7 +108,7 @@ pub async fn describe(state: &AppState, routine_id: &str, pictures: &[String]) -
                     Some(_) => {}
                     None => seen.push(m.clone()),
                 },
-                None => here_unknown += 1,
+                None => {}
             }
             let size = f.area[2] * f.area[3];
             match keep.iter_mut().find(|(k, _)| same_face(&k.feature, &f.feature)) {
@@ -115,8 +117,8 @@ pub async fn describe(state: &AppState, routine_id: &str, pictures: &[String]) -
                 None => keep.push((f, m)),
             }
         }
-        unknown = unknown.max(here_unknown);
     }
+    let unknown = most_faces.saturating_sub(seen.len());
     for (f, m) in &keep {
         let _ = faces::add_seen(&state.pool, Some(routine_id), &f.feature, &f.crop, m.as_ref()).await;
     }

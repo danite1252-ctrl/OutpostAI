@@ -256,6 +256,11 @@ async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result
                 } else {
                     format!("\n\n[The picture from {what} is attached.]")
                 });
+                // Small models borrow the instructions' examples ("a courier with a parcel").
+                content.push_str(
+                    "\n[Describe only what you can actually see in the pictures. Any examples in the instructions are only \
+                     examples: don't mention a parcel, a courier or anyone else unless they're in the pictures.]",
+                );
                 if let Some(who) = who {
                     content.push_str(&format!("\n{who}"));
                 }
