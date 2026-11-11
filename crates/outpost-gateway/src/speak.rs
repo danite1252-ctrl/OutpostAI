@@ -115,16 +115,24 @@ impl HomeAssistant {
         if !path.starts_with("/api/") || path.contains("..") || path.len() > 500 {
             return Err("That isn't a picture in Home Assistant.".into());
         }
-        let r = client()
-            .get(format!("{}{path}", self.base))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .map_err(|_| "Home Assistant didn't answer.".to_string())?;
+        // Home Assistant passes a doorbell ring on straight away but saves its clip a few seconds
+        // later: a "not there" (or a hiccup) is asked again, for up to about 15 seconds.
+        let mut waits = [1u64, 2, 3, 4, 5].into_iter();
+        let r = loop {
+            let tried = client().get(format!("{}{path}", self.base)).bearer_auth(&self.token).send().await;
+            let again = match &tried {
+                Ok(r) => matches!(r.status().as_u16(), 404 | 500..=599),
+                Err(_) => true,
+            };
+            match (again, waits.next()) {
+                (true, Some(secs)) => tokio::time::sleep(std::time::Duration::from_secs(secs)).await,
+                _ => break tried.map_err(|_| "Home Assistant didn't answer.".to_string())?,
+            }
+        };
         match r.status().as_u16() {
             200 => {}
             401 | 403 => return Err("Home Assistant turned down the token in your Home Assistant tool.".into()),
-            404 => return Err("Home Assistant doesn't have that picture (any more).".into()),
+            404 => return Err("Home Assistant still didn't have the picture after 15 seconds.".into()),
             code => return Err(format!("Home Assistant couldn't get the picture ({code}).")),
         }
         let bytes = r.bytes().await.map_err(|_| "The picture was cut off.".to_string())?;

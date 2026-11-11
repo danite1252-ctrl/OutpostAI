@@ -263,7 +263,13 @@ async fn attempt(state: &AppState, r: &Routine, details: Option<&str>) -> Result
             }
             Err(why) => {
                 tracing::warn!(routine = %r.id, what, error = %why, "couldn't get a picture to look at");
-                content.push_str(&format!("\n\n[The picture from {what} couldn't be had: {why} Say so in your result.]"));
+                // With no picture, it must not describe anyone (a small model will otherwise borrow
+                // the instructions' examples).
+                content.push_str(&format!(
+                    "\n\n[There is NO picture: the one from {what} couldn't be had ({why}). You can't see who or what is there, \
+                     so don't describe or guess anyone. Say only that it went off (someone may be at the door) and that there's \
+                     no picture this time.]"
+                ));
             }
         }
     }
