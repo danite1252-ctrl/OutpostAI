@@ -23,6 +23,8 @@ const TASKS: { id: Task; label: string; blurb: string }[] = [
   { id: "video", label: "Video", blurb: "Text to video" },
   { id: "animate", label: "Animate", blurb: "Bring a picture to life" },
   { id: "model", label: "3D", blurb: "A 3D model from a picture" },
+  { id: "upscale", label: "Upscale", blurb: "Make a picture bigger and sharper" },
+  { id: "cutout", label: "Cut out", blurb: "Remove a picture's background" },
 ];
 
 /** How a workflow fits this PC, in the same colours as the Models page. */

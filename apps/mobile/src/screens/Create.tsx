@@ -13,6 +13,8 @@ const TASKS: { id: Task; label: string }[] = [
   { id: "video", label: "Video" },
   { id: "animate", label: "Animate" },
   { id: "model", label: "3D" },
+  { id: "upscale", label: "Upscale" },
+  { id: "cutout", label: "Cut out" },
 ];
 
 type Values = Record<string, unknown>;
