@@ -14,7 +14,7 @@ const TASKS: { id: Task; label: string }[] = [
   { id: "animate", label: "Animate" },
   { id: "model", label: "3D" },
   { id: "upscale", label: "Upscale" },
-  { id: "cutout", label: "Cut out" },
+  { id: "cutout", label: "Remove BG" },
 ];
 
 type Values = Record<string, unknown>;
