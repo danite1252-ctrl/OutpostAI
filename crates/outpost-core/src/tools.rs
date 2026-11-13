@@ -123,7 +123,7 @@ pub fn apply(t: &mut Tool, f: &ToolFields) -> CoreResult<()> {
         "http" if !(t.url.starts_with("https://") || t.url.starts_with("http://")) => {
             Err(CoreError::Invalid("Give its address (https://...).".into()))
         }
-        "builtin" if t.command != "google" => Err(CoreError::Invalid("There's no built-in tool called that.".into())),
+        "builtin" if t.command != "google" && t.command != "text" => Err(CoreError::Invalid("There's no built-in tool called that.".into())),
         "stdio" | "http" | "builtin" => Ok(()),
         _ => Err(CoreError::Invalid("A tool runs as a program (stdio), at an address (http), or built in.".into())),
     }

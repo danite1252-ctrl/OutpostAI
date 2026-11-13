@@ -91,6 +91,11 @@ fn is_google(t: &Tool) -> bool {
     t.transport == "builtin" && t.command == "google"
 }
 
+/// The built-in text tools (Count words): nothing to start or sign in to.
+fn is_text(t: &Tool) -> bool {
+    t.transport == "builtin" && t.command == "text"
+}
+
 /// How the MCP client reaches it (its sign-in's token over any typed-in key).
 fn config(state: &AppState, t: &Tool, st: Option<&OAuthState>) -> ServerConfig {
     let s = secrets(state, t);
@@ -130,6 +135,9 @@ fn can_renew(st: &Option<OAuthState>, e: &str) -> bool {
 
 /// A tool's tools (starting it if need be).
 pub async fn tool_list(state: &AppState, t: &Tool) -> Result<Vec<ToolInfo>, String> {
+    if is_text(t) {
+        return Ok(crate::text_tools::tools());
+    }
     let st = renewed(state, t, false).await?;
     if is_google(t) {
         st.as_ref().and_then(|o| o.access_token.as_ref()).ok_or_else(|| format!("needs sign-in: sign in to {} first.", t.name))?;
@@ -169,6 +177,9 @@ pub async fn call(state: &AppState, tool_id: &str, name: &str, args: Value, who:
             ),
             is_error: true,
         });
+    }
+    if is_text(&t) {
+        return crate::text_tools::call(name, &args);
     }
     let st = renewed(state, &t, false).await?;
     if is_google(&t) {

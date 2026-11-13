@@ -473,10 +473,15 @@ function CatalogCard({
           </span>
           <span className="text-sm text-muted">{entry.description}</span>
           <span className="text-xs text-muted">
-            {entry.cost} ·{" "}
-            <a href={entry.page} target="_blank" rel="noreferrer" className="text-ember hover:text-ember-hover">
-              About it
-            </a>
+            {entry.cost}
+            {entry.page && (
+              <>
+                {" · "}
+                <a href={entry.page} target="_blank" rel="noreferrer" className="text-ember hover:text-ember-hover">
+                  About it
+                </a>
+              </>
+            )}
           </span>
         </span>
         {!open && (

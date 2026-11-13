@@ -149,6 +149,10 @@ fn can_refresh(s: &McpServer, e: &str) -> bool {
 }
 
 async fn tools_of(s: McpServer) -> Result<Vec<ToolInfo>, String> {
+    // Outpost's text tools (Count words): nothing to start.
+    if s.transport == "builtin" && s.command == "text" {
+        return Ok(outpost_gateway::text_tools::tools());
+    }
     if s.is_google() {
         // Nothing to start: its tools follow its settings, once signed in.
         s.token()?;
@@ -165,6 +169,9 @@ async fn tools_of(s: McpServer) -> Result<Vec<ToolInfo>, String> {
 }
 
 async fn call_on(s: McpServer, tool: &str, arguments: Value) -> Result<mcp_client::CallResult, String> {
+    if s.transport == "builtin" && s.command == "text" {
+        return outpost_gateway::text_tools::call(tool, &arguments);
+    }
     if s.is_google() {
         let s = refreshed(s, false).await?;
         return match google_tools::call(&http(), &s.token()?, &s.args, tool, &arguments).await {
@@ -326,7 +333,7 @@ pub async fn mcp_save(server: McpServer) -> Result<Value, String> {
         "http" if !(s.url.starts_with("https://") || s.url.starts_with("http://")) => {
             return Err("Give its address (https://...).".into())
         }
-        "builtin" if s.command != "google" => return Err("There's no built-in tool called that.".into()),
+        "builtin" if s.command != "google" && s.command != "text" => return Err("There's no built-in tool called that.".into()),
         "stdio" | "http" | "builtin" => {}
         _ => return Err("A tool server runs as a program (stdio) or at an address (http).".into()),
     }

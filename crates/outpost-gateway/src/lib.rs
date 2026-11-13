@@ -36,6 +36,7 @@ pub mod server_tools;
 pub mod setup_code;
 pub mod speak;
 pub mod faces;
+pub mod text_tools;
 pub mod tailscale;
 pub mod tls;
 pub mod train;

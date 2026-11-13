@@ -867,6 +867,18 @@
     "page": "https://github.com/modelcontextprotocol/servers/tree/main/src/time"
   },
   {
+    "id": "count-words",
+    "name": "Count words",
+    "category": "Helpers",
+    "description": "Built into Outpost: exact word, character, line and paragraph counts, like a word processor's. Models can't count reliably themselves; with this on, a persona can read a photo of a page and give its exact word count.",
+    "transport": "builtin",
+    "command": "text",
+    "args": [],
+    "inputs": [],
+    "cost": "Free",
+    "page": ""
+  },
+  {
     "id": "sequential-thinking",
     "name": "Step-by-step thinking",
     "category": "Helpers",

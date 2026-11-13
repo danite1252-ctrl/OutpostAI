@@ -484,9 +484,11 @@ function AddEntry({
       <P>{entry.description}</P>
       <P muted>{entry.cost}</P>
       {entry.note && <P muted>{entry.note}</P>}
-      <Pressable accessibilityRole="link" onPress={() => void Linking.openURL(entry.page)}>
-        <Text style={{ color: C.pick }}>About it</Text>
-      </Pressable>
+      {entry.page ? (
+        <Pressable accessibilityRole="link" onPress={() => void Linking.openURL(entry.page)}>
+          <Text style={{ color: C.pick }}>About it</Text>
+        </Pressable>
+      ) : null}
       {done ? (
         <>
           <P>{done}</P>
