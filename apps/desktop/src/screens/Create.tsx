@@ -27,6 +27,25 @@ const TASKS: { id: Task; label: string; blurb: string }[] = [
   { id: "cutout", label: "Remove BG", blurb: "Make a picture's background transparent" },
 ];
 
+/** Create's groups: pictures, video, 3D; each with its own kinds of thing to make. */
+const GROUPS: { id: string; label: string; tasks: Task[] }[] = [
+  { id: "images", label: "Images", tasks: ["picture", "character", "edit", "upscale", "cutout"] },
+  { id: "video", label: "Video", tasks: ["video", "animate"] },
+  { id: "model", label: "3D", tasks: ["model"] },
+];
+const groupOf = (t: Task) => GROUPS.find((g) => g.tasks.includes(t)) ?? GROUPS[0];
+
+const TASK_KEY = "outpost.create.task";
+
+function loadTask(): Task {
+  try {
+    const t = localStorage.getItem(TASK_KEY) as Task | null;
+    return t && TASKS.some((x) => x.id === t) ? t : "picture";
+  } catch {
+    return "picture";
+  }
+}
+
 /** How a workflow fits this PC, in the same colours as the Models page. */
 function fitBadge(p: Pack) {
   if (p.runs_on) return { text: `Runs on ${p.runs_on}`, style: "text-ok", dot: "bg-ok" };
@@ -103,7 +122,16 @@ export default function Create({
   onUnauthorized: () => void;
 }) {
   const [packs, setPacks] = useState<Pack[]>([]);
-  const [task, setTask] = useState<Task>("picture");
+  const [task, setTaskNow] = useState<Task>(loadTask);
+  // Opened where it was last left.
+  const setTask = useCallback((t: Task) => {
+    setTaskNow(t);
+    try {
+      localStorage.setItem(TASK_KEY, t);
+    } catch {
+      // Not remembered: fine.
+    }
+  }, []);
   const [choices, setChoices] = useState<Partial<Record<Task, string>>>(loadChoices);
   const [values, setValues] = useState<Values>({});
   const [loras, setLoras] = useState<LoraInfo>({ loras: [], folder: "", characters: [] });
@@ -162,7 +190,13 @@ export default function Create({
   const hiddenTasks = TASKS.filter((t) => !shownTasks.includes(t));
   useEffect(() => {
     if (shownTasks.length && !shownTasks.some((t) => t.id === task)) setTask(shownTasks[0].id);
-  }, [shownTasks, task]);
+  }, [shownTasks, task, setTask]);
+  const shownGroups = GROUPS.filter((g) => shownTasks.some((t) => g.tasks.includes(t.id)));
+  const group = groupOf(task);
+  const groupTasks = shownTasks.filter((t) => group.tasks.includes(t.id));
+  // The option last used in each group, so switching back lands there.
+  const lastInGroup = useRef<Record<string, Task>>({});
+  lastInGroup.current[group.id] = task;
   const options = useMemo(() => packsOf(packs, task), [packs, task]);
   const pack = options.find((p) => p.id === choices[task]) ?? options[0] ?? null;
 
@@ -384,8 +418,30 @@ export default function Create({
         </p>
       )}
 
-      <div className="flex flex-wrap gap-2" role="tablist" aria-label="What to make">
-        {shownTasks.map((t) => (
+      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Images, video or 3D">
+        {shownGroups.map((g) => (
+          <button
+            key={g.id}
+            type="button"
+            role="tab"
+            aria-selected={g.id === group.id}
+            onClick={() => {
+              const back = lastInGroup.current[g.id];
+              const first = shownTasks.find((t) => g.tasks.includes(t.id));
+              setTask(back && shownTasks.some((t) => t.id === back) ? back : (first?.id ?? g.tasks[0]));
+            }}
+            className={`min-h-10 rounded-full border px-5 text-sm font-semibold ${
+              g.id === group.id ? "border-ember bg-ember text-on-ember" : "border-line bg-surface hover:bg-raised"
+            }`}
+          >
+            {g.label}
+          </button>
+        ))}
+      </div>
+
+      {groupTasks.length > 1 && (
+      <div className="-mt-2 flex flex-wrap gap-2" role="tablist" aria-label={`What kind of ${group.label.toLowerCase()}`}>
+        {groupTasks.map((t) => (
           <button
             key={t.id}
             type="button"
@@ -401,6 +457,7 @@ export default function Create({
           </button>
         ))}
       </div>
+      )}
 
       {hiddenTasks.length > 0 && (
         <p className="-mt-3 text-xs text-muted">

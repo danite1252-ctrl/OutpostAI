@@ -1,5 +1,5 @@
 import * as ImagePicker from "expo-image-picker";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Dimensions, Image, Modal, Pressable, ScrollView, Switch, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AuthedImage } from "../images";
@@ -16,6 +16,14 @@ const TASKS: { id: Task; label: string }[] = [
   { id: "upscale", label: "Upscale" },
   { id: "cutout", label: "Remove BG" },
 ];
+
+/** Create's groups: pictures, video, 3D; each with its own kinds of thing to make. */
+const GROUPS: { id: string; label: string; tasks: Task[] }[] = [
+  { id: "images", label: "Images", tasks: ["picture", "character", "edit", "upscale", "cutout"] },
+  { id: "video", label: "Video", tasks: ["video", "animate"] },
+  { id: "model", label: "3D", tasks: ["model"] },
+];
+const groupOf = (t: Task) => GROUPS.find((g) => g.tasks.includes(t)) ?? GROUPS[0];
 
 type Values = Record<string, unknown>;
 
@@ -83,6 +91,12 @@ export default function Create({
   useEffect(() => {
     if (shownTasks.length && !shownTasks.some((t) => t.id === task)) setTask(shownTasks[0].id);
   }, [shownTasks, task]);
+  const shownGroups = GROUPS.filter((g) => shownTasks.some((t) => g.tasks.includes(t.id)));
+  const group = groupOf(task);
+  const groupTasks = shownTasks.filter((t) => group.tasks.includes(t.id));
+  // The option last used in each group, so switching back lands there.
+  const lastInGroup = useRef<Record<string, Task>>({});
+  lastInGroup.current[group.id] = task;
 
   const options = useMemo(
     () =>
@@ -161,11 +175,39 @@ export default function Create({
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.pad} keyboardShouldPersistTaps="handled">
       <H1>Create</H1>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-        {shownTasks.map((t) => (
-          <Chip key={t.id} label={t.label} active={t.id === task} onPress={() => setTask(t.id)} />
+      <View style={{ flexDirection: "row", gap: 8 }} accessibilityRole="tablist">
+        {shownGroups.map((g) => (
+          <Pressable
+            key={g.id}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: g.id === group.id }}
+            onPress={() => {
+              const back = lastInGroup.current[g.id];
+              const first = shownTasks.find((t) => g.tasks.includes(t.id));
+              setTask(back && shownTasks.some((t) => t.id === back) ? back : (first?.id ?? g.tasks[0]));
+            }}
+            style={{
+              flex: 1,
+              minHeight: 44,
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 22,
+              borderWidth: 1,
+              borderColor: g.id === group.id ? C.ember : C.line,
+              backgroundColor: g.id === group.id ? C.ember : "transparent",
+            }}
+          >
+            <Text style={{ color: g.id === group.id ? C.night : C.ink, fontWeight: "600", fontSize: 16 }}>{g.label}</Text>
+          </Pressable>
         ))}
-      </ScrollView>
+      </View>
+      {groupTasks.length > 1 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+          {groupTasks.map((t) => (
+            <Chip key={t.id} label={t.label} active={t.id === task} onPress={() => setTask(t.id)} />
+          ))}
+        </ScrollView>
+      )}
       {options.length > 1 && (
         <View style={{ gap: 6 }}>
           <Text style={s.label}>Model</Text>

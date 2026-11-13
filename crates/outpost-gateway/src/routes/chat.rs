@@ -316,6 +316,11 @@ pub const DIRECT_NOTE: &str = "## Answering\nStart with the answer itself. Don't
     not everything it returned: no long tables or lists of readings unless the user asks for them.";
 
 /// For replies that will be spoken aloud.
+pub const COUNT_NOTE: &str = "## Counting words\nThe count_words tool is on. Any count of words, characters, lines or \
+paragraphs MUST come from calling count_words with the full text, exactly as written (for text in a picture, write \
+out every line first, then pass all of it). Never estimate, approximate or add up a count yourself, and never give a \
+number with \"about\" or \"~\". Give the tool's numbers as they are, and show the text you counted.";
+
 pub const SPOKEN_NOTE: &str = "## Spoken reply\nThis reply will be spoken aloud, not read. Answer in one to three short \
     sentences, as you'd say it to someone in the room: no tables, lists, headings, links, symbols or Markdown. Give \
     the one or two facts that answer it, rounded and in plain words (the weather: today's high and low, rain, \
@@ -594,6 +599,8 @@ pub async fn start_reply(
             tool_servers.push((crate::outpost_tools::server(), Via::Outpost(ctx)));
         }
     }
+    // Count words is on: counts come from it, never from the model's own estimate.
+    let counts_words = tool_servers.iter().any(|(s, _)| s.tools.iter().any(|t| t.name == "count_words"));
     if wants_tools && folders.is_empty() && !resolved.can_use_tools {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -680,6 +687,9 @@ pub async fn start_reply(
         });
     if let Some(t) = &pc_tools {
         system = format!("{system}\n\n{}", t.instructions());
+    }
+    if counts_words {
+        system = format!("{system}\n\n{COUNT_NOTE}");
     }
     // Answer first, always; spoken replies short, with nothing that only reads on a screen.
     system = format!("{system}\n\n{DIRECT_NOTE}");
