@@ -178,22 +178,24 @@ async fn helper_chat_models() -> Result<HelperChatModels, String> {
     Ok(HelperChatModels { installed: h.chat_models().await, catalog: h.chat_catalog().await, pulls: h.chat_pulls() })
 }
 
-/// Download a chat model onto this PC.
+/// Download a chat model onto this PC. (Async, like the other commands below that start
+/// work in the background: those start it on Outpost's runtime, which a plain command,
+/// run on the window's own thread, doesn't have, and the app closed.)
 #[tauri::command]
-fn helper_pull_chat_model(model: String) -> Result<(), String> {
+async fn helper_pull_chat_model(model: String) -> Result<(), String> {
     helper()?.pull_chat_model(&model).map_err(|e| format!("{e:#}"))
 }
 
 /// Stop a chat model downloading onto this PC.
 #[tauri::command]
-fn helper_cancel_chat_pull(model: String) -> Result<(), String> {
+async fn helper_cancel_chat_pull(model: String) -> Result<(), String> {
     helper()?.cancel_chat_pull(&model);
     Ok(())
 }
 
 /// Stop a workflow's model files downloading onto this PC.
 #[tauri::command]
-fn helper_cancel_pack(id: String) -> Result<(), String> {
+async fn helper_cancel_pack(id: String) -> Result<(), String> {
     helper()?.cancel_pack(&id);
     Ok(())
 }
@@ -206,7 +208,7 @@ async fn helper_remove_chat_model(model: String) -> Result<(), String> {
 
 /// Install Ollama on this PC, for chat.
 #[tauri::command]
-fn helper_install_ollama() -> Result<(), String> {
+async fn helper_install_ollama() -> Result<(), String> {
     helper()?.install_ollama().map_err(|e| format!("{e:#}"))
 }
 
@@ -218,13 +220,13 @@ async fn helper_packs() -> Result<Vec<outpost_gateway::helper_pc::LocalPack>, St
 
 /// Download a workflow's models onto this PC.
 #[tauri::command]
-fn helper_install_pack(id: String) -> Result<(), String> {
+async fn helper_install_pack(id: String) -> Result<(), String> {
     helper()?.install_pack(&id).map_err(|e| format!("{e:#}"))
 }
 
 /// Install ComfyUI on this PC.
 #[tauri::command]
-fn helper_install_comfyui() -> Result<(), String> {
+async fn helper_install_comfyui() -> Result<(), String> {
     helper()?.install_comfyui().map_err(|e| format!("{e:#}"))
 }
 
@@ -303,7 +305,7 @@ fn show_in_folder(app: AppHandle, path: String) -> Result<(), String> {
 
 /// Install ai-toolkit on this PC, so it can take trainings too.
 #[tauri::command]
-fn helper_install_trainer() -> Result<(), String> {
+async fn helper_install_trainer() -> Result<(), String> {
     helper()?.install_trainer().map_err(|e| format!("{e:#}"))
 }
 
