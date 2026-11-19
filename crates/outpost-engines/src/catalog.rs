@@ -506,6 +506,54 @@ pub const CATALOG: &[Entry] = &[
         page: "https://huggingface.co/bartowski/orcarouter_Qwen3.8-27B-Uncensored-GGUF",
     },
     Entry {
+        model: "hf.co/bartowski/orcarouter_Qwen3.8-27B-Uncensored-GGUF:Q3_K_M",
+        name: "Qwen 3.8 27B Uncensored Q3_K_M",
+        category: Category::Uncensored,
+        size_gb: 14.6,
+        context_k: 256,
+        badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
+        license: Some("Apache-2.0"),
+        rank: 80,
+        description: "The orcarouter Qwen 3.8 at a sharper 3-bit than the 16 GB build. On a 16 GB card a little of it runs in system memory; fits fully on 20 GB and up.",
+        page: "https://huggingface.co/bartowski/orcarouter_Qwen3.8-27B-Uncensored-GGUF",
+    },
+    Entry {
+        model: "hf.co/llmfan46/gemma-4-26B-A4B-it-ultra-uncensored-heretic-GGUF:Q3_K_M",
+        name: "Gemma 4 26B MoE Ultra Heretic",
+        category: Category::Uncensored,
+        size_gb: 13.3,
+        context_k: 256,
+        badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
+        license: Some("Apache-2.0"),
+        rank: 81,
+        description: "Gemma 4's mixture-of-experts with its refusals removed (Heretic). Only 4B of it works at a time, so it's quick; 3-bit to fit 16 GB cards. Reads pictures.",
+        page: "https://huggingface.co/llmfan46/gemma-4-26B-A4B-it-ultra-uncensored-heretic-GGUF",
+    },
+    Entry {
+        model: "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M",
+        name: "Gemma 4 12B Uncensored (TrevorJS)",
+        category: Category::Uncensored,
+        size_gb: 7.4,
+        context_k: 256,
+        badges: &[Uncensored, Tools, Thinking, LongContext],
+        license: Some("Apache-2.0"),
+        rank: 71,
+        description: "Gemma 4 12B with its refusals removed and its quality kept. The pick for 10 to 12 GB cards; text only.",
+        page: "https://huggingface.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF",
+    },
+    Entry {
+        model: "hf.co/llmfan46/gemma-4-E4B-it-ultra-uncensored-heretic-GGUF:Q4_K_M",
+        name: "Gemma 4 E4B Ultra Heretic",
+        category: Category::Uncensored,
+        size_gb: 5.3,
+        context_k: 128,
+        badges: &[Uncensored, Vision, Tools, Thinking, LongContext],
+        license: Some("Apache-2.0"),
+        rank: 67,
+        description: "Small Gemma 4 with its refusals removed (Heretic), at 4-bit so all of it fits an 8 GB card. Reads pictures.",
+        page: "https://huggingface.co/llmfan46/gemma-4-E4B-it-ultra-uncensored-heretic-GGUF",
+    },
+    Entry {
         model: "hf.co/bartowski/TheDrummer_Orion-26B-A4B-v1.1-GGUF:IQ4_XS",
         name: "Orion 26B MoE v1.1",
         category: Category::Uncensored,
@@ -622,11 +670,11 @@ pub struct CatalogEntry {
     pub recommended: bool,
 }
 
-/// Memory a model needs: its weights plus working space, which grows a little with the
-/// context window Outpost gives it on this card (0.6 GB, plus 0.6 GB more at 64K: flash
-/// attention and the 8-bit KV cache keep the window cheap).
+/// Memory a model needs: its weights plus working space (about 1 GB for the picture reader
+/// and scratch space), plus the context window Outpost gives it on this card (0.6 GB more at
+/// 64K: flash attention and the 8-bit KV cache keep the window cheap).
 fn needed_gb(size_gb: f32, context: u32) -> f32 {
-    size_gb * 1.15 + 0.6 + 0.6 * (context as f32 / 65_536.0)
+    size_gb + 1.0 + 0.6 * (context as f32 / 65_536.0)
 }
 
 pub fn fit(size_gb: f32, hw: &Hardware) -> Fit {
@@ -740,10 +788,10 @@ mod tests {
             .filter(|e| e.category == Category::General && e.recommended)
             .collect();
         assert_eq!(general.len(), 1);
-        // Unfiltered Qwen comes first and has its own pick.
+        // Unfiltered comes first and has its own pick.
         assert_eq!(entries[0].category, Category::Uncensored);
         assert!(entries[0].recommended);
-        assert_eq!(entries[0].model, "huihui_ai/qwen3.5-abliterated:9b");
+        assert_eq!(entries[0].model, "hf.co/llmfan46/gemma-4-26B-A4B-it-ultra-uncensored-heretic-GGUF:Q3_K_M");
         assert_eq!(general[0].model, "ornith-1.5:9b");
         assert_eq!(general[0].fit, Fit::Fits);
         let big = build(&hw(32, 64));
@@ -751,7 +799,7 @@ mod tests {
     }
 
     #[test]
-    fn unfiltered_has_more_than_qwen_but_qwen_leads() {
+    fn unfiltered_has_gemma_and_qwen() {
         let entries = build(&hw(16, 64));
         let unfiltered: Vec<_> = entries.iter().filter(|e| e.category == Category::Uncensored).collect();
         assert!(unfiltered.iter().any(|e| e.model.contains("gemma")));
@@ -759,7 +807,7 @@ mod tests {
         assert!(unfiltered.iter().all(|e| e.badges.contains(&Badge::Uncensored)));
         // Every chat model here handles Outpost's 64K window (Hermes needs it).
         assert!(unfiltered.iter().all(|e| e.context_k >= 64));
-        assert!(unfiltered[0].model.contains("qwen"));
+        assert!(unfiltered.iter().any(|e| e.model.to_lowercase().contains("qwen3.8")));
     }
 
     #[test]
@@ -808,15 +856,26 @@ mod tests {
                 .find(|e| e.category == Category::Uncensored && e.recommended)
                 .unwrap();
             assert_eq!(pick.fit, Fit::Fits, "{vram} GB pick {}", pick.model);
-            // Qwen is the owner's preference wherever a Qwen is the best that fits.
-            if vram < 48 {
-                assert!(
-                    pick.model.to_lowercase().contains("qwen"),
-                    "{vram} GB pick {}",
-                    pick.model
-                );
-            }
         }
+        // The owner's picks: Heretic Gemma 4 E4B on 8 GB, TrevorJS's Gemma 4 12B on 12 GB,
+        // the Heretic Gemma 4 26B MoE on 16 GB.
+        let pick = |vram| {
+            build(&hw(vram, 32))
+                .into_iter()
+                .find(|e| e.category == Category::Uncensored && e.recommended)
+                .unwrap()
+                .model
+        };
+        assert_eq!(pick(8), "hf.co/llmfan46/gemma-4-E4B-it-ultra-uncensored-heretic-GGUF:Q4_K_M");
+        assert_eq!(pick(12), "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M");
+        assert_eq!(pick(16), "hf.co/llmfan46/gemma-4-26B-A4B-it-ultra-uncensored-heretic-GGUF:Q3_K_M");
+        // The orcarouter Qwen 3.8 Q3_K_M is offered, just a little over a 16 GB card.
+        let qwen = build(&hw(16, 32))
+            .into_iter()
+            .find(|e| e.model.ends_with("orcarouter_Qwen3.8-27B-Uncensored-GGUF:Q3_K_M"))
+            .unwrap();
+        assert_eq!(qwen.fit, Fit::Partial);
+        assert!(CATALOG.iter().all(|e| crate::models::valid_name(e.model)));
         let big = build(&hw(48, 128));
         assert!(big
             .iter()

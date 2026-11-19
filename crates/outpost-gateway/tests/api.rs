@@ -470,9 +470,9 @@ async fn models_overview_and_permissions() {
     assert_eq!(status, StatusCode::OK);
     let catalog = overview["catalog"].as_array().unwrap();
     assert!(catalog.len() >= 10);
-    // Unfiltered Qwen models are listed first.
+    // Unfiltered models are listed first, the pick for this machine on top.
     assert_eq!(catalog[0]["category"], "uncensored");
-    assert!(catalog[0]["model"].as_str().unwrap().contains("qwen"));
+    assert_eq!(catalog[0]["recommended"], true);
     assert!(overview["installed"].is_array());
 
     // Bad names are refused before Ollama is asked.
