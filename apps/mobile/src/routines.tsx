@@ -652,7 +652,7 @@ function AlsoTell({ api, me, value, onChange }: { api: Outpost; me: string; valu
           />
         ))}
       </View>
-      <P muted>They get the same notification (and hear it, with On my phone and their wake word on), but not the routine's chat.</P>
+      <P muted>They get the same notification (and hear it, with On my phone on), but not the routine's chat.</P>
     </>
   );
 }

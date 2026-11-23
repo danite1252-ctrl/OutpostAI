@@ -155,6 +155,13 @@ object JobNotifier {
       }
     }
     val r = reply ?: return null
+    // Instant news, with the screen off: stay awake long enough to say it (at most 3 minutes).
+    val awake = if (watch) {
+      (ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager)
+        .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "outpost:news")
+        .apply { acquire(3 * 60 * 1000L) }
+    } else null
+    try {
     val front = p.getLong("front", 0L)
     val inFront = front > 0 && System.currentTimeMillis() - front < 30 * 60 * 1000
     val jobs = r.optJSONArray("jobs")
@@ -183,6 +190,9 @@ object JobNotifier {
       .putStringSet("seen", if (seen.size > 100) seen.toList().takeLast(50).toSet() else seen)
       .apply()
     return r.optInt("unfinished", 0)
+    } finally {
+      awake?.let { if (it.isHeld) it.release() }
+    }
   }
 
   /**
@@ -210,8 +220,6 @@ object JobNotifier {
       f.writeBytes(bytes)
       file = f
       val done = java.util.concurrent.CountDownLatch(1)
-      // The wake word doesn't listen to Outpost talking.
-      WakeService.hold("said", true)
       val p = android.media.MediaPlayer()
       player = p
       p.setAudioAttributes(
@@ -233,11 +241,10 @@ object JobNotifier {
     } finally {
       try { player?.release() } catch (_: Exception) {}
       file?.delete()
-      WakeService.hold("said", false)
     }
   }
 
-  /** Keep a connection (for the wake word) in its own storage, the sign-in encrypted. */
+  /** Keep a connection in its own storage, the sign-in encrypted. */
   fun keepConnection(p: android.content.SharedPreferences, hosts: List<String>, port: Int, fingerprint: String, token: String) {
     p.edit()
       .putString("hosts", hosts.joinToString(","))

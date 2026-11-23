@@ -13,8 +13,9 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
   <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
-  <!-- The wake word: listening (shown by a notification, with Stop) even with the screen off. -->
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+  <!-- Instant news: a line kept open to the Outpost (shown by a notification, with Stop), and
+       awake long enough to say what arrives with the screen off. -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
   <uses-permission android:name="android.permission.WAKE_LOCK" />
   <!-- Android 11+ only shows apps the speech recognizer if they say they look for it. -->
   <queries>
@@ -28,9 +29,13 @@
         android:exported="false"
         android:foregroundServiceType="dataSync" />
     <service
-        android:name="expo.modules.outpostnet.WakeService"
+        android:name="expo.modules.outpostnet.NewsService"
         android:exported="false"
-        android:foregroundServiceType="microphone" />
+        android:foregroundServiceType="specialUse">
+      <property
+          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+          android:value="Keeps a connection to the user's own home server open so doorbell and routine alerts arrive immediately" />
+    </service>
     <!-- Looking for a routine's result just after it's due (an alarm Android allows while idle). -->
     <receiver
         android:name="expo.modules.outpostnet.RoutineAlarm"

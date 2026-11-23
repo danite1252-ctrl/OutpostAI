@@ -4,7 +4,7 @@ import android.content.Context
 import android.media.AudioManager
 
 /**
- * How loud Outpost speaks when nobody has the app open (the wake word's beep and replies, a
+ * How loud Outpost speaks when nobody has the app open (the level chime, a
  * routine said on the phone). Those play at the phone's media volume, which is often low when
  * nothing else is playing; with a level set here, the media volume is raised to at least that
  * while Outpost speaks and put back afterwards.

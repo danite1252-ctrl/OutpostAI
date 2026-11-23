@@ -16,7 +16,6 @@ import { FacesScreen } from "../faces";
 import { ServerCard } from "../server";
 import { DocsMemoryScreen } from "../docsMemory";
 import { ActivityScreen } from "../activity";
-import { WakeScreen } from "../wake";
 import { RoutinesScreen } from "../routines";
 
 export default function Me({
@@ -49,7 +48,7 @@ export default function Me({
   }, []);
   const u = update.state;
   const [toolsOpen, setToolsOpen] = useState(false);
-  const [page, setPage] = useState<"personas" | "routines" | "activity" | "wake" | "models" | "people" | "docs" | "faces" | null>(null);
+  const [page, setPage] = useState<"personas" | "routines" | "activity" | "models" | "people" | "docs" | "faces" | null>(null);
   const [checked, setChecked] = useState<{ host: string; ok: boolean; problem?: string }[] | null>(null);
   const [checking, setChecking] = useState(false);
   async function checkConnection() {
@@ -123,7 +122,6 @@ export default function Me({
         <Button kind="ghost" title="Tools" onPress={() => setToolsOpen(true)} />
         <Button kind="ghost" title="Activity" onPress={() => setPage("activity")} />
         {role === "owner" && <Button kind="ghost" title="Faces" onPress={() => setPage("faces")} />}
-        <Button kind="ghost" title="Wake word" onPress={() => setPage("wake")} />
         <Button kind="ghost" title="Documents and memory" onPress={() => setPage("docs")} />
         <Button kind="ghost" title="Models" onPress={() => setPage("models")} />
         <Button kind="ghost" title={role === "owner" ? "People and devices" : "Your devices"} onPress={() => setPage("people")} />
@@ -133,7 +131,6 @@ export default function Me({
         <ToolsScreen api={api} isOwner={role === "owner"} canAdd={role !== "restricted"} onClose={() => setToolsOpen(false)} />
       )}
       {page === "personas" && <PersonasScreen api={api} onClose={() => setPage(null)} />}
-      {page === "wake" && <WakeScreen api={api} saved={saved} onClose={() => setPage(null)} />}
       {page === "activity" && <ActivityScreen api={api} isOwner={role === "owner"} onClose={() => setPage(null)} />}
       {page === "routines" && (
         <RoutinesScreen
@@ -216,6 +213,8 @@ export default function Me({
         </P>
         {notifyNote && <P muted>{notifyNote}</P>}
         <SayNews />
+        <InstantNews />
+        <VoiceLevel />
       </View>
       <View style={s.card}>
         <Text style={{ color: C.ink, fontSize: 16, fontWeight: "600" }}>Troubleshooting</Text>
@@ -261,6 +260,74 @@ function SayNews() {
       <P muted>
         For routines with On my phone ticked. It's never said while the phone is on silent or vibrate, in Do Not Disturb, or with the media
         volume down: then it's a notification only.
+      </P>
+    </>
+  );
+}
+
+/** Instant news: a line kept open so the doorbell and routines reach this phone straight away. */
+function InstantNews() {
+  const [on, setOn] = useState(() => OutpostNet.newsOn?.() ?? false);
+  const [note, setNote] = useState<string | null>(null);
+  if (!OutpostNet.newsStart) return null;
+  return (
+    <>
+      <View style={s.row}>
+        <Chip
+          label={on ? "Instant news: on" : "Instant news: off"}
+          active={on}
+          onPress={() => {
+            setNote(null);
+            try {
+              if (on) OutpostNet.newsStop!();
+              else OutpostNet.newsStart!();
+              setOn(!on);
+            } catch (e) {
+              setNote(e instanceof Error ? e.message : String(e));
+            }
+          }}
+        />
+      </View>
+      <P muted>
+        Keeps a line open to your Outpost so the doorbell and routines reach this phone the moment they happen, instead of at the next
+        check. A small notification shows while it's on. It uses a little more battery; nothing listens to the microphone.
+      </P>
+      {note && <P muted>{note}</P>}
+    </>
+  );
+}
+
+const LEVELS: { label: string; percent: number }[] = [
+  { label: "Phone's media volume", percent: 0 },
+  { label: "At least half", percent: 50 },
+  { label: "Loud", percent: 75 },
+  { label: "Loudest", percent: 100 },
+];
+
+/** How loud it speaks with the app closed (things said on the phone). */
+function VoiceLevel() {
+  const [level, setLevel] = useState(() => OutpostNet.voiceLevel?.() ?? 0);
+  if (!OutpostNet.setVoiceLevel) return null;
+  return (
+    <>
+      <Text style={s.label}>How loud it speaks</Text>
+      <View style={[s.row, { flexWrap: "wrap" }]}>
+        {LEVELS.map((x) => (
+          <Chip
+            key={x.label}
+            label={x.label}
+            active={level === x.percent}
+            onPress={() => {
+              OutpostNet.setVoiceLevel!(x.percent);
+              setLevel(x.percent);
+              void OutpostNet.voiceChime?.();
+            }}
+          />
+        ))}
+      </View>
+      <P muted>
+        Things said play at the phone's media volume, which is often turned down when nothing's playing. With a level picked,
+        Outpost turns the media volume up to at least that while it speaks, and back afterwards. In the car, it's the car's volume.
       </P>
     </>
   );

@@ -337,29 +337,16 @@ class OutpostNetModule : Module() {
     Function("converseMuted") { muted: Boolean -> voice.converseMuted(muted); Unit }
     Function("converseBrief") { brief: Boolean -> voice.converseBrief(brief); Unit }
 
-    // The wake word (see WakeService): start, stop, how it's doing, and the check.
-    Function("wakeStart") { word: String, personaId: String, threshold: Double, hosts: List<String>, port: Int, fingerprint: String, token: String ->
-      WakeService.start(context, word, personaId, threshold, hosts, port, fingerprint, token)
-    }
-    Function("wakeStop") { WakeService.stop(context) }
-    Function("wakeResume") { hosts: List<String>, port: Int, fingerprint: String, token: String ->
-      WakeService.resume(context, hosts, port, fingerprint, token)
-    }
-    Function("wakeStatus") { WakeService.status(context) }
+    // Instant news (see NewsService): a line kept open for the doorbell and routines.
+    Function("newsOn") { NewsService.on(context) }
+    Function("newsStart") { NewsService.start(context) }
+    Function("newsStop") { NewsService.stop(context) }
+    Function("newsResume") { NewsService.resume(context) }
     Function("voiceLevel") { VoiceVolume.level(context) }
     Function("sayNews") { VoiceVolume.sayNews(context) }
     Function("setSayNews") { on: Boolean -> VoiceVolume.setSayNews(context, on) }
     Function("setVoiceLevel") { percent: Int -> VoiceVolume.setLevel(context, percent) }
     AsyncFunction("voiceChime") { Thread { VoiceVolume.chime(context, true) }.start() }
-    AsyncFunction("wakeCheck") { promise: Promise ->
-      Thread {
-        try {
-          promise.resolve(WakeService.check(context))
-        } catch (e: Exception) {
-          promise.reject("wake_check", e.message ?: "The check failed.", e)
-        }
-      }.start()
-    }
     Function("stopConversation") { voice.stopConversation(); Unit }
 
     /** The SHA-256 of the certificate an address presents, before anything is trusted. */

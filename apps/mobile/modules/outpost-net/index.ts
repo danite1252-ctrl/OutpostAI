@@ -1,24 +1,6 @@
 import { NativeModule, requireNativeModule } from "expo";
 
 /** One HTTPS request to the paired Outpost; only its pinned certificate is accepted. */
-export interface WakeStatus {
-  on: boolean;
-  word: string;
-  persona: string | null;
-  threshold: number;
-  /** When it started listening (ms). */
-  since: number;
-  batteryStart: number;
-  batteryNow: number;
-  charging: boolean;
-  wakes: number;
-  /** Times the phone thought it heard the word but the Outpost found it wasn't said (TV...). */
-  ignored?: number;
-  lastWake: number;
-  error: string | null;
-  words: { id: string; name: string }[];
-}
-
 export interface RequestOptions {
   url: string;
   method?: string;
@@ -144,23 +126,21 @@ declare class OutpostNetModule extends NativeModule<Events> {
   converseMuted(muted: boolean): void;
   /** Waiting for a yes or no: short answers count. */
   converseBrief?(brief: boolean): void;
-  /** The wake word: listen for it (a foreground service, with a notification and Stop), even with
-   *  the screen off; what's said after it goes to the persona and the answer is spoken. */
-  wakeStart?(word: string, personaId: string, threshold: number, hosts: string[], port: number, fingerprint: string, token: string): void;
-  wakeStop?(): void;
-  /** Turn it back on if it was on (not switched off) and isn't listening: when the app opens. */
-  wakeResume?(hosts: string[], port: number, fingerprint: string, token: string): void;
-  wakeStatus?(): WakeStatus;
+  /** Instant news: a line kept open to the Outpost (a foreground service, with a notification and
+   *  Stop), so the doorbell and routines reach the phone straight away. */
+  newsOn?(): boolean;
+  newsStart?(): void;
+  newsStop?(): void;
+  /** Start it again if it's on and not running: when the app opens. */
+  newsResume?(): void;
   /** How loud Outpost speaks with the app closed: 0 = the phone's media volume, else at least this %. */
   voiceLevel?(): number;
   /** Routine news set to be said on the phone is said on this one (on unless turned off). */
   sayNews?(): boolean;
   setSayNews?(on: boolean): void;
   setVoiceLevel?(percent: number): void;
-  /** Play the wake word's "listening" chime, at that level. */
+  /** Play a short chime at that level. */
   voiceChime?(): Promise<void>;
-  /** The detector on a recording of "Alexa" and of other words: it works on this phone. */
-  wakeCheck?(): Promise<{ heard: number; other: number; ok: boolean }>;
   stopConversation(): void;
   /** Whether Outpost may install apps, and whether its own updates can skip the prompt. */
   updateStatus(): { canInstall: boolean; silent: boolean; sdk: number };
